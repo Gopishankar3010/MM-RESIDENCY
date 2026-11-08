@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useStock } from '../context/StockContext';
 import {
   Printer,
@@ -14,7 +14,8 @@ import {
   Edit2,
   User,
   Users,
-  UserCheck
+  UserCheck,
+  Calendar
 } from 'lucide-react';
 import { DailySalesReport, CounterLocation } from '../types';
 
@@ -33,6 +34,31 @@ export const DailySalesView: React.FC = () => {
 
   const isAdmin = currentUser?.role === 'ADMIN';
   const counter: CounterLocation = currentUser?.counter || 'NORMAL';
+
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const [reportDate, setReportDate] = useState<string>(businessDate);
+
+  useEffect(() => {
+    setReportDate(businessDate);
+  }, [businessDate]);
+
+  // Identify past dates with missing daily sales reports for this counter
+  const missingPastDates = useMemo(() => {
+    if (isAdmin) return [];
+    const missed: string[] = [];
+    const today = new Date();
+    for (let i = 1; i <= 5; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const pad = (n: number) => ('0' + n).slice(-2);
+      const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      const hasReport = dailySales.some(r => r.counter === counter && r.date === dateStr && r.status !== 'Rejected');
+      if (!hasReport) {
+        missed.push(dateStr);
+      }
+    }
+    return missed;
+  }, [dailySales, counter, isAdmin]);
 
   // State for counter submission form
   const [closingInputs, setClosingInputs] = useState<Record<string, string>>({});
@@ -69,8 +95,8 @@ export const DailySalesView: React.FC = () => {
   const [adminCounterFilter, setAdminCounterFilter] = useState('');
   const [adminStatusFilter, setAdminStatusFilter] = useState('');
 
-  // Counter form lines
-  const formState = getReportFormLines(counter, businessDate);
+  // Counter form lines based on selected reportDate
+  const formState = getReportFormLines(counter, reportDate);
   const formLines = formState.lines;
 
   const categories = Array.from(new Set(formLines.map(l => l.category || 'Other'))).sort();
@@ -143,7 +169,7 @@ export const DailySalesView: React.FC = () => {
       });
 
       const reportId = await submitDailySales({
-        date: businessDate,
+        date: reportDate,
         cashAmount: parsedCash,
         upiAmount: parsedUpi,
         cardAmount: 0,
@@ -240,38 +266,101 @@ export const DailySalesView: React.FC = () => {
 
       {/* COUNTER WORKSPACE: Daily Sales Entry */}
       {!isAdmin && (
-        <>
+        <div className="space-y-4">
+          {/* Missing Past Dates Reminder Banner */}
+          {missingPastDates.length > 0 && (
+            <div className="rounded-2xl border border-amber-300/80 bg-gradient-to-r from-amber-50 via-white to-amber-50 p-4 text-xs text-amber-950 dark:border-amber-700/60 dark:from-amber-950/40 dark:via-slate-900 dark:to-amber-950/20 dark:text-amber-200 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="block text-sm font-bold text-amber-900 dark:text-amber-300">
+                    Unentered Previous Shift(s) Detected
+                  </strong>
+                  <span className="text-slate-600 dark:text-slate-400">
+                    Forgot to submit sales for an earlier day? Select any missing shift date below to record it:
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {missingPastDates.map(d => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setReportDate(d)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${
+                      reportDate === d
+                        ? 'bg-amber-600 text-white shadow-amber-950/30'
+                        : 'bg-white dark:bg-slate-800 text-amber-900 dark:text-amber-300 border border-amber-300 dark:border-slate-700 hover:bg-amber-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    Enter for {d}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {formState.blockedMessage ? (
-            <div className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200 flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <strong className="block text-sm font-bold mb-1">Daily Report Notice</strong>
-                {formState.blockedMessage}
+            <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200 space-y-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="block text-sm font-bold mb-1">Shift Report Status for {reportDate}</strong>
+                  <p>{formState.blockedMessage}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 pt-2 border-t border-amber-200/60 dark:border-amber-900/40">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">Select another date:</span>
+                <input
+                  type="date"
+                  max={todayISO}
+                  value={reportDate}
+                  onChange={e => e.target.value && setReportDate(e.target.value)}
+                  className="rounded-lg border border-amber-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={() => setReportDate(todayISO)}
+                  className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-bold text-xs hover:bg-amber-700 cursor-pointer"
+                >
+                  Go to Today
+                </button>
               </div>
             </div>
           ) : (
             <div className="space-y-5">
               {/* STAFF ON DUTY - CASHIER & HELPER AT THE TOP */}
               <div className="rounded-2xl border border-amber-200/90 bg-gradient-to-r from-amber-50/80 via-white to-amber-50/50 p-4 sm:p-5 shadow-xs dark:border-amber-900/40 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800/80">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 mb-3 border-b border-amber-200/50 dark:border-slate-800">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-3 border-b border-amber-200/50 dark:border-slate-800">
                   <div className="flex items-center gap-2.5">
                     <div className="p-2 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-400">
                       <UserCheck className="h-5 w-5" />
                     </div>
                     <div>
                       <h3 className="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                        Staff on Duty (Cashier & Helper)
+                        Staff on Duty & Shift Date
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Enter shift cashier and helper responsible for this day-end stock reconciliation before entering closing counts.
+                        Recording sales closure for <strong className="text-slate-900 dark:text-white">{reportDate}</strong> ({counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'})
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300">
-                      <span>{counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}</span>
-                      <span>•</span>
-                      <span>{businessDate}</span>
+                  
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-600 dark:text-slate-400 flex items-center gap-1">
+                      <Calendar className="h-3.5 w-3.5 text-amber-500" />
+                      <span>Shift Date:</span>
+                    </span>
+                    <input
+                      type="date"
+                      max={todayISO}
+                      value={reportDate}
+                      onChange={e => e.target.value && setReportDate(e.target.value)}
+                      className="rounded-xl border border-amber-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 shadow-xs cursor-pointer"
+                      title="Select date you are recording closing stock for"
+                    />
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300">
+                      {counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}
                     </span>
                   </div>
                 </div>
@@ -567,7 +656,7 @@ export const DailySalesView: React.FC = () => {
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
 
       {/* Reports History List (Visible to all, editable by Admin or pending author) */}

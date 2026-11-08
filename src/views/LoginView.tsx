@@ -115,30 +115,6 @@ export const LoginView: React.FC = () => {
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
-
-          {/* Reference Notice (Credentials must be manually typed) */}
-          <div className="mt-8 pt-5 border-t border-stone-700/60">
-            <span className="text-[11px] font-bold text-stone-400 uppercase tracking-wider block mb-2">
-              Default System Logins:
-            </span>
-            <div className="rounded-xl bg-stone-900/80 border border-stone-700/50 p-3 text-xs space-y-1.5 font-mono">
-              <div className="flex items-center justify-between text-stone-300">
-                <span className="text-amber-400 font-bold">Shop Admin:</span>
-                <span>User: <strong className="text-white">admin</strong> | Pwd: <strong className="text-white">gopi1234</strong></span>
-              </div>
-              <div className="flex items-center justify-between text-stone-300">
-                <span className="text-emerald-400 font-bold">Normal Counter:</span>
-                <span>User: <strong className="text-white">normal</strong> | Pwd: <strong className="text-white">gopi2345</strong></span>
-              </div>
-              <div className="flex items-center justify-between text-stone-300">
-                <span className="text-purple-400 font-bold">AC Counter:</span>
-                <span>User: <strong className="text-white">ac</strong> | Pwd: <strong className="text-white">gopi3456</strong></span>
-              </div>
-            </div>
-            <p className="text-[10px] text-stone-500 mt-2 text-center">
-              Enter your assigned User ID and Password above to access the ledger.
-            </p>
-          </div>
         </div>
 
         {/* Footer info */}
