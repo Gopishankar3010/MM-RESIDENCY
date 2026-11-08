@@ -14,6 +14,8 @@ export const RequestsView: React.FC = () => {
   const [unit, setUnit] = useState<'CASE' | 'BOTTLE'>('CASE');
   const [reason, setReason] = useState('');
   const [basket, setBasket] = useState<{ productId: string; name: string; sizeML: number; casePack: number; qty: number; unit: 'CASE' | 'BOTTLE'; bottles: number }[]>([]);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const selectedProduct = stockItems.find(p => p.productId === selectedProductId);
@@ -65,14 +67,24 @@ export const RequestsView: React.FC = () => {
     setStatusMessage(null);
   };
 
-  const handleSubmitRequest = async () => {
+  const handleOpenPreview = () => {
+    if (!basket.length) {
+      setStatusMessage({ type: 'err', text: 'Please add at least one product to the basket.' });
+      return;
+    }
+    setShowPreviewModal(true);
+  };
+
+  const handleConfirmSubmitRequest = async () => {
     try {
+      setIsSubmitting(true);
       if (!basket.length) throw new Error('Please add at least one product to the basket.');
-      if (!reason.trim()) throw new Error('Please enter a reason or choose a quick reason.');
+
+      const finalReason = reason.trim() || 'Counter replenishment';
 
       await submitRequestBatch({
         date: businessDate,
-        reason: reason.trim(),
+        reason: finalReason,
         items: basket.map(b => ({
           productId: b.productId,
           qty: b.qty,
@@ -80,15 +92,18 @@ export const RequestsView: React.FC = () => {
         }))
       });
 
+      setShowPreviewModal(false);
       setStatusMessage({ type: 'ok', text: `${basket.length} item(s) requested successfully. Waiting for Admin approval.` });
       setBasket([]);
       setReason('');
     } catch (e: any) {
-      setStatusMessage({ type: 'err', text: e.message });
+      setStatusMessage({ type: 'err', text: e.message || 'Error submitting request.' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const quickReasons = ['Stock finished', 'Running low', 'Weekend rush peak', 'Customer demand'];
+  const quickReasons = ['Counter replenishment', 'Stock finished', 'Running low', 'Weekend rush peak', 'Customer demand'];
 
   return (
     <div className="space-y-6">
@@ -281,11 +296,11 @@ export const RequestsView: React.FC = () => {
             <div className="space-y-3 pt-3 border-t border-slate-100 dark:border-slate-800">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                  Reason for Request *
+                  Reason for Request <span className="text-slate-400 font-normal">(Optional)</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Counter stock depleted"
+                  placeholder="e.g. Counter replenishment, Running low..."
                   value={reason}
                   onChange={e => setReason(e.target.value)}
                   className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
@@ -307,11 +322,108 @@ export const RequestsView: React.FC = () => {
               </div>
 
               <button
-                disabled={!basket.length || !reason.trim()}
-                onClick={handleSubmitRequest}
-                className="w-full rounded-lg bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-40 transition-colors"
+                disabled={!basket.length}
+                onClick={handleOpenPreview}
+                className="w-full rounded-lg bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-40 transition-colors cursor-pointer"
               >
-                Submit Request ({basket.reduce((s, b) => s + b.bottles, 0)} btls)
+                Preview & Submit Request ({basket.reduce((s, b) => s + b.bottles, 0)} btls)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUBMISSION PREVIEW MODAL */}
+      {showPreviewModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+            <div className="flex items-start justify-between border-b pb-3 dark:border-slate-800">
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-600 dark:text-amber-400">
+                  Step 2 of 2: Confirm Indent
+                </span>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Stock Request Preview
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowPreviewModal(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">Destination</span>
+                <div className="font-bold text-slate-900 dark:text-white text-sm mt-0.5">
+                  {currentUser?.counter === 'AC' ? 'AC Counter' : 'Normal Counter'}
+                </div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">Shift Date</span>
+                <div className="font-bold text-slate-900 dark:text-white text-sm mt-0.5 font-mono">
+                  {businessDate}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-amber-50/70 p-3 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200 border border-amber-200/70 dark:border-amber-900/50">
+              <span className="font-bold">Reason:</span> {reason.trim() || 'Counter replenishment (default)'}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+              <div className="bg-slate-50 dark:bg-slate-800/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800 flex justify-between">
+                <span>Requested Items ({basket.length})</span>
+                <span>Quantity</span>
+              </div>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto">
+                {basket.map((item, idx) => (
+                  <div key={idx} className="p-3 text-xs flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-slate-900 dark:text-white">{item.name} {item.sizeML}ml</div>
+                      <span className="text-[11px] text-slate-500">{item.qty} {item.unit.toLowerCase()}(s) · {item.casePack}/case</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-mono font-bold text-blue-600 dark:text-blue-400 text-sm">
+                        {item.bottles} btls
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-800/80 px-3 py-2.5 text-xs font-bold flex justify-between items-center border-t border-slate-200 dark:border-slate-800">
+                <span className="text-slate-700 dark:text-slate-300">TOTAL STOCK TO INDENT:</span>
+                <span className="font-mono text-base font-black text-slate-900 dark:text-white">
+                  {basket.reduce((s, b) => s + b.bottles, 0)} bottles
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => setShowPreviewModal(false)}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                ← Back / Edit Items
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={handleConfirmSubmitRequest}
+                className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+              >
+                {isSubmitting ? (
+                  <span>Submitting...</span>
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>Confirm & Submit to Godown</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

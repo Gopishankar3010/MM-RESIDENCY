@@ -33,6 +33,8 @@ const MainLayout: React.FC = () => {
     return <LoginView />;
   }
 
+  const isAcUser = currentUser?.counter === 'AC' || currentUser?.role === 'AC';
+
   const renderActiveView = () => {
     switch (currentTab) {
       case 'dashboard':
@@ -46,9 +48,9 @@ const MainLayout: React.FC = () => {
       case 'requests':
         return <RequestsView />;
       case 'expenses':
-        return <ExpensesWagesView />;
+        return isAcUser ? <DashboardView onNavigate={(tab) => setCurrentTab(tab)} /> : <ExpensesWagesView />;
       case 'rooms':
-        return <RoomsView />;
+        return isAcUser ? <DashboardView onNavigate={(tab) => setCurrentTab(tab)} /> : <RoomsView />;
       case 'damage':
         return <DamageView />;
       case 'closing':

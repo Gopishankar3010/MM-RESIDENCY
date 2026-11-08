@@ -107,8 +107,40 @@ export const PurchasesView: React.FC = () => {
     };
   });
 
-  const handleSubmitBatch = async () => {
+  const [showPurchasePreview, setShowPurchasePreview] = useState(false);
+  const [isSubmittingPurchase, setIsSubmittingPurchase] = useState(false);
+
+  const handleOpenPurchasePreview = () => {
+    setStatusMsg(null);
+    if (!supplier) {
+      setStatusMsg({ type: 'err', text: 'Please select a supplier.' });
+      return;
+    }
+    if (!invoiceNo.trim()) {
+      setStatusMsg({ type: 'err', text: 'Please enter the invoice number.' });
+      return;
+    }
+    if (!permitNumber.trim()) {
+      setStatusMsg({ type: 'err', text: 'Please enter the permit number.' });
+      return;
+    }
+    if (!documentNumber.trim()) {
+      setStatusMsg({ type: 'err', text: 'Please enter the document number.' });
+      return;
+    }
+
+    const validLines = rows.filter(r => r.productId && Number(r.enteredQty) > 0 && Number(r.enteredPrice) > 0);
+    if (!validLines.length) {
+      setStatusMsg({ type: 'err', text: 'Add at least one item with valid quantity and price.' });
+      return;
+    }
+
+    setShowPurchasePreview(true);
+  };
+
+  const handleConfirmSubmitBatch = async () => {
     try {
+      setIsSubmittingPurchase(true);
       setStatusMsg(null);
       if (!supplier) throw new Error('Please select a supplier.');
       if (!invoiceNo.trim()) throw new Error('Please enter the invoice number.');
@@ -141,6 +173,7 @@ export const PurchasesView: React.FC = () => {
         lines: linesToSubmit
       });
 
+      setShowPurchasePreview(false);
       setStatusMsg({
         type: 'ok',
         text: `Purchase batch ${batchId} submitted successfully for ₹${netSum.toLocaleString('en-IN')}. Awaiting approval to credit Godown stock.`
@@ -459,11 +492,11 @@ export const PurchasesView: React.FC = () => {
 
           <button
             disabled={!supplier || !invoiceNo.trim() || netSum <= 0}
-            onClick={handleSubmitBatch}
-            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-40 transition-colors"
+            onClick={handleOpenPurchasePreview}
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-40 transition-colors cursor-pointer"
           >
             <Check className="h-4 w-4" />
-            <span>Submit Purchase Batch ({formatCurrency(netSum)})</span>
+            <span>Preview & Submit Batch ({formatCurrency(netSum)})</span>
           </button>
         </div>
       </div>
@@ -563,6 +596,113 @@ export const PurchasesView: React.FC = () => {
                 className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-40"
               >
                 Add Supplier
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* PURCHASE INVOICE PREVIEW MODAL */}
+      {showPurchasePreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
+          <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-start justify-between border-b pb-3 dark:border-slate-800">
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-600 dark:text-amber-400">
+                  Step 2 of 2: Purchase Invoice Verification
+                </span>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  Purchase Batch Preview
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Verify vendor, invoice metadata, taxes, and item rates before recording into Central Godown.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPurchasePreview(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-slate-500 text-[10px] uppercase font-bold">Supplier</span>
+                <div className="font-bold text-slate-900 dark:text-white truncate mt-0.5">{supplier}</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-slate-500 text-[10px] uppercase font-bold">Invoice & Date</span>
+                <div className="font-bold text-slate-900 dark:text-white mt-0.5">#{invoiceNo} · {billDate}</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-slate-500 text-[10px] uppercase font-bold">Permit No</span>
+                <div className="font-bold text-slate-900 dark:text-white truncate mt-0.5">{permitNumber}</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-slate-500 text-[10px] uppercase font-bold">Document No</span>
+                <div className="font-bold text-slate-900 dark:text-white truncate mt-0.5">{documentNumber}</div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+              <div className="bg-slate-50 dark:bg-slate-800/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800 flex justify-between">
+                <span>Products to Credit Godown</span>
+                <span>Qty · Rate · Net</span>
+              </div>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto">
+                {finalRows.filter(r => r.productId && Number(r.enteredQty) > 0 && Number(r.enteredPrice) > 0).map((r, i) => {
+                  const prod = productMap.get(r.productId);
+                  return (
+                    <div key={i} className="p-3 text-xs flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">{prod?.name || 'Product'} {prod?.sizeML}ml</div>
+                        <span className="text-[11px] text-slate-500">
+                          {r.enteredQty} {r.unit.toLowerCase()}(s) = {r.bottles} bottles @ {formatCurrency(r.ratePerBottle)}/btl
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                          {formatCurrency(r.net)}
+                        </div>
+                        <span className="text-[10px] text-slate-400">
+                          Gross: {formatCurrency(r.itemGross)} {r.sed > 0 ? `· SED: +${formatCurrency(r.sed)}` : ''}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-emerald-50/70 p-3.5 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-900/40 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div>
+                <span className="text-slate-600 dark:text-slate-400">Total Purchase Volume:</span>
+                <strong className="ml-1 font-mono text-slate-900 dark:text-white">{totalBottles} bottles</strong>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-slate-600 dark:text-slate-400">Total Net Payable:</span>
+                <span className="font-mono text-lg font-black text-emerald-700 dark:text-emerald-300">
+                  {formatCurrency(netSum)}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                disabled={isSubmittingPurchase}
+                onClick={() => setShowPurchasePreview(false)}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                ← Back / Edit Invoice
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingPurchase}
+                onClick={handleConfirmSubmitBatch}
+                className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+              >
+                {isSubmittingPurchase ? 'Submitting...' : 'Confirm & Submit to Godown'}
               </button>
             </div>
           </div>

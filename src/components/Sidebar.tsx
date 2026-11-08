@@ -49,14 +49,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
     { id: 'audit', label: 'Audit & Ledger', icon: ScrollText }
   ];
 
+  const isAcCounter = currentUser?.counter === 'AC' || currentUser?.role === 'AC';
+
   const counterNav: NavItem[] = [
     { id: 'dashboard', label: 'Home Dashboard', icon: LayoutDashboard },
     { id: 'requests', label: 'Request from Godown', icon: ArrowRightLeft },
     { id: 'transfers', label: 'Transfer to Counter', icon: ArrowRightLeft },
     { id: 'sales', label: 'Daily Sales', icon: Receipt },
     { id: 'stock', label: 'Counter Stock', icon: Boxes },
-    { id: 'expenses', label: 'Expense & Wages', icon: Wallet },
-    { id: 'rooms', label: 'Room Rent', icon: Home },
+    ...(!isAcCounter
+      ? [
+          { id: 'expenses', label: 'Expense & Wages', icon: Wallet },
+          { id: 'rooms', label: 'Room Rent', icon: Home },
+        ]
+      : []),
     { id: 'damage', label: 'Damage Stock', icon: AlertTriangle },
     { id: 'closing', label: 'Consolidated Report', icon: FileSpreadsheet }
   ];

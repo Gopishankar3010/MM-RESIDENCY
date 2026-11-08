@@ -145,19 +145,43 @@ export const DailySalesView: React.FC = () => {
 
   const formatCurrency = (val: number) => '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // Handle Submit Report
-  const handleSubmitCounterReport = async () => {
+  // Submission Preview State
+  const [showSubmitPreview, setShowSubmitPreview] = useState(false);
+  const [isSubmittingDailyReport, setIsSubmittingDailyReport] = useState(false);
+
+  // Validate and Open Preview
+  const handleOpenSubmitPreview = () => {
+    setStatusMessage(null);
+    if (formInvalidEntries > 0) {
+      setStatusMessage({
+        type: 'err',
+        text: 'Some closing counts are invalid. A closing stock cannot exceed total available stock.'
+      });
+      return;
+    }
+    if (!cashierName.trim() || !helperName.trim()) {
+      setStatusMessage({
+        type: 'err',
+        text: 'Please enter both Cashier and Helper names at the top before submitting.'
+      });
+      return;
+    }
+    if (Math.abs(paymentDiff) > 0.009 && !paymentExplanation.trim()) {
+      setStatusMessage({
+        type: 'err',
+        text: 'Payment received differs from calculated sales. An explanation is required before submitting.'
+      });
+      return;
+    }
+
+    setShowSubmitPreview(true);
+  };
+
+  // Execute confirmed submission
+  const handleConfirmSubmitReport = async () => {
     try {
+      setIsSubmittingDailyReport(true);
       setStatusMessage(null);
-      if (formInvalidEntries > 0) {
-        throw new Error('Some closing counts are invalid. A closing stock cannot exceed total available stock.');
-      }
-      if (!cashierName.trim() || !helperName.trim()) {
-        throw new Error('Please enter both Cashier and Helper names.');
-      }
-      if (Math.abs(paymentDiff) > 0.009 && !paymentExplanation.trim()) {
-        throw new Error('Payment received differs from calculated sales. An explanation is required.');
-      }
 
       const submissionLines = formLines.map(l => {
         const raw = closingInputs[l.productId];
@@ -180,13 +204,16 @@ export const DailySalesView: React.FC = () => {
         lines: submissionLines
       });
 
-      setStatusMessage({ type: 'ok', text: `Report submitted successfully as ${reportId}. Waiting for Admin review.` });
+      setShowSubmitPreview(false);
+      setStatusMessage({ type: 'ok', text: `Shift report submitted successfully as ${reportId}. Waiting for Admin review.` });
       setClosingInputs({});
       setCashAmount('0');
       setUpiAmount('0');
       setPaymentExplanation('');
     } catch (e: any) {
       setStatusMessage({ type: 'err', text: e.message || 'Error submitting report.' });
+    } finally {
+      setIsSubmittingDailyReport(false);
     }
   };
 
@@ -646,11 +673,11 @@ export const DailySalesView: React.FC = () => {
 
                   <button
                     disabled={formInvalidEntries > 0}
-                    onClick={handleSubmitCounterReport}
-                    className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                    onClick={handleOpenSubmitPreview}
+                    className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 transition-colors cursor-pointer"
                   >
                     <Check className="h-4 w-4" />
-                    <span>Submit Daily Report</span>
+                    <span>Preview & Submit Report</span>
                   </button>
                 </div>
               </div>
@@ -1054,6 +1081,147 @@ export const DailySalesView: React.FC = () => {
                 className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
               >
                 Create Entry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUBMISSION PREVIEW MODAL */}
+      {showSubmitPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-start justify-between border-b pb-3 dark:border-slate-800">
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-600 dark:text-amber-400">
+                  Pre-Submission Review
+                </span>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  Daily Sales Shift Report Preview
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Please verify shift personnel, bottles sold, and drawer cash before final submission.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowSubmitPreview(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Shift & Staff info */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+              <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">Shift Date</span>
+                <div className="font-bold text-slate-900 dark:text-white text-sm mt-0.5 font-mono">
+                  {reportDate}
+                </div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">Counter</span>
+                <div className="font-bold text-slate-900 dark:text-white text-sm mt-0.5">
+                  {counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}
+                </div>
+              </div>
+              <div className="col-span-2 sm:col-span-1 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">Staff On Duty</span>
+                <div className="font-bold text-slate-900 dark:text-white text-xs mt-0.5 truncate">
+                  {cashierName} (Cashier) / {helperName} (Helper)
+                </div>
+              </div>
+            </div>
+
+            {/* Financial Summary Tiles */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+              <div className="rounded-xl bg-amber-50/70 p-3 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40">
+                <span className="text-[10px] font-bold text-amber-800 dark:text-amber-300 uppercase">Bottles Sold</span>
+                <div className="font-mono text-base font-black text-amber-950 dark:text-amber-200 mt-0.5">
+                  {formCalculatedSoldBottles} btls
+                </div>
+              </div>
+              <div className="rounded-xl bg-emerald-50/70 p-3 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-900/40">
+                <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase">Calculated Sales</span>
+                <div className="font-mono text-base font-black text-emerald-700 dark:text-emerald-300 mt-0.5">
+                  {formatCurrency(formCalculatedTotalValue)}
+                </div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Cash + UPI</span>
+                <div className="font-mono text-base font-bold text-slate-900 dark:text-white mt-0.5">
+                  {formatCurrency(totalPaymentReceived)}
+                </div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Reconciliation</span>
+                <div className={`font-mono text-xs font-bold mt-1 ${Math.abs(paymentDiff) > 0.009 ? (paymentDiff > 0 ? 'text-blue-600' : 'text-red-600') : 'text-emerald-600'}`}>
+                  {Math.abs(paymentDiff) <= 0.009 ? '✓ Exact Match' : `${paymentDiff > 0 ? '+' : ''}${formatCurrency(paymentDiff)}`}
+                </div>
+              </div>
+            </div>
+
+            {Math.abs(paymentDiff) > 0.009 && paymentExplanation && (
+              <div className="rounded-xl bg-red-50 p-3 text-xs text-red-900 border border-red-200 dark:bg-red-950/40 dark:text-red-200 dark:border-red-900/50">
+                <strong>Variance Explanation:</strong> {paymentExplanation}
+              </div>
+            )}
+
+            {/* Itemized Sold Products */}
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+              <div className="bg-slate-50 dark:bg-slate-800/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800 flex justify-between">
+                <span>Sold Items Breakdown</span>
+                <span>Qty · Rate · Total</span>
+              </div>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto">
+                {lineCalculations.filter(l => l.sold > 0).length > 0 ? (
+                  lineCalculations.filter(l => l.sold > 0).map(l => (
+                    <div key={l.productId} className="p-3 text-xs flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">{l.name} {l.sizeML}ml</div>
+                        <span className="text-[11px] text-slate-500">
+                          {l.category} · Available: {l.available} → Closing: {l.closing}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-mono font-bold text-slate-900 dark:text-white">
+                          {l.sold} × {formatCurrency(l.price)} = {formatCurrency(l.value)}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-4 text-center text-xs text-slate-400 italic">
+                    No items marked as sold (all closing counts match available stock).
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                disabled={isSubmittingDailyReport}
+                onClick={() => setShowSubmitPreview(false)}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                ← Edit Shift Counts
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingDailyReport}
+                onClick={handleConfirmSubmitReport}
+                className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+              >
+                {isSubmittingDailyReport ? (
+                  <span>Submitting...</span>
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>Confirm & Final Submit to Admin</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
