@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Wine, Shield, Sparkles, KeyRound, ArrowRight, AlertCircle, Building2 } from 'lucide-react';
+import { Wine, Shield, KeyRound, ArrowRight, AlertCircle, Lock } from 'lucide-react';
 
 export const LoginView: React.FC = () => {
   const { login } = useStock();
@@ -9,25 +9,28 @@ export const LoginView: React.FC = () => {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (!username.trim() || !password) {
+      setError('Please enter both User ID and Password.');
+      return;
+    }
+
     setIsLoading(true);
 
-    setTimeout(() => {
-      const success = login(username.trim(), password);
-      if (!success) {
-        setError('Invalid username or password. Please verify your credentials or use the quick access shortcuts below.');
+    try {
+      const res = await login(username.trim(), password);
+      if (!res.success) {
+        setError(res.error || 'Invalid User ID or Password. Please check your credentials.');
         setIsLoading(false);
       }
-    }, 200);
-  };
-
-  const handleQuickLogin = (u: string, p: string) => {
-    setError('');
-    setUsername(u);
-    setPassword(p);
-    login(u, p);
+      // If success, StockContext will update currentUser and React will render MainLayout
+    } catch (err: any) {
+      setError(err?.message || 'Authentication failed. Please verify credentials.');
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -58,33 +61,33 @@ export const LoginView: React.FC = () => {
         {/* Login Card */}
         <div className="bg-stone-800/90 backdrop-blur-xl border border-stone-700/80 rounded-3xl p-6 sm:p-8 shadow-2xl">
           <h2 className="text-lg font-bold text-stone-100 mb-1 flex items-center gap-2">
-            <KeyRound className="w-4 h-4 text-emerald-400" />
-            <span>Counter Sign In</span>
+            <Lock className="w-4 h-4 text-emerald-400" />
+            <span>Secure Staff Authentication</span>
           </h2>
           <p className="text-xs text-stone-400 mb-6">
-            Authenticate to access your assigned counter ledger or admin controls.
+            Enter your assigned User ID and Security Password to access your counter ledger.
           </p>
 
           {error && (
-            <div className="mb-5 bg-rose-950/60 border border-rose-800/80 text-rose-300 p-3.5 rounded-xl text-xs flex items-start gap-2.5">
+            <div className="mb-5 bg-rose-950/70 border border-rose-800 text-rose-300 p-3.5 rounded-xl text-xs flex items-start gap-2.5 animate-in fade-in">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <span>{error}</span>
+              <span className="font-medium">{error}</span>
             </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-stone-300 uppercase tracking-wider mb-1.5">
-                Username / Handle
+                User ID / Username
               </label>
               <input
                 type="text"
                 required
                 autoComplete="username"
-                placeholder="e.g. admin or normal"
+                placeholder="e.g. admin, normal, or ac"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-stone-900/90 border border-stone-700 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                className="w-full bg-stone-900/90 border border-stone-700 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 shadow-inner"
               />
             </div>
 
@@ -96,10 +99,10 @@ export const LoginView: React.FC = () => {
                 type="password"
                 required
                 autoComplete="current-password"
-                placeholder="••••••••"
+                placeholder="Enter password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-stone-900/90 border border-stone-700 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                className="w-full bg-stone-900/90 border border-stone-700 rounded-xl px-4 py-3 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 shadow-inner"
               />
             </div>
 
@@ -108,97 +111,39 @@ export const LoginView: React.FC = () => {
               disabled={isLoading}
               className="w-full mt-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
             >
-              <span>{isLoading ? 'Verifying...' : 'Access System'}</span>
+              <span>{isLoading ? 'Verifying Credentials...' : 'Sign In'}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
 
-          {/* Quick Access Credentials */}
-          <div className="mt-8 pt-6 border-t border-stone-700/60">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] font-bold text-stone-400 uppercase tracking-wider flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                Quick Test Credentials
-              </span>
-              <span className="text-[10px] text-stone-400 font-mono">1-Click Login</span>
+          {/* Reference Notice (Credentials must be manually typed) */}
+          <div className="mt-8 pt-5 border-t border-stone-700/60">
+            <span className="text-[11px] font-bold text-stone-400 uppercase tracking-wider block mb-2">
+              Default System Logins:
+            </span>
+            <div className="rounded-xl bg-stone-900/80 border border-stone-700/50 p-3 text-xs space-y-1.5 font-mono">
+              <div className="flex items-center justify-between text-stone-300">
+                <span className="text-amber-400 font-bold">Shop Admin:</span>
+                <span>User: <strong className="text-white">admin</strong> | Pwd: <strong className="text-white">gopi1234</strong></span>
+              </div>
+              <div className="flex items-center justify-between text-stone-300">
+                <span className="text-emerald-400 font-bold">Normal Counter:</span>
+                <span>User: <strong className="text-white">normal</strong> | Pwd: <strong className="text-white">gopi2345</strong></span>
+              </div>
+              <div className="flex items-center justify-between text-stone-300">
+                <span className="text-purple-400 font-bold">AC Counter:</span>
+                <span>User: <strong className="text-white">ac</strong> | Pwd: <strong className="text-white">gopi3456</strong></span>
+              </div>
             </div>
-
-            <div className="grid grid-cols-1 gap-2">
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('admin', 'gopi1234')}
-                className="flex items-center justify-between p-2.5 rounded-xl bg-stone-900/60 hover:bg-stone-900 border border-stone-700/60 hover:border-amber-500/50 transition-all text-left group cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center font-bold text-xs border border-amber-500/20">
-                    <Shield className="w-3.5 h-3.5" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-stone-200 group-hover:text-amber-300">
-                      Shop Admin (Full Rights)
-                    </div>
-                    <div className="text-[10px] text-stone-400 font-mono">
-                      admin / gopi1234
-                    </div>
-                  </div>
-                </div>
-                <span className="text-xs text-stone-400 group-hover:text-white transition-colors">
-                  &rarr;
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('normal', 'gopi2345')}
-                className="flex items-center justify-between p-2.5 rounded-xl bg-stone-900/60 hover:bg-stone-900 border border-stone-700/60 hover:border-emerald-500/50 transition-all text-left group cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-xs border border-emerald-500/20">
-                    <Wine className="w-3.5 h-3.5" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-stone-200 group-hover:text-emerald-300">
-                      Normal Counter
-                    </div>
-                    <div className="text-[10px] text-stone-400 font-mono">
-                      normal / gopi2345
-                    </div>
-                  </div>
-                </div>
-                <span className="text-xs text-stone-400 group-hover:text-white transition-colors">
-                  &rarr;
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('ac', 'gopi3456')}
-                className="flex items-center justify-between p-2.5 rounded-xl bg-stone-900/60 hover:bg-stone-900 border border-stone-700/60 hover:border-purple-500/50 transition-all text-left group cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-purple-500/10 text-purple-400 flex items-center justify-center font-bold text-xs border border-purple-500/20">
-                    <Building2 className="w-3.5 h-3.5" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-stone-200 group-hover:text-purple-300">
-                      AC Counter
-                    </div>
-                    <div className="text-[10px] text-stone-400 font-mono">
-                      ac / gopi3456
-                    </div>
-                  </div>
-                </div>
-                <span className="text-xs text-stone-400 group-hover:text-white transition-colors">
-                  &rarr;
-                </span>
-              </button>
-            </div>
+            <p className="text-[10px] text-stone-500 mt-2 text-center">
+              Enter your assigned User ID and Password above to access the ledger.
+            </p>
           </div>
         </div>
 
         {/* Footer info */}
-        <div className="text-center text-xs text-stone-400">
-          MM Residency & Bar &bull; ISO Compliance &bull; Audit Sealed
+        <div className="text-center text-xs text-stone-500">
+          MM Residency & Bar &bull; Security & Stock Audit Protection
         </div>
       </div>
     </div>

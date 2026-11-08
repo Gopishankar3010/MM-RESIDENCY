@@ -3,7 +3,7 @@ import { useStock } from '../context/StockContext';
 import { Moon, Sun, User as UserIcon, Calendar, LogOut, Shield, ChevronDown } from 'lucide-react';
 
 export const Header: React.FC<{ onOpenPasswordModal: () => void }> = ({ onOpenPasswordModal }) => {
-  const { currentUser, businessDate, setBusinessDate, theme, toggleTheme, logout, switchUser } = useStock();
+  const { currentUser, businessDate, setBusinessDate, theme, toggleTheme, logout } = useStock();
 
   const formattedDate = () => {
     try {
@@ -73,43 +73,42 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void }> = ({ onOpenPa
               <ChevronDown className="h-3 w-3 text-slate-300 opacity-60" />
             </div>
 
-            {/* Quick user switcher popup */}
-            <div className="invisible group-hover:visible group-focus-within:visible absolute right-0 top-full mt-1.5 w-52 rounded-xl border border-slate-700 bg-slate-800 p-2 text-xs shadow-2xl z-50">
-              <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                Switch Role / Profile
+            {/* User profile popup */}
+            <div className="invisible group-hover:visible group-focus-within:visible absolute right-0 top-full mt-1.5 w-56 rounded-xl border border-slate-700 bg-slate-800 p-3 text-xs shadow-2xl z-50">
+              <div className="pb-2 mb-2 border-b border-slate-700">
+                <div className="font-bold text-white text-sm">{currentUser.fullName}</div>
+                <div className="text-[11px] font-mono text-slate-400">@{currentUser.username}</div>
+                <div className="mt-1.5">
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                    currentUser.role === 'ADMIN'
+                      ? 'bg-amber-500/20 text-amber-300'
+                      : currentUser.role === 'AC'
+                      ? 'bg-purple-500/20 text-purple-300'
+                      : 'bg-emerald-500/20 text-emerald-300'
+                  }`}>
+                    <Shield className="h-2.5 w-2.5" />
+                    {currentUser.role === 'ADMIN' ? 'Shop Admin' : currentUser.role === 'AC' ? 'AC Counter Staff' : 'Normal Counter Staff'}
+                  </span>
+                </div>
               </div>
-              <button
-                onClick={() => switchUser('admin')}
-                className={`w-full text-left rounded-md px-2.5 py-1.5 transition-colors flex items-center justify-between ${
-                  currentUser.username === 'admin' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-slate-200 hover:bg-slate-700'
-                }`}
-              >
-                <span>Shop Admin (Full Access)</span>
-                {currentUser.username === 'admin' && <Shield className="h-3 w-3" />}
-              </button>
-              <button
-                onClick={() => switchUser('normal')}
-                className={`w-full text-left rounded-md px-2.5 py-1.5 transition-colors flex items-center justify-between ${
-                  currentUser.username === 'normal' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-slate-200 hover:bg-slate-700'
-                }`}
-              >
-                <span>Normal Counter</span>
-              </button>
-              <button
-                onClick={() => switchUser('ac')}
-                className={`w-full text-left rounded-md px-2.5 py-1.5 transition-colors flex items-center justify-between ${
-                  currentUser.username === 'ac' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-slate-200 hover:bg-slate-700'
-                }`}
-              >
-                <span>AC Counter</span>
-              </button>
-              <div className="my-1 border-t border-slate-700" />
-              <button
-                onClick={onOpenPasswordModal}
-                className="w-full text-left rounded-md px-2.5 py-1.5 text-slate-300 hover:bg-slate-700"
-              >
-                Change Password
-              </button>
+
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  onClick={onOpenPasswordModal}
+                  className="w-full text-left rounded-lg px-2.5 py-1.5 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors cursor-pointer"
+                >
+                  Change Password
+                </button>
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="w-full text-left rounded-lg px-2.5 py-1.5 text-rose-300 hover:bg-rose-950/50 hover:text-rose-200 transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
             </div>
           </div>
         )}

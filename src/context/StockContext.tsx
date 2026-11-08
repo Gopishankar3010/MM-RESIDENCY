@@ -111,9 +111,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
       const saved = localStorage.getItem('mm_user');
-      return saved ? JSON.parse(saved) : INITIAL_USERS[0]; // default to admin for seamless evaluation
+      return saved ? JSON.parse(saved) : null;
     } catch {
-      return INITIAL_USERS[0];
+      return null;
     }
   });
 
