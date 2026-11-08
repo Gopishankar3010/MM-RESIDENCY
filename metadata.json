@@ -1,0 +1,6 @@
+{
+  "name": "MM Residency – Stock Management",
+  "description": "Hotel, bar, and counter stock management system with multi-counter tracking, godown inventory, daily sales reconciliation, purchases, and audit ledger.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
