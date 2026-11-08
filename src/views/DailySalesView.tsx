@@ -438,40 +438,8 @@ export const DailySalesView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Staff and Collection Details */}
+              {/* Payment Collection Details */}
               <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
-                  <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                    Staff on Duty
-                  </h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                        Cashier Name *
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Murugan"
-                        value={cashierName}
-                        onChange={e => setCashierName(e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                        Helper Name *
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Senthil"
-                        value={helperName}
-                        onChange={e => setHelperName(e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                      />
-                    </div>
-                  </div>
-                </div>
-
                 <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
                   <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                     Payment Collection Breakdown
@@ -522,6 +490,33 @@ export const DailySalesView: React.FC = () => {
                       />
                     </div>
                   )}
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3 flex flex-col justify-between">
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider mb-2">
+                      Shift Reconciliation Summary
+                    </h3>
+                    <div className="space-y-2 text-xs">
+                      <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
+                        <span className="text-slate-500">Staff on Duty (from top):</span>
+                        <span className="font-semibold text-slate-900 dark:text-white">
+                          {cashierName.trim() ? cashierName : 'Cashier Unset'} · {helperName.trim() ? helperName : 'Helper Unset'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
+                        <span className="text-slate-500">Calculated Stock Value:</span>
+                        <span className="font-mono font-bold text-emerald-600">{formatCurrency(formCalculatedTotalValue)}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-1">
+                        <span className="text-slate-500">Total Money Received:</span>
+                        <span className="font-mono font-bold text-slate-900 dark:text-white">{formatCurrency(totalPaymentReceived)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Verify all physical closing bottle counts and cash drawer tallies before submitting this shift report.
+                  </div>
                 </div>
               </div>
 
