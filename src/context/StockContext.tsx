@@ -27,6 +27,11 @@ interface StockContextType {
   dropdownOptions: DropdownOption[];
   pendingCount: number;
 
+  // Cloud & Multi-Device Sync
+  syncStatus: 'synced' | 'syncing' | 'offline';
+  lastSyncTime: string;
+  triggerManualSync: () => Promise<void>;
+
   // Actions
   login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
@@ -58,6 +63,7 @@ interface StockContextType {
   getReportFormLines: (counter: CounterLocation, date: string) => { lines: any[]; blockedMessage?: string; pendingGodownCount: number };
   submitDailySales: (data: {
     date: string; cashAmount: number; upiAmount: number; cardAmount: number;
+    acCharges?: number;
     recordedAmount: number; cashierName: string; helperName: string;
     paymentExplanation?: string; lines: { productId: string; closing: number }[];
   }) => Promise<string>;
@@ -505,6 +511,120 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY + '_dropdowns', JSON.stringify(dropdownOptions));
   }, [dropdownOptions]);
+
+  // Cloud Multi-Device Sync Engine
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('synced');
+  const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
+  const isServerHydrated = React.useRef(false);
+  const isSyncingRef = React.useRef(false);
+  const serverVersionRef = React.useRef(0);
+
+  // Pull state from /api/state
+  const pullServerState = async (isInitial = false) => {
+    if (isSyncingRef.current) return;
+    try {
+      const res = await fetch('/api/state');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const json = await res.json();
+      if (json.success && json.data) {
+        const s = json.data;
+        if (isInitial || (json.version && json.version > serverVersionRef.current)) {
+          serverVersionRef.current = json.version || 1;
+          if (Array.isArray(s.users)) setUsers(s.users);
+          if (Array.isArray(s.products)) setProducts(s.products);
+          if (Array.isArray(s.stock)) setStock(s.stock);
+          if (Array.isArray(s.purchases)) setPurchases(s.purchases);
+          if (Array.isArray(s.requests)) setRequests(s.requests);
+          if (Array.isArray(s.transfers)) setTransfers(s.transfers);
+          if (Array.isArray(s.dailySales)) setDailySales(s.dailySales);
+          if (Array.isArray(s.operations)) setOperations(s.operations);
+          if (Array.isArray(s.ledger)) setLedger(s.ledger);
+          if (Array.isArray(s.auditLog)) setAuditLog(s.auditLog);
+          if (Array.isArray(s.suppliers)) setSuppliers(s.suppliers);
+          if (Array.isArray(s.dropdownOptions)) setDropdownOptions(s.dropdownOptions);
+        }
+      }
+      setSyncStatus('synced');
+      setLastSyncTime(new Date().toLocaleTimeString());
+    } catch {
+      setSyncStatus('offline');
+    } finally {
+      isServerHydrated.current = true;
+    }
+  };
+
+  // Push state to /api/state
+  const pushServerState = async (payload: any) => {
+    try {
+      setSyncStatus('syncing');
+      isSyncingRef.current = true;
+      const res = await fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.version) {
+          serverVersionRef.current = json.version;
+        }
+        setSyncStatus('synced');
+        setLastSyncTime(new Date().toLocaleTimeString());
+      } else {
+        setSyncStatus('offline');
+      }
+    } catch {
+      setSyncStatus('offline');
+    } finally {
+      isSyncingRef.current = false;
+    }
+  };
+
+  const triggerManualSync = async () => {
+    await pullServerState(true);
+  };
+
+  // Hydrate from server on mount, poll every 5s, and sync on focus/visibility
+  useEffect(() => {
+    pullServerState(true);
+    const interval = setInterval(() => {
+      pullServerState(false);
+    }, 5000);
+
+    const handleFocus = () => pullServerState(false);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
+    };
+  }, []);
+
+  // Debounced push to server whenever state is modified
+  useEffect(() => {
+    if (!isServerHydrated.current) return;
+    const payload = {
+      users,
+      products,
+      stock,
+      purchases,
+      requests,
+      transfers,
+      dailySales,
+      operations,
+      ledger,
+      auditLog,
+      suppliers,
+      dropdownOptions
+    };
+    const handler = setTimeout(() => {
+      pushServerState(payload);
+    }, 400);
+
+    return () => clearTimeout(handler);
+  }, [users, products, stock, purchases, requests, transfers, dailySales, operations, ledger, auditLog, suppliers, dropdownOptions]);
 
   // Sync theme
   useEffect(() => {
@@ -1143,6 +1263,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const submitDailySales = async (data: {
     date: string; cashAmount: number; upiAmount: number; cardAmount: number;
+    acCharges?: number;
     recordedAmount: number; cashierName: string; helperName: string;
     paymentExplanation?: string; lines: { productId: string; closing: number }[];
   }) => {
@@ -1193,10 +1314,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     });
 
-    const diff = Math.round((data.cashAmount + data.upiAmount + data.cardAmount - totalVal) * 100) / 100;
-    if (Math.abs(diff) > 0.009 && !data.paymentExplanation?.trim()) {
-      throw new Error('Payment differs from calculated sales value. An explanation is required.');
-    }
+    const acCharges = counter === 'AC' ? (Number(data.acCharges) || 0) : 0;
+    const totalCollected = data.cashAmount + data.upiAmount + data.cardAmount + acCharges;
+    const expected = totalVal + acCharges;
+    const diff = Math.round((totalCollected - expected) * 100) / 100;
+    // Payment mismatch explanation is optional; allow submitting with difference
 
     const reportId = `RPT-${String(dailySales.length + 1).padStart(6, '0')}`;
     reportLines.forEach(l => { l.reportId = reportId; });
@@ -1212,6 +1334,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       cashAmount: data.cashAmount,
       upiAmount: data.upiAmount,
       cardAmount: data.cardAmount,
+      acCharges: counter === 'AC' ? acCharges : undefined,
       cashierName: data.cashierName,
       helperName: data.helperName,
       paymentDifference: diff,
@@ -1223,7 +1346,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     setDailySales(prev => [newReport, ...prev]);
-    addAudit('SALES_SUBMITTED', reportId, `${data.date} | ${counter} | sold ${totalSold} btls | ₹${newReport.totalSalesValue}`);
+    addAudit('SALES_SUBMITTED', reportId, `${data.date} | ${counter} | sold ${totalSold} btls | ₹${newReport.totalSalesValue}${acCharges > 0 ? ` + ₹${acCharges} AC` : ''}`);
     return reportId;
   };
 
@@ -1710,7 +1833,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         toggleUserActive,
         reconcileStock,
         syncLedger,
-        resetToSampleData
+        resetToSampleData,
+
+        syncStatus,
+        lastSyncTime,
+        triggerManualSync
       }}
     >
       {children}

@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useStock } from '../context/StockContext';
 import {
   Printer,
   Calendar,
   FileText,
-  CheckCircle2,
   User,
   Users,
   UserCheck,
@@ -12,13 +11,7 @@ import {
   Filter,
   ArrowDownToLine,
   Table,
-  UtensilsCrossed,
-  Wind,
-  Layers,
-  ChevronRight,
-  TrendingUp,
-  Receipt,
-  Truck
+  Wind
 } from 'lucide-react';
 import { CounterLocation } from '../types';
 
@@ -35,21 +28,6 @@ export const ConsolidatedReportView: React.FC = () => {
   // Admin counter filter for Consolidated view
   const [adminCounterFilter, setAdminCounterFilter] = useState<'ALL' | 'NORMAL' | 'AC'>('ALL');
 
-  // AC Canteen Amount state persisted in localStorage keyed by date
-  const [canteenInput, setCanteenInput] = useState<string>(() => {
-    return localStorage.getItem(`mm_canteen_${businessDate}`) || '0';
-  });
-
-  useEffect(() => {
-    const saved = localStorage.getItem(`mm_canteen_${businessDate}`);
-    setCanteenInput(saved || '0');
-  }, [businessDate]);
-
-  const handleCanteenChange = (val: string) => {
-    setCanteenInput(val);
-    localStorage.setItem(`mm_canteen_${businessDate}`, val);
-  };
-
   const formatCurrency = (val: number) =>
     '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -61,27 +39,23 @@ export const ConsolidatedReportView: React.FC = () => {
   const normalCash = normalSale?.cashAmount || 0;
   const normalUpi = (normalSale?.upiAmount || 0) + (normalSale?.cardAmount || 0);
   const normalValue = normalSale?.totalSalesValue || 0;
+  const normalTotalReceived = normalCash + normalUpi;
   const normalDiff = normalSale?.paymentDifference || 0;
 
-  // AC Counter Metrics
+  // AC Counter Metrics (clean structure matching normal counter + shift AC charges)
   const acCash = acSale?.cashAmount || 0;
   const acUpi = (acSale?.upiAmount || 0) + (acSale?.cardAmount || 0);
+  const acCharges = acSale?.acCharges || 0;
   const acValue = acSale?.totalSalesValue || 0;
+  const acTotalReceived = acCash + acUpi + acCharges;
   const acDiff = acSale?.paymentDifference || 0;
-
-  // AC Counter Canteen & AC Charges Formula:
-  // AC Charges = (10% of Canteen Amount) + (10% of Calculated Liquor Sales Value)
-  // Total Received = (Cash + UPI/Card) + AC Charges
-  const parsedCanteen = Number(canteenInput) || 0;
-  const canteen10Percent = Math.round(parsedCanteen * 0.10 * 100) / 100;
-  const liquor10Percent = Math.round(acValue * 0.10 * 100) / 100;
-  const totalAcCharges = canteen10Percent + liquor10Percent;
-  const acTotalReceived = (acCash + acUpi) + totalAcCharges;
 
   // Combined Bar totals
   const totalSalesCash = normalCash + acCash;
   const totalSalesUpi = normalUpi + acUpi;
   const totalSalesValue = normalValue + acValue;
+  const totalAcCharges = acCharges;
+  const totalCombinedReceived = normalTotalReceived + acTotalReceived;
 
   // Approved Room Rent on this date (only visible to Admin and Normal Counter)
   const roomOps = operations.filter(o => o.type === 'ROOM' && o.date === businessDate && o.status === 'Approved');
@@ -104,10 +78,8 @@ export const ConsolidatedReportView: React.FC = () => {
   // ==========================================
   // DATE-RANGE REPORTS & EXPORTS HUB STATE
   // ==========================================
-  const todayStr = businessDate;
   const [reportType, setReportType] = useState<'sales' | 'purchases' | 'consolidated'>('sales');
   const [fromDate, setFromDate] = useState<string>(() => {
-    // Default to 7 days before today
     const d = new Date(businessDate);
     d.setDate(d.getDate() - 6);
     return d.toISOString().slice(0, 10);
@@ -144,12 +116,6 @@ export const ConsolidatedReportView: React.FC = () => {
       setFromDate(m.toISOString().slice(0, 10));
       setToDate(businessDate);
     }
-  };
-
-  // Helper to fetch canteen amount stored for any date
-  const getCanteenForDate = (d: string) => {
-    const saved = localStorage.getItem(`mm_canteen_${d}`);
-    return Number(saved) || 0;
   };
 
   // Filtered Liquor Sales Rows
@@ -210,7 +176,6 @@ export const ConsolidatedReportView: React.FC = () => {
 
   // Filtered Consolidated Daily Statement Rows
   const filteredConsolidatedData = useMemo(() => {
-    // Generate distinct list of dates in the range that exist in sales or ops
     const dateSet = new Set<string>();
     dailySales.forEach(r => {
       if (r.date >= fromDate && r.date <= toDate) dateSet.add(r.date);
@@ -219,7 +184,6 @@ export const ConsolidatedReportView: React.FC = () => {
       if (o.date >= fromDate && o.date <= toDate) dateSet.add(o.date);
     });
 
-    // Also include today and selected bounds
     dateSet.add(fromDate);
     dateSet.add(toDate);
 
@@ -232,16 +196,15 @@ export const ConsolidatedReportView: React.FC = () => {
       const nVal = nSale?.totalSalesValue || 0;
       const nCash = nSale?.cashAmount || 0;
       const nUpi = (nSale?.upiAmount || 0) + (nSale?.cardAmount || 0);
+      const nTotal = nCash + nUpi;
+      const nDiff = nSale?.paymentDifference || 0;
 
       const aVal = aSale?.totalSalesValue || 0;
       const aCash = aSale?.cashAmount || 0;
       const aUpi = (aSale?.upiAmount || 0) + (aSale?.cardAmount || 0);
-
-      const canteen = getCanteenForDate(date);
-      const canteenFee = Math.round(canteen * 0.10 * 100) / 100;
-      const liquorFee = Math.round(aVal * 0.10 * 100) / 100;
-      const acFees = canteenFee + liquorFee;
-      const aTotalRec = (aCash + aUpi) + acFees;
+      const aCharges = aSale?.acCharges || 0;
+      const aTotal = aCash + aUpi + aCharges;
+      const aDiff = aSale?.paymentDifference || 0;
 
       const rOps = operations.filter(o => o.type === 'ROOM' && o.date === date && o.status === 'Approved');
       const rTotal = rOps.reduce((s, r) => s + r.amount, 0);
@@ -253,7 +216,7 @@ export const ConsolidatedReportView: React.FC = () => {
       const wTotal = wOps.reduce((s, w) => s + w.amount, 0);
 
       const barTotal = nVal + aVal;
-      const totalIn = nCash + nUpi + aCash + aUpi + acFees + rTotal;
+      const totalIn = nCash + nUpi + aCash + aUpi + aCharges + rTotal;
       const totalOut = expTotal + wTotal;
       const surplus = totalIn - totalOut;
 
@@ -264,16 +227,14 @@ export const ConsolidatedReportView: React.FC = () => {
         normalValue: nVal,
         normalCash: nCash,
         normalUpi: nUpi,
-        normalTotal: nCash + nUpi,
-        normalDiff: nSale?.paymentDifference || 0,
+        normalTotal: nTotal,
+        normalDiff: nDiff,
         acValue: aVal,
         acCash: aCash,
         acUpi: aUpi,
-        canteen,
-        canteenFee,
-        liquorFee,
-        acFees,
-        acTotalReceived: aTotalRec,
+        acCharges: aCharges,
+        acTotalReceived: aTotal,
+        acDiff: aDiff,
         barTotal,
         roomRent: rTotal,
         expenses: expTotal,
@@ -378,11 +339,11 @@ export const ConsolidatedReportView: React.FC = () => {
           'Cashier',
           'Helper',
           'Liquor Sales Value (Rs)',
-          'Canteen Amount (Rs)',
-          'AC Charges 10% (Rs)',
+          'AC Charges (Rs)',
           'Cash Received (Rs)',
           'UPI/Card Received (Rs)',
-          'Total Received (Rs)'
+          'Total Received (Rs)',
+          'Difference (Rs)'
         ];
         const dataRows = filteredConsolidatedData.map(d => [
           d.date,
@@ -390,11 +351,11 @@ export const ConsolidatedReportView: React.FC = () => {
           d.aSale?.cashierName || '—',
           d.aSale?.helperName || '—',
           d.acValue,
-          d.canteen,
-          d.acFees,
+          d.acCharges,
           d.acCash,
           d.acUpi,
-          d.acTotalReceived
+          d.acTotalReceived,
+          d.acDiff
         ]);
         exportCsv(`MM_Residency_AC_Consolidated_${fromDate}_to_${toDate}.csv`, [headers, ...dataRows]);
       } else if (isNormalUser) {
@@ -427,8 +388,7 @@ export const ConsolidatedReportView: React.FC = () => {
           'Normal Liquor (Rs)',
           'AC Liquor (Rs)',
           'Combined Bar Sales (Rs)',
-          'AC Canteen Amount (Rs)',
-          'AC Charges 10% (Rs)',
+          'AC Charges (Rs)',
           'Room Rent (Rs)',
           'Expenses (Rs)',
           'Wages (Rs)',
@@ -439,8 +399,7 @@ export const ConsolidatedReportView: React.FC = () => {
           d.normalValue,
           d.acValue,
           d.barTotal,
-          d.canteen,
-          d.acFees,
+          d.acCharges,
           d.roomRent,
           d.expenses,
           d.wages,
@@ -455,7 +414,6 @@ export const ConsolidatedReportView: React.FC = () => {
     window.print();
   };
 
-  // Determine effective counter to show in Daily view
   const activeCounterView: 'ALL' | 'NORMAL' | 'AC' = isAcUser
     ? 'AC'
     : isNormalUser
@@ -508,7 +466,7 @@ export const ConsolidatedReportView: React.FC = () => {
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {isAcUser
-              ? `Day-end liquor turnover, canteen collections & 10% AC charges for ${businessDate}`
+              ? `Day-end liquor turnover, shift AC charges & drawer collections for ${businessDate}`
               : isNormalUser
               ? `Day-end sales reconciliation and cash drawer balances for ${businessDate}`
               : `Day-end revenue from Normal Counter, AC Counter, and Room Rent less operating expenses`}
@@ -683,123 +641,50 @@ export const ConsolidatedReportView: React.FC = () => {
             </div>
           </div>
 
-          {/* AC COUNTER CANTEEN AMOUNT & 10% AC CHARGES INPUT BOX */}
-          {(isAcUser || activeCounterView === 'AC' || activeCounterView === 'ALL') && (
-            <div className="rounded-2xl border border-purple-300 bg-gradient-to-r from-purple-50 via-white to-purple-50/50 p-4 sm:p-5 shadow-xs dark:border-purple-800/60 dark:from-slate-900 dark:via-purple-950/20 dark:to-slate-900 space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-purple-200/60 pb-3 dark:border-purple-900/40">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl bg-purple-500/15 text-purple-700 dark:text-purple-300">
-                    <UtensilsCrossed className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                      AC Counter Canteen & AC Charges Formula
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      AC Charges = 10% of Canteen Amount + 10% of Liquor Calculated Sales Value
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <label className="text-xs font-bold text-purple-900 dark:text-purple-300 whitespace-nowrap">
-                    Canteen Amount (₹):
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="Enter Canteen Amount"
-                    value={canteenInput}
-                    onChange={e => handleCanteenChange(e.target.value)}
-                    className="w-36 rounded-xl border border-purple-300 bg-white px-3 py-1.5 font-mono text-sm font-bold text-purple-900 shadow-xs outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 dark:border-purple-700 dark:bg-slate-800 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              {/* Formula & Calculation Visualizer */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
-                <div className="rounded-xl bg-white/80 p-3 dark:bg-slate-800/80 border border-purple-200/50 dark:border-purple-900/30">
-                  <span className="text-slate-500 dark:text-slate-400 text-[10px] uppercase font-bold">
-                    Canteen Amount
-                  </span>
-                  <div className="font-mono text-base font-bold text-slate-900 dark:text-white mt-0.5">
-                    {formatCurrency(parsedCanteen)}
-                  </div>
-                  <span className="text-[10px] text-purple-600 font-semibold">10% = {formatCurrency(canteen10Percent)}</span>
-                </div>
-
-                <div className="rounded-xl bg-white/80 p-3 dark:bg-slate-800/80 border border-purple-200/50 dark:border-purple-900/30">
-                  <span className="text-slate-500 dark:text-slate-400 text-[10px] uppercase font-bold">
-                    AC Liquor Sales Value
-                  </span>
-                  <div className="font-mono text-base font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                    {formatCurrency(acValue)}
-                  </div>
-                  <span className="text-[10px] text-purple-600 font-semibold">10% = {formatCurrency(liquor10Percent)}</span>
-                </div>
-
-                <div className="rounded-xl bg-purple-100/70 p-3 dark:bg-purple-950/60 border border-purple-300 dark:border-purple-800">
-                  <span className="text-purple-900 dark:text-purple-300 text-[10px] uppercase font-bold">
-                    Total AC Charges (10% + 10%)
-                  </span>
-                  <div className="font-mono text-base font-black text-purple-950 dark:text-purple-200 mt-0.5">
-                    {formatCurrency(totalAcCharges)}
-                  </div>
-                  <span className="text-[10px] text-purple-800 dark:text-purple-300">
-                    {formatCurrency(canteen10Percent)} + {formatCurrency(liquor10Percent)}
-                  </span>
-                </div>
-
-                <div className="rounded-xl bg-emerald-100/70 p-3 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800">
-                  <span className="text-emerald-900 dark:text-emerald-300 text-[10px] uppercase font-bold">
-                    Total Received (Sales + AC)
-                  </span>
-                  <div className="font-mono text-base font-black text-emerald-950 dark:text-emerald-200 mt-0.5">
-                    {formatCurrency(acTotalReceived)}
-                  </div>
-                  <span className="text-[10px] text-emerald-800 dark:text-emerald-300">
-                    Liquor ({formatCurrency(acCash + acUpi)}) + AC ({formatCurrency(totalAcCharges)})
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* KEY FINANCIAL TILES (Customized per counter role) */}
           {isAcUser || activeCounterView === 'AC' ? (
             /* AC COUNTER TILES - ROOM RENT AND EXPENSES/WAGES ARE COMPLETELY REMOVED */
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">AC Liquor Sales Value</span>
                 <div className="font-mono text-lg font-black text-slate-900 dark:text-white mt-1">
                   {formatCurrency(acValue)}
                 </div>
-                <span className="text-[10px] text-slate-400">Calculated shift stock value</span>
+                <span className="text-[10px] text-slate-400">Calculated shift stock sold</span>
+              </div>
+
+              <div className="rounded-xl border border-purple-200 bg-purple-50/70 p-4 shadow-xs dark:border-purple-800 dark:bg-purple-950/30">
+                <span className="text-[11px] font-bold text-purple-900 dark:text-purple-300 uppercase">AC Charges (₹)</span>
+                <div className="font-mono text-lg font-black text-purple-950 dark:text-purple-200 mt-1">
+                  {formatCurrency(acCharges)}
+                </div>
+                <span className="text-[10px] text-purple-700 dark:text-purple-300">Shift AC charges entered</span>
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Liquor Cash + UPI</span>
+                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Cash Received</span>
+                <div className="font-mono text-lg font-black text-emerald-600 dark:text-emerald-400 mt-1">
+                  {formatCurrency(acCash)}
+                </div>
+                <span className="text-[10px] text-slate-400">Drawer physical cash</span>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">UPI / Card Received</span>
                 <div className="font-mono text-lg font-black text-blue-600 dark:text-blue-400 mt-1">
-                  {formatCurrency(acCash + acUpi)}
+                  {formatCurrency(acUpi)}
                 </div>
-                <span className="text-[10px] text-slate-400">Cash: {formatCurrency(acCash)} · UPI: {formatCurrency(acUpi)}</span>
+                <span className="text-[10px] text-slate-400">Digital collections</span>
               </div>
 
-              <div className="rounded-xl border border-purple-300 bg-purple-50/70 p-4 shadow-xs dark:border-purple-800 dark:bg-purple-950/30">
-                <span className="text-[11px] font-bold text-purple-900 dark:text-purple-300 uppercase">AC Charges (10%)</span>
-                <div className="font-mono text-lg font-black text-purple-950 dark:text-purple-200 mt-1">
-                  {formatCurrency(totalAcCharges)}
-                </div>
-                <span className="text-[10px] text-purple-800 dark:text-purple-300">10% Canteen + 10% Liquor</span>
-              </div>
-
-              <div className="rounded-xl border border-emerald-300 bg-emerald-50/70 p-4 shadow-xs dark:border-emerald-800 dark:bg-emerald-950/30">
+              <div className="rounded-xl border border-emerald-300 bg-emerald-50/70 p-4 shadow-xs dark:border-emerald-800 dark:bg-emerald-950/30 col-span-2 sm:col-span-1">
                 <span className="text-[11px] font-bold text-emerald-900 dark:text-emerald-300 uppercase">Total Received</span>
                 <div className="font-mono text-xl font-black text-emerald-950 dark:text-emerald-200 mt-1">
                   {formatCurrency(acTotalReceived)}
                 </div>
-                <span className="text-[10px] text-emerald-800 dark:text-emerald-300">Sales Collections + AC Charges</span>
+                <span className="text-[10px] text-emerald-800 dark:text-emerald-300">
+                  Diff: {Math.abs(acDiff) > 0.009 ? formatCurrency(acDiff) : '✓ Matches'}
+                </span>
               </div>
             </div>
           ) : isNormalUser || activeCounterView === 'NORMAL' ? (
@@ -832,7 +717,7 @@ export const ConsolidatedReportView: React.FC = () => {
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Total Money Received</span>
                 <div className="font-mono text-xl font-black text-slate-900 dark:text-white mt-1">
-                  {formatCurrency(normalCash + normalUpi)}
+                  {formatCurrency(normalTotalReceived)}
                 </div>
                 <span className="text-[10px] text-slate-400">
                   Diff: {Math.abs(normalDiff) > 0.009 ? formatCurrency(normalDiff) : '✓ Matches'}
@@ -851,11 +736,11 @@ export const ConsolidatedReportView: React.FC = () => {
               </div>
 
               <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-4 shadow-xs dark:border-purple-800 dark:bg-purple-950/20">
-                <span className="text-[11px] font-semibold text-purple-900 dark:text-purple-300">AC Charges (10%)</span>
+                <span className="text-[11px] font-semibold text-purple-900 dark:text-purple-300">AC Charges</span>
                 <div className="font-mono text-lg font-black text-purple-950 dark:text-purple-200 mt-1">
                   {formatCurrency(totalAcCharges)}
                 </div>
-                <span className="text-[10px] text-purple-600">Cant: {formatCurrency(canteen10Percent)} · Liq: {formatCurrency(liquor10Percent)}</span>
+                <span className="text-[10px] text-purple-600">Shift AC service charges</span>
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
@@ -906,14 +791,9 @@ export const ConsolidatedReportView: React.FC = () => {
                     <th className="py-3 px-4">Counter Location</th>
                     <th className="py-3 px-4">Liquor Calculated Value</th>
                     {(isAcUser || activeCounterView === 'AC' || activeCounterView === 'ALL') && (
-                      <>
-                        <th className="py-3 px-4 bg-purple-50/50 dark:bg-purple-950/20 text-purple-900 dark:text-purple-300">
-                          Canteen Amount
-                        </th>
-                        <th className="py-3 px-4 bg-purple-100/50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200">
-                          AC Charges (10%)
-                        </th>
-                      </>
+                      <th className="py-3 px-4 bg-purple-50/50 dark:bg-purple-950/20 text-purple-900 dark:text-purple-200">
+                        AC Charges (₹)
+                      </th>
                     )}
                     <th className="py-3 px-4">Cash Received</th>
                     <th className="py-3 px-4">UPI / Card Received</th>
@@ -929,15 +809,12 @@ export const ConsolidatedReportView: React.FC = () => {
                       <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">Normal Counter</td>
                       <td className="py-3 px-4 font-mono font-bold">{formatCurrency(normalValue)}</td>
                       {activeCounterView === 'ALL' && (
-                        <>
-                          <td className="py-3 px-4 text-slate-400 font-mono">—</td>
-                          <td className="py-3 px-4 text-slate-400 font-mono">—</td>
-                        </>
+                        <td className="py-3 px-4 text-slate-400 font-mono">—</td>
                       )}
                       <td className="py-3 px-4 font-mono">{formatCurrency(normalCash)}</td>
                       <td className="py-3 px-4 font-mono">{formatCurrency(normalUpi)}</td>
                       <td className="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/20 dark:bg-emerald-950/10">
-                        {formatCurrency(normalCash + normalUpi)}
+                        {formatCurrency(normalTotalReceived)}
                       </td>
                       <td className="py-3 px-4 font-mono">
                         {Math.abs(normalDiff) > 0.009 ? (
@@ -967,11 +844,8 @@ export const ConsolidatedReportView: React.FC = () => {
                         AC Counter
                       </td>
                       <td className="py-3 px-4 font-mono font-bold">{formatCurrency(acValue)}</td>
-                      <td className="py-3 px-4 font-mono font-bold text-purple-900 dark:text-purple-300 bg-purple-50/40 dark:bg-purple-950/20">
-                        {formatCurrency(parsedCanteen)}
-                      </td>
-                      <td className="py-3 px-4 font-mono font-bold text-purple-700 dark:text-purple-300 bg-purple-100/40 dark:bg-purple-950/30">
-                        {formatCurrency(totalAcCharges)}
+                      <td className="py-3 px-4 font-mono font-bold text-purple-700 dark:text-purple-300 bg-purple-50/40 dark:bg-purple-950/30">
+                        {formatCurrency(acCharges)}
                       </td>
                       <td className="py-3 px-4 font-mono">{formatCurrency(acCash)}</td>
                       <td className="py-3 px-4 font-mono">{formatCurrency(acUpi)}</td>
@@ -1006,12 +880,11 @@ export const ConsolidatedReportView: React.FC = () => {
                     <tr className="border-t font-bold bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white">
                       <td className="py-3 px-4">COMBINED BAR TOTAL</td>
                       <td className="py-3 px-4 font-mono">{formatCurrency(totalSalesValue)}</td>
-                      <td className="py-3 px-4 font-mono">{formatCurrency(parsedCanteen)}</td>
                       <td className="py-3 px-4 font-mono text-purple-700 dark:text-purple-300">{formatCurrency(totalAcCharges)}</td>
                       <td className="py-3 px-4 font-mono">{formatCurrency(totalSalesCash)}</td>
                       <td className="py-3 px-4 font-mono">{formatCurrency(totalSalesUpi)}</td>
                       <td className="py-3 px-4 font-mono text-emerald-600 dark:text-emerald-400">
-                        {formatCurrency(normalCash + normalUpi + acTotalReceived)}
+                        {formatCurrency(totalCombinedReceived)}
                       </td>
                       <td className="py-3 px-4 font-mono">{formatCurrency(normalDiff + acDiff)}</td>
                       <td className="py-3 px-4 text-slate-500 text-[10px]">Verified</td>
@@ -1022,7 +895,7 @@ export const ConsolidatedReportView: React.FC = () => {
             </div>
           </div>
 
-          {/* LODGING AND OPERATING OUTFLOWS (REMOVED FROM AC COUNTER AS PER REQ 4) */}
+          {/* LODGING AND OPERATING OUTFLOWS (REMOVED FROM AC COUNTER AS REQUESTED) */}
           {!isAcUser && activeCounterView !== 'AC' && (
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               {/* Room Rent Detail */}
@@ -1493,13 +1366,13 @@ export const ConsolidatedReportView: React.FC = () => {
                         {isAcUser ? (
                           <>
                             <th className="py-2.5 px-3">Liquor Sales</th>
-                            <th className="py-2.5 px-3 text-purple-900 dark:text-purple-300">Canteen Amount</th>
-                            <th className="py-2.5 px-3 text-purple-900 dark:text-purple-300">AC Charges (10%)</th>
+                            <th className="py-2.5 px-3 text-purple-900 dark:text-purple-300">AC Charges (₹)</th>
                             <th className="py-2.5 px-3">Cash</th>
                             <th className="py-2.5 px-3">UPI</th>
                             <th className="py-2.5 px-3 text-right bg-emerald-50 dark:bg-emerald-950 font-bold">
                               Total Received
                             </th>
+                            <th className="py-2.5 px-3">Diff</th>
                           </>
                         ) : isNormalUser ? (
                           <>
@@ -1513,8 +1386,7 @@ export const ConsolidatedReportView: React.FC = () => {
                           <>
                             <th className="py-2.5 px-3">Normal Liquor</th>
                             <th className="py-2.5 px-3">AC Liquor</th>
-                            <th className="py-2.5 px-3">AC Canteen</th>
-                            <th className="py-2.5 px-3">AC Charges 10%</th>
+                            <th className="py-2.5 px-3 text-purple-900 dark:text-purple-300">AC Charges</th>
                             <th className="py-2.5 px-3">Bar Turnover</th>
                             <th className="py-2.5 px-3">Room Rent</th>
                             <th className="py-2.5 px-3 text-red-600">Expenses</th>
@@ -1533,16 +1405,20 @@ export const ConsolidatedReportView: React.FC = () => {
                           {isAcUser ? (
                             <>
                               <td className="py-2.5 px-3 font-mono font-bold">{formatCurrency(d.acValue)}</td>
-                              <td className="py-2.5 px-3 font-mono text-purple-800 dark:text-purple-300">
-                                {formatCurrency(d.canteen)}
-                              </td>
                               <td className="py-2.5 px-3 font-mono font-bold text-purple-700 dark:text-purple-300">
-                                {formatCurrency(d.acFees)}
+                                {formatCurrency(d.acCharges)}
                               </td>
                               <td className="py-2.5 px-3 font-mono">{formatCurrency(d.acCash)}</td>
                               <td className="py-2.5 px-3 font-mono">{formatCurrency(d.acUpi)}</td>
                               <td className="py-2.5 px-3 text-right font-mono font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50/20 dark:bg-emerald-950/20">
                                 {formatCurrency(d.acTotalReceived)}
+                              </td>
+                              <td className="py-2.5 px-3 font-mono">
+                                {Math.abs(d.acDiff) > 0.009 ? (
+                                  <span className="text-red-600 font-bold">{formatCurrency(d.acDiff)}</span>
+                                ) : (
+                                  <span className="text-emerald-600">✓</span>
+                                )}
                               </td>
                             </>
                           ) : isNormalUser ? (
@@ -1565,11 +1441,8 @@ export const ConsolidatedReportView: React.FC = () => {
                             <>
                               <td className="py-2.5 px-3 font-mono">{formatCurrency(d.normalValue)}</td>
                               <td className="py-2.5 px-3 font-mono">{formatCurrency(d.acValue)}</td>
-                              <td className="py-2.5 px-3 font-mono text-purple-700 dark:text-purple-300">
-                                {formatCurrency(d.canteen)}
-                              </td>
                               <td className="py-2.5 px-3 font-mono font-bold text-purple-700 dark:text-purple-300">
-                                {formatCurrency(d.acFees)}
+                                {formatCurrency(d.acCharges)}
                               </td>
                               <td className="py-2.5 px-3 font-mono font-bold">{formatCurrency(d.barTotal)}</td>
                               <td className="py-2.5 px-3 font-mono text-emerald-600">{formatCurrency(d.roomRent)}</td>

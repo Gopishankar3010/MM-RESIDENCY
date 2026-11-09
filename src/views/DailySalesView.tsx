@@ -66,6 +66,7 @@ export const DailySalesView: React.FC = () => {
   const [helperName, setHelperName] = useState('');
   const [cashAmount, setCashAmount] = useState('0');
   const [upiAmount, setUpiAmount] = useState('0');
+  const [acChargesAmount, setAcChargesAmount] = useState('0');
   const [paymentExplanation, setPaymentExplanation] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [searchFilter, setSearchFilter] = useState('');
@@ -132,8 +133,10 @@ export const DailySalesView: React.FC = () => {
 
   const parsedCash = Number(cashAmount) || 0;
   const parsedUpi = Number(upiAmount) || 0;
-  const totalPaymentReceived = parsedCash + parsedUpi;
-  const paymentDiff = Math.round((totalPaymentReceived - formCalculatedTotalValue) * 100) / 100;
+  const parsedAcCharges = counter === 'AC' ? (Number(acChargesAmount) || 0) : 0;
+  const totalPaymentReceived = parsedCash + parsedUpi + parsedAcCharges;
+  const expectedTotal = formCalculatedTotalValue + parsedAcCharges;
+  const paymentDiff = Math.round((totalPaymentReceived - expectedTotal) * 100) / 100;
 
   const filteredLines = lineCalculations.filter(l => {
     const matchesCat = !categoryFilter || l.category === categoryFilter;
@@ -166,14 +169,8 @@ export const DailySalesView: React.FC = () => {
       });
       return;
     }
-    if (Math.abs(paymentDiff) > 0.009 && !paymentExplanation.trim()) {
-      setStatusMessage({
-        type: 'err',
-        text: 'Payment received differs from calculated sales. An explanation is required before submitting.'
-      });
-      return;
-    }
 
+    // Difference is permitted - show preview to review difference before confirming
     setShowSubmitPreview(true);
   };
 
@@ -197,6 +194,7 @@ export const DailySalesView: React.FC = () => {
         cashAmount: parsedCash,
         upiAmount: parsedUpi,
         cardAmount: 0,
+        acCharges: parsedAcCharges,
         recordedAmount: totalPaymentReceived,
         cashierName: cashierName.trim(),
         helperName: helperName.trim(),
@@ -209,6 +207,7 @@ export const DailySalesView: React.FC = () => {
       setClosingInputs({});
       setCashAmount('0');
       setUpiAmount('0');
+      setAcChargesAmount('0');
       setPaymentExplanation('');
     } catch (e: any) {
       setStatusMessage({ type: 'err', text: e.message || 'Error submitting report.' });
@@ -560,7 +559,7 @@ export const DailySalesView: React.FC = () => {
                   <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                     Payment Collection Breakdown
                   </h3>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className={`grid ${counter === 'AC' ? 'grid-cols-3' : 'grid-cols-2'} gap-3`}>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
                         Cash Received (₹)
@@ -587,22 +586,38 @@ export const DailySalesView: React.FC = () => {
                         className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 font-mono text-xs font-bold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                       />
                     </div>
+                    {counter === 'AC' && (
+                      <div>
+                        <label className="block text-[11px] font-bold text-purple-700 dark:text-purple-300 mb-1">
+                          AC Charges Total (₹)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={acChargesAmount}
+                          onChange={e => setAcChargesAmount(e.target.value)}
+                          className="w-full rounded-lg border border-purple-300 bg-purple-50/50 px-3 py-1.5 font-mono text-xs font-bold text-purple-900 outline-none focus:border-purple-500 dark:border-purple-700 dark:bg-slate-800 dark:text-purple-200"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {Math.abs(paymentDiff) > 0.009 && (
                     <div>
-                      <div className="mb-1 text-[11px] font-bold text-red-600 dark:text-red-400 flex items-center gap-1">
+                      <div className="mb-1 text-[11px] font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1">
                         <AlertTriangle className="h-3 w-3" />
                         <span>
-                          Payment differs from calculated sales by {paymentDiff > 0 ? `+${formatCurrency(paymentDiff)} (Excess)` : `${formatCurrency(paymentDiff)} (Short)`}
+                          Difference: {paymentDiff > 0 ? `+${formatCurrency(paymentDiff)} (Excess)` : `${formatCurrency(paymentDiff)} (Short)`} (Submission Allowed)
                         </span>
                       </div>
                       <input
                         type="text"
-                        placeholder="Mandatory explanation for cash/sales mismatch..."
+                        placeholder="Optional explanation for difference (e.g. coin rounding, tip, etc.)..."
                         value={paymentExplanation}
                         onChange={e => setPaymentExplanation(e.target.value)}
-                        className="w-full rounded-lg border border-red-300 bg-red-50/40 px-3 py-1.5 text-xs text-red-900 outline-none focus:border-red-500 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
+                        className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs text-slate-900 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                       />
                     </div>
                   )}
@@ -624,9 +639,21 @@ export const DailySalesView: React.FC = () => {
                         <span className="text-slate-500">Calculated Stock Value:</span>
                         <span className="font-mono font-bold text-emerald-600">{formatCurrency(formCalculatedTotalValue)}</span>
                       </div>
-                      <div className="flex items-center justify-between py-1">
+                      {counter === 'AC' && (
+                        <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
+                          <span className="text-purple-700 dark:text-purple-300 font-semibold">Total AC Charges:</span>
+                          <span className="font-mono font-bold text-purple-700 dark:text-purple-300">+{formatCurrency(parsedAcCharges)}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
                         <span className="text-slate-500">Total Money Received:</span>
                         <span className="font-mono font-bold text-slate-900 dark:text-white">{formatCurrency(totalPaymentReceived)}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-1">
+                        <span className="text-slate-500">Reconciliation:</span>
+                        <span className={`font-mono font-bold ${Math.abs(paymentDiff) <= 0.009 ? 'text-emerald-600' : paymentDiff > 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                          {Math.abs(paymentDiff) <= 0.009 ? '✓ Exact Match' : `${paymentDiff > 0 ? '+' : ''}${formatCurrency(paymentDiff)}`}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -1134,7 +1161,7 @@ export const DailySalesView: React.FC = () => {
             </div>
 
             {/* Financial Summary Tiles */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+            <div className={`grid grid-cols-2 ${counter === 'AC' ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2.5 text-xs`}>
               <div className="rounded-xl bg-amber-50/70 p-3 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40">
                 <span className="text-[10px] font-bold text-amber-800 dark:text-amber-300 uppercase">Bottles Sold</span>
                 <div className="font-mono text-base font-black text-amber-950 dark:text-amber-200 mt-0.5">
@@ -1142,28 +1169,37 @@ export const DailySalesView: React.FC = () => {
                 </div>
               </div>
               <div className="rounded-xl bg-emerald-50/70 p-3 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-900/40">
-                <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase">Calculated Sales</span>
+                <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase">Liquor Sales</span>
                 <div className="font-mono text-base font-black text-emerald-700 dark:text-emerald-300 mt-0.5">
                   {formatCurrency(formCalculatedTotalValue)}
                 </div>
               </div>
+              {counter === 'AC' && (
+                <div className="rounded-xl bg-purple-50/70 p-3 dark:bg-purple-950/30 border border-purple-200/60 dark:border-purple-900/40">
+                  <span className="text-[10px] font-bold text-purple-800 dark:text-purple-300 uppercase">AC Charges</span>
+                  <div className="font-mono text-base font-black text-purple-700 dark:text-purple-300 mt-0.5">
+                    {formatCurrency(parsedAcCharges)}
+                  </div>
+                </div>
+              )}
               <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
-                <span className="text-[10px] font-bold text-slate-500 uppercase">Cash + UPI</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Total Received</span>
                 <div className="font-mono text-base font-bold text-slate-900 dark:text-white mt-0.5">
                   {formatCurrency(totalPaymentReceived)}
                 </div>
               </div>
               <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
-                <span className="text-[10px] font-bold text-slate-500 uppercase">Reconciliation</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Difference</span>
                 <div className={`font-mono text-xs font-bold mt-1 ${Math.abs(paymentDiff) > 0.009 ? (paymentDiff > 0 ? 'text-blue-600' : 'text-red-600') : 'text-emerald-600'}`}>
                   {Math.abs(paymentDiff) <= 0.009 ? '✓ Exact Match' : `${paymentDiff > 0 ? '+' : ''}${formatCurrency(paymentDiff)}`}
                 </div>
               </div>
             </div>
 
-            {Math.abs(paymentDiff) > 0.009 && paymentExplanation && (
-              <div className="rounded-xl bg-red-50 p-3 text-xs text-red-900 border border-red-200 dark:bg-red-950/40 dark:text-red-200 dark:border-red-900/50">
-                <strong>Variance Explanation:</strong> {paymentExplanation}
+            {Math.abs(paymentDiff) > 0.009 && (
+              <div className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900/50">
+                <strong>Variance Status:</strong> {paymentDiff > 0 ? `+${formatCurrency(paymentDiff)} (Excess Money - Allowed)` : `${formatCurrency(paymentDiff)} (Short Money - Allowed)`}
+                {paymentExplanation && <span className="block mt-0.5 text-slate-700 dark:text-slate-300">Explanation: {paymentExplanation}</span>}
               </div>
             )}
 

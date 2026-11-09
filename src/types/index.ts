@@ -170,6 +170,7 @@ export interface DailySalesReport {
   cashAmount: number;
   upiAmount: number;
   cardAmount: number;
+  acCharges?: number;
   cashierName: string;
   helperName: string;
   paymentDifference: number;

@@ -1,9 +1,19 @@
 import React from 'react';
 import { useStock } from '../context/StockContext';
-import { Moon, Sun, User as UserIcon, Calendar, LogOut, Shield, ChevronDown } from 'lucide-react';
+import { Moon, Sun, User as UserIcon, Calendar, LogOut, Shield, ChevronDown, RefreshCw } from 'lucide-react';
 
 export const Header: React.FC<{ onOpenPasswordModal: () => void }> = ({ onOpenPasswordModal }) => {
-  const { currentUser, businessDate, setBusinessDate, theme, toggleTheme, logout } = useStock();
+  const {
+    currentUser,
+    businessDate,
+    setBusinessDate,
+    theme,
+    toggleTheme,
+    logout,
+    syncStatus,
+    lastSyncTime,
+    triggerManualSync
+  } = useStock();
 
   const formattedDate = () => {
     try {
@@ -58,6 +68,25 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void }> = ({ onOpenPa
             <span className="text-[10px] text-slate-300">{formattedDate()}</span>
           </div>
         </div>
+
+        {/* Cloud Sync Status & Instant Refresh */}
+        <button
+          type="button"
+          onClick={triggerManualSync}
+          title={`Cross-Device Sync: ${syncStatus === 'synced' ? 'All devices synchronized' : syncStatus === 'syncing' ? 'Syncing...' : 'Working offline'} · Last sync: ${lastSyncTime}. Click to sync now.`}
+          className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-all cursor-pointer ${
+            syncStatus === 'synced'
+              ? 'border-emerald-600/40 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/50'
+              : syncStatus === 'syncing'
+              ? 'border-amber-600/40 bg-amber-950/40 text-amber-300 animate-pulse'
+              : 'border-slate-700 bg-slate-800 text-slate-400 hover:bg-slate-700'
+          }`}
+        >
+          <RefreshCw className={`h-3 w-3 ${syncStatus === 'syncing' ? 'animate-spin text-amber-300' : 'text-emerald-400'}`} />
+          <span className="hidden sm:inline font-mono text-[10px]">
+            {syncStatus === 'synced' ? 'Synced' : syncStatus === 'syncing' ? 'Syncing...' : 'Offline'}
+          </span>
+        </button>
 
         {/* User profile & quick role switch */}
         {currentUser && (
