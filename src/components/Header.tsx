@@ -34,12 +34,19 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void }> = ({ onOpenPa
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-slate-800 bg-[#0e2540] px-4 py-3 text-white shadow-md dark:border-slate-800 dark:bg-slate-900 md:px-6">
       {/* Brand */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-800 to-slate-900 border border-amber-500/40 text-amber-300 shadow-xs">
+          <svg className="w-5 h-5" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M18 4L28 9V17C28 23.5 23.8 29.5 18 31C12.2 29.5 8 23.5 8 17V9L18 4Z" stroke="#f0c96a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="rgba(240, 201, 106, 0.2)" />
+            <path d="M12 21V14L15.5 18.5L18 15L20.5 18.5L24 14V21" stroke="#f0c96a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M15 24H21" stroke="#f0c96a" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </div>
         <div className="flex flex-col leading-tight">
           <div className="flex items-center gap-2">
             <span className="text-xl font-black tracking-tight text-[#f0c96a]">MM Residency</span>
             <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-amber-300 uppercase">
-              Bar & Stock v2
+              Bar & Stock
             </span>
           </div>
           <small className="text-[11px] font-medium text-slate-300 tracking-wide">

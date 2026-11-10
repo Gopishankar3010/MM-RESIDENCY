@@ -1,17 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useStock } from '../context/StockContext';
 import {
   Printer,
   Calendar,
-  FileText,
   User,
   Users,
   UserCheck,
   Download,
   Filter,
   ArrowDownToLine,
-  Table,
-  Wind
+  CheckCircle2,
+  Clock
 } from 'lucide-react';
 import { CounterLocation } from '../types';
 
@@ -22,8 +21,15 @@ export const ConsolidatedReportView: React.FC = () => {
   const isAcUser = currentUser?.counter === 'AC' || currentUser?.role === 'AC';
   const isNormalUser = currentUser?.counter === 'NORMAL' || currentUser?.role === 'NORMAL';
 
-  // Active Main Sub-tab: 'daily' (Today's Financial Closing) vs 'reports' (Date-Range Reports & Downloads Hub)
+  // Active Main Sub-tab: 'daily' (Daily Financial Closing) vs 'reports' (Date-Range Reports & Downloads Hub)
   const [activeViewTab, setActiveViewTab] = useState<'daily' | 'reports'>('daily');
+
+  // Selected date for Daily Financial Closing (defaults to businessDate, user can change to any day)
+  const [selectedDate, setSelectedDate] = useState<string>(businessDate);
+
+  useEffect(() => {
+    setSelectedDate(businessDate);
+  }, [businessDate]);
 
   // Admin counter filter for Consolidated view
   const [adminCounterFilter, setAdminCounterFilter] = useState<'ALL' | 'NORMAL' | 'AC'>('ALL');
@@ -31,9 +37,17 @@ export const ConsolidatedReportView: React.FC = () => {
   const formatCurrency = (val: number) =>
     '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // Approved sales on selected businessDate
-  const normalSale = dailySales.find(r => r.counter === 'NORMAL' && r.date === businessDate && r.status === 'Approved');
-  const acSale = dailySales.find(r => r.counter === 'AC' && r.date === businessDate && r.status === 'Approved');
+  // Helper to find the active sales report for a counter and date (prefers Approved, falls back to latest submitted)
+  const getReportForCounter = (counter: CounterLocation, date: string) => {
+    const matches = dailySales.filter(r => r.counter === counter && r.date === date && r.status !== 'Rejected');
+    const approved = matches.find(r => r.status === 'Approved');
+    if (approved) return approved;
+    return matches[0] || null;
+  };
+
+  // Sales on selectedDate
+  const normalSale = getReportForCounter('NORMAL', selectedDate);
+  const acSale = getReportForCounter('AC', selectedDate);
 
   // Normal Counter Metrics
   const normalCash = normalSale?.cashAmount || 0;
@@ -57,15 +71,15 @@ export const ConsolidatedReportView: React.FC = () => {
   const totalAcCharges = acCharges;
   const totalCombinedReceived = normalTotalReceived + acTotalReceived;
 
-  // Approved Room Rent on this date (only visible to Admin and Normal Counter)
-  const roomOps = operations.filter(o => o.type === 'ROOM' && o.date === businessDate && o.status === 'Approved');
+  // Approved Room Rent on selected date (only visible to Admin and Normal Counter)
+  const roomOps = operations.filter(o => o.type === 'ROOM' && o.date === selectedDate && o.status === 'Approved');
   const roomCash = roomOps.filter(r => r.payment === 'Cash').reduce((s, r) => s + r.amount, 0);
   const roomUpi = roomOps.filter(r => r.payment === 'UPI' || r.payment === 'Card').reduce((s, r) => s + r.amount, 0);
   const totalRoomRent = roomCash + roomUpi;
 
-  // Approved Expenses and Wages on this date (only visible to Admin and Normal Counter)
-  const expenseOps = operations.filter(o => o.type === 'EXPENSE' && o.date === businessDate && o.status === 'Approved');
-  const wageOps = operations.filter(o => o.type === 'WAGE' && o.date === businessDate && o.status === 'Approved');
+  // Approved Expenses and Wages on selected date (only visible to Admin and Normal Counter)
+  const expenseOps = operations.filter(o => o.type === 'EXPENSE' && o.date === selectedDate && o.status === 'Approved');
+  const wageOps = operations.filter(o => o.type === 'WAGE' && o.date === selectedDate && o.status === 'Approved');
 
   const totalExpenses = expenseOps.reduce((s, o) => s + o.amount, 0);
   const totalWages = wageOps.reduce((s, o) => s + o.amount, 0);
@@ -190,8 +204,8 @@ export const ConsolidatedReportView: React.FC = () => {
     const sortedDates = Array.from(dateSet).sort().reverse();
 
     return sortedDates.map(date => {
-      const nSale = dailySales.find(r => r.counter === 'NORMAL' && r.date === date && r.status === 'Approved');
-      const aSale = dailySales.find(r => r.counter === 'AC' && r.date === date && r.status === 'Approved');
+      const nSale = getReportForCounter('NORMAL', date);
+      const aSale = getReportForCounter('AC', date);
 
       const nVal = nSale?.totalSalesValue || 0;
       const nCash = nSale?.cashAmount || 0;
@@ -343,7 +357,8 @@ export const ConsolidatedReportView: React.FC = () => {
           'Cash Received (Rs)',
           'UPI/Card Received (Rs)',
           'Total Received (Rs)',
-          'Difference (Rs)'
+          'Difference (Rs)',
+          'Status'
         ];
         const dataRows = filteredConsolidatedData.map(d => [
           d.date,
@@ -355,7 +370,8 @@ export const ConsolidatedReportView: React.FC = () => {
           d.acCash,
           d.acUpi,
           d.acTotalReceived,
-          d.acDiff
+          d.acDiff,
+          d.aSale?.status || 'No Report'
         ]);
         exportCsv(`MM_Residency_AC_Consolidated_${fromDate}_to_${toDate}.csv`, [headers, ...dataRows]);
       } else if (isNormalUser) {
@@ -368,7 +384,8 @@ export const ConsolidatedReportView: React.FC = () => {
           'Cash Received (Rs)',
           'UPI/Card Received (Rs)',
           'Total Received (Rs)',
-          'Difference (Rs)'
+          'Difference (Rs)',
+          'Status'
         ];
         const dataRows = filteredConsolidatedData.map(d => [
           d.date,
@@ -379,7 +396,8 @@ export const ConsolidatedReportView: React.FC = () => {
           d.normalCash,
           d.normalUpi,
           d.normalTotal,
-          d.normalDiff
+          d.normalDiff,
+          d.nSale?.status || 'No Report'
         ]);
         exportCsv(`MM_Residency_Normal_Consolidated_${fromDate}_to_${toDate}.csv`, [headers, ...dataRows]);
       } else {
@@ -433,7 +451,7 @@ export const ConsolidatedReportView: React.FC = () => {
             : 'CONSOLIDATED DAILY FINANCIAL STATEMENT'}
         </h2>
         <p className="text-xs text-slate-500 mt-1">
-          Shift Date: <strong>{businessDate}</strong> · Generated: {new Date().toLocaleString('en-IN')}
+          Shift Date: <strong>{selectedDate}</strong> · Generated: {new Date().toLocaleString('en-IN')}
         </p>
         <div className="flex justify-center gap-6 mt-2 text-xs font-medium text-slate-800 border-t pt-2">
           {!isAcUser && (
@@ -466,9 +484,9 @@ export const ConsolidatedReportView: React.FC = () => {
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {isAcUser
-              ? `Day-end liquor turnover, shift AC charges & drawer collections for ${businessDate}`
+              ? `Day-end liquor turnover, shift AC charges & drawer collections for ${selectedDate}`
               : isNormalUser
-              ? `Day-end sales reconciliation and cash drawer balances for ${businessDate}`
+              ? `Day-end sales reconciliation and cash drawer balances for ${selectedDate}`
               : `Day-end revenue from Normal Counter, AC Counter, and Room Rent less operating expenses`}
           </p>
         </div>
@@ -513,7 +531,53 @@ export const ConsolidatedReportView: React.FC = () => {
       {/* VIEW MODE 1: DAILY CLOSING TAB                           */}
       {/* ======================================================== */}
       {activeViewTab === 'daily' && (
-        <div className="space-y-6">
+        <div className="space-y-5">
+          {/* DATE SELECTOR TOOLBAR FOR DAILY CLOSING */}
+          <div className="no-print flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-amber-500 shrink-0" />
+              <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                Viewing Shift Date:
+              </span>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={e => e.target.value && setSelectedDate(e.target.value)}
+                className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-1 font-mono text-xs font-bold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white cursor-pointer"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Quick Dates:</span>
+              <button
+                type="button"
+                onClick={() => setSelectedDate(businessDate)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-all cursor-pointer ${
+                  selectedDate === businessDate
+                    ? 'bg-amber-500 text-slate-950 font-black'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                }`}
+              >
+                Today ({businessDate})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const d = new Date(businessDate);
+                  d.setDate(d.getDate() - 1);
+                  setSelectedDate(d.toISOString().slice(0, 10));
+                }}
+                className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-all cursor-pointer ${
+                  selectedDate !== businessDate
+                    ? 'bg-amber-500/20 text-amber-900 dark:text-amber-300 font-bold'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                }`}
+              >
+                Yesterday
+              </button>
+            </div>
+          </div>
+
           {/* Admin Counter Filter Toggle */}
           {isAdmin && (
             <div className="no-print flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 shadow-xs dark:border-slate-800 dark:bg-slate-900">
@@ -564,7 +628,7 @@ export const ConsolidatedReportView: React.FC = () => {
               </div>
               <div>
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                  Staff on Duty ({businessDate})
+                  Staff on Duty ({selectedDate})
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
                   Cashier and Helper personnel recorded on shift submission
@@ -578,13 +642,20 @@ export const ConsolidatedReportView: React.FC = () => {
                   <div className="text-[10px] font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wider mb-1 flex items-center justify-between">
                     <span>Normal Counter</span>
                     <span
-                      className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                      className={`text-[9px] px-1.5 py-0.2 rounded font-semibold flex items-center gap-1 ${
                         normalSale
                           ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                           : 'bg-slate-100 text-slate-500'
                       }`}
                     >
-                      {normalSale ? normalSale.status : 'No Report'}
+                      {normalSale ? (
+                        <>
+                          <CheckCircle2 className="h-2.5 w-2.5 text-emerald-600" />
+                          <span>{normalSale.status}</span>
+                        </>
+                      ) : (
+                        'No Report'
+                      )}
                     </span>
                   </div>
                   <div className="flex flex-col gap-0.5 text-xs">
@@ -611,13 +682,20 @@ export const ConsolidatedReportView: React.FC = () => {
                   <div className="text-[10px] font-bold text-purple-800 dark:text-purple-300 uppercase tracking-wider mb-1 flex items-center justify-between">
                     <span>AC Counter</span>
                     <span
-                      className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                      className={`text-[9px] px-1.5 py-0.2 rounded font-semibold flex items-center gap-1 ${
                         acSale
                           ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                           : 'bg-slate-100 text-slate-500'
                       }`}
                     >
-                      {acSale ? acSale.status : 'No Report'}
+                      {acSale ? (
+                        <>
+                          <CheckCircle2 className="h-2.5 w-2.5 text-emerald-600" />
+                          <span>{acSale.status}</span>
+                        </>
+                      ) : (
+                        'No Report'
+                      )}
                     </span>
                   </div>
                   <div className="flex flex-col gap-0.5 text-xs">
@@ -774,14 +852,19 @@ export const ConsolidatedReportView: React.FC = () => {
           {/* COUNTER SALES RECONCILIATION TABLE */}
           <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
             <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-                {isAcUser
-                  ? `AC Counter Daily Reconciliation (${businessDate})`
-                  : isNormalUser
-                  ? `Normal Counter Daily Reconciliation (${businessDate})`
-                  : `Counter Sales Reconciliation (${businessDate})`}
-              </h2>
-              <span className="text-xs text-slate-500">Only approved daily shift records</span>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                  {isAcUser
+                    ? `AC Counter Daily Reconciliation (${selectedDate})`
+                    : isNormalUser
+                    ? `Normal Counter Daily Reconciliation (${selectedDate})`
+                    : `Counter Sales Reconciliation (${selectedDate})`}
+                </h2>
+                <span className="text-[11px] text-slate-500">Live reflection of submitted counter shifts</span>
+              </div>
+              <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                Auto-Approved Live Feed
+              </span>
             </div>
 
             <div className="overflow-x-auto">
@@ -831,7 +914,7 @@ export const ConsolidatedReportView: React.FC = () => {
                               : 'bg-slate-100 text-slate-600'
                           }`}
                         >
-                          {normalSale ? normalSale.status : 'No Approved Report'}
+                          {normalSale ? normalSale.status : 'No Report'}
                         </span>
                       </td>
                     </tr>
@@ -867,7 +950,7 @@ export const ConsolidatedReportView: React.FC = () => {
                               : 'bg-slate-100 text-slate-600'
                           }`}
                         >
-                          {acSale ? acSale.status : 'No Approved Report'}
+                          {acSale ? acSale.status : 'No Report'}
                         </span>
                       </td>
                     </tr>
@@ -902,7 +985,7 @@ export const ConsolidatedReportView: React.FC = () => {
               <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
                 <div className="flex items-center justify-between border-b pb-2 dark:border-slate-800">
                   <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                    Room Lodging Collections
+                    Room Lodging Collections ({selectedDate})
                   </h3>
                   <span className="font-mono text-xs font-bold text-emerald-600">
                     Total: {formatCurrency(totalRoomRent)}
@@ -924,7 +1007,7 @@ export const ConsolidatedReportView: React.FC = () => {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-xs text-slate-400 py-3 text-center">No room rent recorded for {businessDate}.</p>
+                  <p className="text-xs text-slate-400 py-3 text-center">No room rent recorded for {selectedDate}.</p>
                 )}
               </div>
 
@@ -932,7 +1015,7 @@ export const ConsolidatedReportView: React.FC = () => {
               <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
                 <div className="flex items-center justify-between border-b pb-2 dark:border-slate-800">
                   <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                    Operating Deductions (Expenses & Wages)
+                    Operating Deductions ({selectedDate})
                   </h3>
                   <span className="font-mono text-xs font-bold text-red-600">
                     Total: -{formatCurrency(totalOutflows)}
@@ -972,7 +1055,7 @@ export const ConsolidatedReportView: React.FC = () => {
 
                   {expenseOps.length === 0 && wageOps.length === 0 && (
                     <p className="text-xs text-slate-400 py-3 text-center">
-                      No expenses or wages recorded for {businessDate}.
+                      No expenses or wages recorded for {selectedDate}.
                     </p>
                   )}
                 </div>
@@ -1373,6 +1456,7 @@ export const ConsolidatedReportView: React.FC = () => {
                               Total Received
                             </th>
                             <th className="py-2.5 px-3">Diff</th>
+                            <th className="py-2.5 px-3">Status</th>
                           </>
                         ) : isNormalUser ? (
                           <>
@@ -1381,6 +1465,7 @@ export const ConsolidatedReportView: React.FC = () => {
                             <th className="py-2.5 px-3">UPI</th>
                             <th className="py-2.5 px-3 text-right font-bold">Total Received</th>
                             <th className="py-2.5 px-3">Diff</th>
+                            <th className="py-2.5 px-3">Status</th>
                           </>
                         ) : (
                           <>
@@ -1420,6 +1505,11 @@ export const ConsolidatedReportView: React.FC = () => {
                                   <span className="text-emerald-600">✓</span>
                                 )}
                               </td>
+                              <td className="py-2.5 px-3">
+                                <span className="text-[10px] font-bold text-emerald-600">
+                                  {d.aSale ? d.aSale.status : 'No Report'}
+                                </span>
+                              </td>
                             </>
                           ) : isNormalUser ? (
                             <>
@@ -1435,6 +1525,11 @@ export const ConsolidatedReportView: React.FC = () => {
                                 ) : (
                                   <span className="text-emerald-600">✓</span>
                                 )}
+                              </td>
+                              <td className="py-2.5 px-3">
+                                <span className="text-[10px] font-bold text-emerald-600">
+                                  {d.nSale ? d.nSale.status : 'No Report'}
+                                </span>
                               </td>
                             </>
                           ) : (

@@ -66,6 +66,7 @@ interface StockContextType {
     acCharges?: number;
     recordedAmount: number; cashierName: string; helperName: string;
     paymentExplanation?: string; lines: { productId: string; closing: number }[];
+    counter?: CounterLocation;
   }) => Promise<string>;
   adminCreateHistoricalReport: (data: {
     date: string; counter: CounterLocation; recordedAmount: number; reason: string;
@@ -274,7 +275,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const [dailySales, setDailySales] = useState<DailySalesReport[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_daily_sales');
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        // Auto-approve any pending sales reports per user requirement
+        return parsed.map((r: any) => r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r);
+      } catch {
+        // Fallback
+      }
+    }
     const today = getTodayISO();
     // Seed approved report for demonstration
     return [
@@ -536,7 +545,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (Array.isArray(s.purchases)) setPurchases(s.purchases);
           if (Array.isArray(s.requests)) setRequests(s.requests);
           if (Array.isArray(s.transfers)) setTransfers(s.transfers);
-          if (Array.isArray(s.dailySales)) setDailySales(s.dailySales);
+          if (Array.isArray(s.dailySales)) {
+            setDailySales(s.dailySales.map((r: any) => r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r));
+          }
           if (Array.isArray(s.operations)) setOperations(s.operations);
           if (Array.isArray(s.ledger)) setLedger(s.ledger);
           if (Array.isArray(s.auditLog)) setAuditLog(s.auditLog);
@@ -735,7 +746,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Pending godown requests reduce available godown stock
     const pendingGodownQty = requests
       .filter(r => r.status === 'Pending' && r.productId === p.productId)
-      .reduce((sum, r) => sum + r.qty, 0);
+      .reduce((sum, r) => sum + (r.qty || 0), 0);
 
     return {
       productId: p.productId,
@@ -752,17 +763,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   });
 
-  // Pending items count for admin badge
+  // Pending items count for admin badge (Only stock requests from Central Godown require Admin approval)
   const pendingCount =
-    (currentUser?.role === 'ADMIN'
-      ? (purchases.filter(p => p.status === 'Pending').length +
-         requests.filter(r => r.status === 'Pending').length +
-         transfers.filter(t => t.status === 'Pending').length +
-         dailySales.filter(s => s.status === 'Pending').length +
-         operations.filter(o => o.status === 'Pending').length)
-      : (requests.filter(r => r.status === 'Pending' && r.counter === currentUser?.counter).length +
-         transfers.filter(t => t.status === 'Pending' && (t.fromLoc === currentUser?.counter || t.toLoc === currentUser?.counter)).length +
-         dailySales.filter(s => s.status === 'Pending' && s.counter === currentUser?.counter).length));
+    currentUser?.role === 'ADMIN'
+      ? requests.filter(r => r.status === 'Pending').length
+      : requests.filter(r => r.status === 'Pending' && r.counter === currentUser?.counter).length;
 
   // User Auth Actions
   const login = async (username: string, password: string) => {
@@ -813,7 +818,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   // Product management
-  const saveProduct = async (p: Partial<Product> & { name: string; category: string; sizeML: number; casePack: number; sellingPrice: number }) => {
+  const saveProduct = async (p: Partial<Product> & { name: string; category: string; sizeML: number; casePack: number; sellingPrice: number; purchaseCost?: number; reorderThreshold?: number }) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     const pack = bottlesPerCase_({ name: p.name, sizeML: p.sizeML, casePack: p.casePack });
 
@@ -1266,11 +1271,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     acCharges?: number;
     recordedAmount: number; cashierName: string; helperName: string;
     paymentExplanation?: string; lines: { productId: string; closing: number }[];
+    counter?: CounterLocation;
   }) => {
-    if (!currentUser || (currentUser.role !== 'NORMAL' && currentUser.role !== 'AC')) {
-      throw new Error('Only counter operators can submit daily sales.');
+    if (!currentUser) {
+      throw new Error('Authentication required to submit daily sales.');
     }
-    const counter = currentUser.counter || (currentUser.role as CounterLocation);
+    const counter: CounterLocation = (currentUser.role === 'ADMIN' ? (data.counter || 'NORMAL') : (currentUser.counter || currentUser.role)) as CounterLocation;
     const form = getReportFormLines(counter, data.date);
     if (form.blockedMessage) throw new Error(form.blockedMessage);
 
@@ -1323,11 +1329,22 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const reportId = `RPT-${String(dailySales.length + 1).padStart(6, '0')}`;
     reportLines.forEach(l => { l.reportId = reportId; });
 
+    // Apply stock deduction movements immediately since Daily Sales is auto-approved
+    const moves = reportLines.filter(l => l.sold > 0).map(l => ({
+      loc: counter as StockLocation,
+      productId: l.productId,
+      delta: -l.sold
+    }));
+    if (moves.length > 0) {
+      applyMovements(moves, 'SALE', reportId, data.date);
+    }
+
+    const now = getNowTimestamp();
     const newReport: DailySalesReport = {
       reportId,
       date: data.date,
       counter,
-      status: 'Pending',
+      status: 'Approved', // Auto-approved per requirement
       totalSoldQty: totalSold,
       totalSalesValue: Math.round(totalVal * 100) / 100,
       recordedAmount: data.recordedAmount,
@@ -1341,12 +1358,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       paymentExplanation: data.paymentExplanation || '',
       cutoffSeq: (ledger[0]?.seq || 0),
       submittedBy: currentUser.username,
-      submittedAt: getNowTimestamp(),
+      submittedAt: now,
+      reviewedBy: 'Auto-Approved',
+      reviewedAt: now,
+      remark: 'Auto-approved on submission',
       lines: reportLines
     };
 
     setDailySales(prev => [newReport, ...prev]);
-    addAudit('SALES_SUBMITTED', reportId, `${data.date} | ${counter} | sold ${totalSold} btls | ₹${newReport.totalSalesValue}${acCharges > 0 ? ` + ₹${acCharges} AC` : ''}`);
+    addAudit('SALES_SUBMITTED_AND_APPROVED', reportId, `${data.date} | ${counter} | sold ${totalSold} btls | ₹${newReport.totalSalesValue}${acCharges > 0 ? ` + ₹${acCharges} AC` : ''} (Auto-Approved)`);
     return reportId;
   };
 

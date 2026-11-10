@@ -203,7 +203,7 @@ export const DailySalesView: React.FC = () => {
       });
 
       setShowSubmitPreview(false);
-      setStatusMessage({ type: 'ok', text: `Shift report submitted successfully as ${reportId}. Waiting for Admin review.` });
+      setStatusMessage({ type: 'ok', text: `Shift report ${reportId} auto-approved and recorded! Stock decremented and immediately reflected in Consolidated Report.` });
       setClosingInputs({});
       setCashAmount('0');
       setUpiAmount('0');

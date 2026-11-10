@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Wine, Shield, KeyRound, ArrowRight, AlertCircle, Lock } from 'lucide-react';
+import { Shield, KeyRound, ArrowRight, AlertCircle, Lock } from 'lucide-react';
 
 export const LoginView: React.FC = () => {
   const { login } = useStock();
@@ -42,15 +42,22 @@ export const LoginView: React.FC = () => {
       <div className="max-w-md w-full relative z-10 space-y-8">
         {/* Brand Header */}
         <div className="text-center space-y-3">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-800 text-amber-300 shadow-xl shadow-emerald-950/60 border border-emerald-500/30">
-            <Wine className="w-8 h-8" />
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-slate-800 via-[#0e2540] to-slate-900 text-amber-300 shadow-xl shadow-amber-950/40 border border-amber-500/40">
+            <svg className="w-10 h-10" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M18 4L28 9V17C28 23.5 23.8 29.5 18 31C12.2 29.5 8 23.5 8 17V9L18 4Z" stroke="#f0c96a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="url(#crest_fill)" />
+              <path d="M12 21V14L15.5 18.5L18 15L20.5 18.5L24 14V21" stroke="#f0c96a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M15 24H21" stroke="#f0c96a" strokeWidth="1.75" strokeLinecap="round" />
+              <defs>
+                <linearGradient id="crest_fill" x1="18" y1="4" x2="18" y2="31" gradientUnits="userSpaceOnUse">
+                  <stop stopColor="#f0c96a" stopOpacity="0.25" />
+                  <stop offset="1" stopColor="#b45309" stopOpacity="0.05" />
+                </linearGradient>
+              </defs>
+            </svg>
           </div>
           <div>
             <div className="flex items-center justify-center gap-2">
               <span className="text-2xl font-black tracking-tight text-white">MM Residency</span>
-              <span className="text-xs bg-amber-400/20 text-amber-300 font-mono font-bold px-2 py-0.5 rounded-full border border-amber-400/30">
-                PRO
-              </span>
             </div>
             <p className="text-stone-400 text-xs mt-1 uppercase tracking-widest font-semibold">
               Liquor Stock, Multi-Counter & Lodging System

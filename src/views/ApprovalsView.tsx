@@ -1,25 +1,20 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { CheckCircle2, XCircle, AlertCircle, Eye, Truck, ArrowRightLeft, Receipt, Check, X } from 'lucide-react';
+import { CheckCircle2, ArrowRightLeft, Truck, Check, X, ShieldCheck } from 'lucide-react';
 import { RequestGroup } from '../types';
-import { stockQtyLabel } from '../data/initialData';
 
 export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onNavigateToSales }) => {
   const {
     currentUser,
-    dailySales,
-    purchases,
     requests,
-    transfers,
-    operations,
     stockItems,
-    reviewPurchaseBill,
     reviewRequestGroup,
-    reviewDailySales
+    purchases,
+    reviewPurchaseBill
   } = useStock();
 
   const [remarkModal, setRemarkModal] = useState<{
-    type: 'PURCHASE' | 'REQUEST_GROUP' | 'SALE';
+    type: 'REQUEST_GROUP' | 'PURCHASE';
     id: string;
     decision: 'APPROVE' | 'REJECT';
     skipShort?: boolean;
@@ -29,7 +24,8 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
   const [remarkText, setRemarkText] = useState('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  const formatCurrency = (val: number) => '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formatCurrency = (val: number) =>
+    '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   if (currentUser?.role !== 'ADMIN') {
     return (
@@ -39,13 +35,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
     );
   }
 
-  // 1. Pending Sales
-  const pendingSales = dailySales.filter(s => s.status === 'Pending');
-
-  // 2. Pending Purchases
-  const pendingPurchases = purchases.filter(p => p.status === 'Pending');
-
-  // 3. Pending Requests grouped by counter, date, and reason
+  // 1. Pending Stock Requests from Godown (THE ONLY ITEM REQUIRING ADMIN APPROVAL)
   const pendingRequests = requests.filter(r => r.status === 'Pending');
   const requestGroupsMap = new Map<string, RequestGroup>();
 
@@ -79,26 +69,26 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
 
   const requestGroups = Array.from(requestGroupsMap.values());
 
-  // 4. Pending Transfers
-  const pendingTransfers = transfers.filter(t => t.status === 'Pending');
+  // 2. Pending Purchases (Godown Stock Intake)
+  const pendingPurchases = purchases.filter(p => p.status === 'Pending');
 
   const executeDecision = async () => {
     if (!remarkModal) return;
     try {
       setStatusMsg(null);
-      if (remarkModal.type === 'PURCHASE') {
-        await reviewPurchaseBill(remarkModal.id, remarkModal.decision, remarkText);
-        setStatusMsg({ type: 'ok', text: `Purchase batch ${remarkModal.id} ${remarkModal.decision === 'APPROVE' ? 'approved - stock added to Godown' : 'rejected'}.` });
-      } else if (remarkModal.type === 'REQUEST_GROUP') {
+      if (remarkModal.type === 'REQUEST_GROUP') {
         const ids = remarkModal.id.split(',');
         const res = await reviewRequestGroup(ids, remarkModal.decision, remarkText, remarkModal.skipShort);
         setStatusMsg({
           type: 'ok',
           text: `Processed ${ids.length} requests: ${res.approved} approved into counter stock, ${res.rejected} rejected.`
         });
-      } else if (remarkModal.type === 'SALE') {
-        await reviewDailySales(remarkModal.id, remarkModal.decision, remarkText);
-        setStatusMsg({ type: 'ok', text: `Sales report ${remarkModal.id} ${remarkModal.decision === 'APPROVE' ? 'approved' : 'rejected'}.` });
+      } else if (remarkModal.type === 'PURCHASE') {
+        await reviewPurchaseBill(remarkModal.id, remarkModal.decision, remarkText);
+        setStatusMsg({
+          type: 'ok',
+          text: `Purchase batch ${remarkModal.id} ${remarkModal.decision === 'APPROVE' ? 'approved' : 'rejected'}.`
+        });
       }
       setRemarkModal(null);
       setRemarkText('');
@@ -114,10 +104,10 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
           Review & Compliance
         </span>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          Approvals Queue
+          Admin Approvals Queue
         </h1>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Authorize counter sales reports, central godown purchases, stock indents, and transfers
+          Only stock requests from Central Godown require Admin approval. Daily Sales, Transfers, and Operations are auto-approved.
         </p>
       </div>
 
@@ -133,77 +123,134 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
         </div>
       )}
 
-      {/* 1. Daily Sales Approvals */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+      {/* Policy Banner */}
+      <div className="rounded-2xl border border-emerald-300/80 bg-gradient-to-r from-emerald-50 via-white to-emerald-50 p-4 text-xs text-emerald-950 dark:border-emerald-800/60 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800 dark:text-emerald-300 flex items-center justify-between gap-3 shadow-xs">
+        <div className="flex items-center gap-2.5">
+          <ShieldCheck className="h-5 w-5 text-emerald-600 shrink-0" />
+          <div>
+            <strong className="block text-sm font-bold text-slate-900 dark:text-white">
+              Daily Sales Auto-Approval Active
+            </strong>
+            <span className="text-slate-600 dark:text-slate-400">
+              Counter daily sales and physical closing entries are automatically approved on submission and immediately reflect in financial reports.
+            </span>
+          </div>
+        </div>
+        <button
+          onClick={onNavigateToSales}
+          className="rounded-xl border border-emerald-300 bg-white px-3 py-1.5 text-xs font-bold text-emerald-900 hover:bg-emerald-50 dark:border-emerald-700 dark:bg-slate-800 dark:text-emerald-300 cursor-pointer whitespace-nowrap"
+        >
+          View Sales →
+        </button>
+      </div>
+
+      {/* 1. PRIMARY: Counter Stock Requests Approvals (From Godown) */}
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
         <div className="flex items-center justify-between border-b pb-3 dark:border-slate-800">
           <div className="flex items-center gap-2">
-            <Receipt className="h-4 w-4 text-emerald-600" />
+            <ArrowRightLeft className="h-4 w-4 text-purple-600" />
             <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-              Daily Counter Sales Reports ({pendingSales.length})
+              Central Godown Stock Requests ({requestGroups.length})
             </h2>
           </div>
-          <button
-            onClick={onNavigateToSales}
-            className="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400"
-          >
-            Open Sales Management →
-          </button>
+          <span className="text-xs text-slate-500">
+            Requires Admin verification to transfer stock from Central Godown into Counter stock
+          </span>
         </div>
 
-        {pendingSales.length > 0 ? (
-          <div className="divide-y divide-slate-100 dark:divide-slate-800">
-            {pendingSales.map(s => (
-              <div key={s.reportId} className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs">
-                <div>
-                  <div className="font-bold text-slate-900 dark:text-white">
-                    {s.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} · {s.date} ({s.reportId})
-                  </div>
-                  <div className="text-slate-500 mt-0.5">
-                    Sold {s.totalSoldQty} bottles · Calculated Value: <strong>{formatCurrency(s.totalSalesValue)}</strong> · Received: <strong>{formatCurrency(s.recordedAmount)}</strong>
-                    {s.paymentDifference !== 0 && (
-                      <span className="text-red-600 ml-2 font-bold">
-                        (Diff: {formatCurrency(s.paymentDifference)})
-                      </span>
-                    )}
-                  </div>
-                  <small className="text-[10px] text-slate-400">
-                    By {s.submittedBy} at {s.submittedAt} · Cashier: {s.cashierName}
-                  </small>
-                </div>
+        {requestGroups.length > 0 ? (
+          <div className="divide-y divide-slate-100 dark:divide-slate-800 space-y-3">
+            {requestGroups.map(g => {
+              const allIds = g.items.map(i => i.requestId).join(',');
+              const availableCount = g.items.length - g.shortCount;
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      setRemarkModal({
-                        type: 'SALE',
-                        id: s.reportId,
-                        decision: 'REJECT',
-                        title: `Reject Daily Sales Report (${s.reportId})`
-                      });
-                    }}
-                    className="rounded-lg bg-red-100 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-200 dark:bg-red-950 dark:text-red-300"
-                  >
-                    Reject
-                  </button>
-                  <button
-                    onClick={() => {
-                      setRemarkModal({
-                        type: 'SALE',
-                        id: s.reportId,
-                        decision: 'APPROVE',
-                        title: `Approve Daily Sales Report (${s.reportId})`
-                      });
-                    }}
-                    className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
-                  >
-                    Approve
-                  </button>
+              return (
+                <div key={g.groupKey} className="py-3 space-y-3 text-xs">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-slate-900 dark:text-white">
+                        {g.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} · {g.items.length} item(s) · {g.totalBottles} bottles
+                      </div>
+                      <div className="text-slate-500">
+                        Date: {g.date} · Reason: <strong>{g.reason}</strong> · By {g.by}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setRemarkModal({
+                            type: 'REQUEST_GROUP',
+                            id: allIds,
+                            decision: 'REJECT',
+                            title: `Reject Request Batch (${g.counter})`
+                          });
+                        }}
+                        className="rounded-lg bg-red-100 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-200 dark:bg-red-950 dark:text-red-300 cursor-pointer"
+                      >
+                        Reject All
+                      </button>
+
+                      {g.shortCount > 0 ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setRemarkModal({
+                                type: 'REQUEST_GROUP',
+                                id: allIds,
+                                decision: 'APPROVE',
+                                skipShort: true,
+                                title: `Approve Available Items Only (${availableCount} items)`
+                              });
+                            }}
+                            className="rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-amber-700 cursor-pointer"
+                          >
+                            Approve Available ({availableCount})
+                          </button>
+                          <button
+                            disabled
+                            className="rounded-lg bg-slate-200 px-3 py-1.5 text-xs font-bold text-slate-400 cursor-not-allowed"
+                            title="Godown stock is short for some items"
+                          >
+                            Approve All (Short)
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setRemarkModal({
+                              type: 'REQUEST_GROUP',
+                              id: allIds,
+                              decision: 'APPROVE',
+                              title: `Approve Request Batch (${g.counter})`
+                            });
+                          }}
+                          className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
+                        >
+                          Approve All ({g.totalBottles} btls)
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-2 overflow-x-auto dark:border-slate-800 dark:bg-slate-800/40">
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                      {g.items.map(i => (
+                        <span key={i.requestId} className={i.short ? 'text-red-600 font-bold' : 'text-slate-700 dark:text-slate-300'}>
+                          {i.productName}: <strong>{i.qty} btls</strong>
+                          {i.short && ` (SHORT: Godown has ${i.godownQty})`}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
-          <p className="text-xs text-slate-400 py-3 text-center">No daily sales reports awaiting approval.</p>
+          <p className="text-xs text-slate-400 py-3 text-center">
+            No pending stock requests from Godown. All counters are adequately stocked.
+          </p>
         )}
       </div>
 
@@ -242,7 +289,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                           title: `Reject Purchase Batch (${p.batchId})`
                         });
                       }}
-                      className="rounded-lg bg-red-100 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-200 dark:bg-red-950 dark:text-red-300"
+                      className="rounded-lg bg-red-100 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-200 dark:bg-red-950 dark:text-red-300 cursor-pointer"
                     >
                       Reject All
                     </button>
@@ -255,7 +302,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                           title: `Approve Purchase Batch (${p.batchId})`
                         });
                       }}
-                      className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
+                      className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
                     >
                       Approve & Add Stock
                     </button>
@@ -279,133 +326,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
         )}
       </div>
 
-      {/* 3. Counter Stock Requests Approvals */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
-        <div className="flex items-center justify-between border-b pb-3 dark:border-slate-800">
-          <div className="flex items-center gap-2">
-            <ArrowRightLeft className="h-4 w-4 text-purple-600" />
-            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-              Counter Stock Indent Batches ({requestGroups.length})
-            </h2>
-          </div>
-        </div>
-
-        {requestGroups.length > 0 ? (
-          <div className="divide-y divide-slate-100 dark:divide-slate-800 space-y-3">
-            {requestGroups.map(g => {
-              const allIds = g.items.map(i => i.requestId).join(',');
-              const availableCount = g.items.length - g.shortCount;
-
-              return (
-                <div key={g.groupKey} className="py-3 space-y-3 text-xs">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div>
-                      <div className="font-bold text-slate-900 dark:text-white">
-                        {g.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} · {g.items.length} item(s) · {g.totalBottles} bottles
-                      </div>
-                      <div className="text-slate-500">
-                        Date: {g.date} · Reason: <strong>{g.reason}</strong> · By {g.by}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          setRemarkModal({
-                            type: 'REQUEST_GROUP',
-                            id: allIds,
-                            decision: 'REJECT',
-                            title: `Reject Request Batch (${g.counter})`
-                          });
-                        }}
-                        className="rounded-lg bg-red-100 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-200 dark:bg-red-950 dark:text-red-300"
-                      >
-                        Reject All
-                      </button>
-
-                      {g.shortCount === 0 ? (
-                        <button
-                          onClick={() => {
-                            setRemarkModal({
-                              type: 'REQUEST_GROUP',
-                              id: allIds,
-                              decision: 'APPROVE',
-                              skipShort: false,
-                              title: `Approve All ${g.items.length} Items for ${g.counter}`
-                            });
-                          }}
-                          className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
-                        >
-                          Approve All ({g.items.length})
-                        </button>
-                      ) : (
-                        availableCount > 0 && (
-                          <button
-                            onClick={() => {
-                              setRemarkModal({
-                                type: 'REQUEST_GROUP',
-                                id: allIds,
-                                decision: 'APPROVE',
-                                skipShort: true,
-                                title: `Approve Available (${availableCount} of ${g.items.length}) for ${g.counter}`
-                              });
-                            }}
-                            className="rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-amber-700"
-                          >
-                            Approve Available ({availableCount})
-                          </button>
-                        )
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Items in group */}
-                  <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 dark:bg-slate-800/60 font-bold uppercase text-[10px] text-slate-500">
-                        <tr>
-                          <th className="p-2">Product Name</th>
-                          <th className="p-2">Requested</th>
-                          <th className="p-2">Godown Stock</th>
-                          <th className="p-2">Stock Assessment</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                        {g.items.map(item => (
-                          <tr key={item.requestId}>
-                            <td className="p-2 font-semibold text-slate-900 dark:text-white">{item.productName}</td>
-                            <td className="p-2 font-mono font-bold">
-                              {item.enteredQty} {item.unit.toLowerCase()} ({item.qty} btls)
-                            </td>
-                            <td className="p-2 font-mono">
-                              {stockQtyLabel(item.godownQty || 0, item.casePack)}
-                            </td>
-                            <td className="p-2">
-                              {item.short ? (
-                                <span className="font-bold text-red-600">
-                                  Not enough stock (Godown has {item.godownQty})
-                                </span>
-                              ) : (
-                                <span className="font-bold text-emerald-600">
-                                  ✓ Available
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="text-xs text-slate-400 py-3 text-center">No counter stock indents awaiting approval.</p>
-        )}
-      </div>
-
-      {/* DECISION / REMARK MODAL */}
+      {/* Decision / Remark Modal */}
       {remarkModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 space-y-4">
@@ -414,33 +335,32 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
             </h3>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                {remarkModal.decision === 'APPROVE' ? 'Remark (Optional)' : 'Reason for Rejection *'}
+              <label className="block text-xs font-semibold text-slate-500 mb-1">
+                Remark / Audit Note (Optional)
               </label>
               <textarea
                 rows={3}
-                placeholder={remarkModal.decision === 'APPROVE' ? 'e.g. Verified by manager' : 'State reason for rejecting...'}
+                placeholder="e.g. Verified physically against supplier challan or approved for evening peak"
                 value={remarkText}
                 onChange={e => setRemarkText(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 p-2.5 text-xs outline-none focus:border-amber-500 dark:bg-slate-800 dark:text-white dark:border-slate-700"
+                className="w-full rounded-lg border border-slate-300 p-2 text-xs outline-none focus:border-amber-500 dark:bg-slate-800 dark:text-white dark:border-slate-700"
               />
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => setRemarkModal(null)}
-                className="rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700"
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700 cursor-pointer"
               >
                 Cancel
               </button>
               <button
-                disabled={remarkModal.decision === 'REJECT' && !remarkText.trim()}
                 onClick={executeDecision}
-                className={`rounded-lg px-4 py-1.5 text-xs font-bold text-white disabled:opacity-40 ${
+                className={`rounded-lg px-4 py-1.5 text-xs font-bold text-white cursor-pointer ${
                   remarkModal.decision === 'APPROVE' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'
                 }`}
               >
-                Confirm {remarkModal.decision === 'APPROVE' ? 'Approval' : 'Rejection'}
+                Confirm {remarkModal.decision}
               </button>
             </div>
           </div>
