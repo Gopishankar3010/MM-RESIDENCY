@@ -1,20 +1,35 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { Search, Printer, X, Filter } from 'lucide-react';
+import { CATEGORY_ORDER, sortProductsCategoryWise } from '../data/initialData';
 
 export const StockView: React.FC = () => {
   const { stockItems } = useStock();
   const [search, setSearch] = useState('');
   const [selectedCat, setSelectedCat] = useState('');
 
-  const categories = Array.from(new Set(stockItems.map(i => i.category || 'Other'))).sort();
-
-  const filtered = stockItems.filter(item => {
-    const matchesCat = !selectedCat || item.category === selectedCat;
-    const q = search.trim().toLowerCase();
-    const matchesSearch = !q || (item.name + ' ' + item.category + ' ' + item.sizeML).toLowerCase().includes(q);
-    return matchesCat && matchesSearch;
+  const categories = Array.from(new Set(stockItems.map(i => i.category || 'Others'))).sort((a, b) => {
+    const ia = CATEGORY_ORDER.indexOf(a);
+    const ib = CATEGORY_ORDER.indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    return a.localeCompare(b);
   });
+
+  const filtered = sortProductsCategoryWise(
+    stockItems.filter(item => {
+      const matchesCat = !selectedCat || item.category === selectedCat;
+      const q = search.trim().toLowerCase();
+      const matchesSearch = !q || (item.name + ' ' + item.category + ' ' + item.sizeML).toLowerCase().includes(q);
+      return matchesCat && matchesSearch;
+    })
+  );
+
+  const groupedStock = categories
+    .map(cat => ({
+      category: cat,
+      items: filtered.filter(i => (i.category || 'Others') === cat)
+    }))
+    .filter(g => g.items.length > 0);
 
   const totals = filtered.reduce(
     (acc, i) => {
@@ -156,44 +171,64 @@ export const StockView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
-              {filtered.map((item, idx) => {
-                const isOutOfStock = item.godown + item.normal + item.ac === 0;
+              {(() => {
+                let runningIdx = 0;
+                return groupedStock.map(group => (
+                  <React.Fragment key={group.category}>
+                    <tr className="bg-slate-100/90 dark:bg-slate-800/80 border-y border-slate-200 dark:border-slate-700">
+                      <td colSpan={8} className="py-2 px-4">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-800 dark:text-amber-400">
+                            {group.category}
+                          </span>
+                          <span className="text-[11px] font-mono font-semibold text-slate-500 dark:text-slate-400">
+                            {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                    {group.items.map(item => {
+                      runningIdx += 1;
+                      const isOutOfStock = item.godown + item.normal + item.ac === 0;
 
-                return (
-                  <tr
-                    key={item.productId}
-                    className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${
-                      isOutOfStock ? 'opacity-60 bg-red-50/30 dark:bg-red-950/10' : ''
-                    }`}
-                  >
-                    <td className="py-3 px-4 font-mono text-slate-400 text-[11px]">{idx + 1}</td>
-                    <td className="py-3 px-4">
-                      <div className="font-bold text-slate-900 dark:text-white">{item.name}</div>
-                      <span className="text-[11px] text-slate-500 font-mono">{item.sizeML} ml</span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                        {item.category}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-600 dark:text-slate-400">
-                      {item.casePack}/case
-                    </td>
-                    <td className="py-3 px-4 bg-blue-50/30 dark:bg-blue-950/10">
-                      {formatQty(item.godown, item.casePack)}
-                    </td>
-                    <td className="py-3 px-4 bg-emerald-50/30 dark:bg-emerald-950/10">
-                      {formatQty(item.normal, item.casePack)}
-                    </td>
-                    <td className="py-3 px-4 bg-purple-50/30 dark:bg-purple-950/10">
-                      {formatQty(item.ac, item.casePack)}
-                    </td>
-                    <td className="py-3 px-4 font-mono font-bold text-slate-900 text-right dark:text-white">
-                      {formatCurrency(item.price)}
-                    </td>
-                  </tr>
-                );
-              })}
+                      return (
+                        <tr
+                          key={item.productId}
+                          className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${
+                            isOutOfStock ? 'opacity-60 bg-red-50/30 dark:bg-red-950/10' : ''
+                          }`}
+                        >
+                          <td className="py-3 px-4 font-mono text-slate-400 text-[11px]">{runningIdx}</td>
+                          <td className="py-3 px-4">
+                            <div className="font-bold text-slate-900 dark:text-white">{item.name}</div>
+                            <span className="text-[11px] text-slate-500 font-mono">{item.sizeML} ml</span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                              {item.category}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-mono text-slate-600 dark:text-slate-400">
+                            {item.casePack}/case
+                          </td>
+                          <td className="py-3 px-4 bg-blue-50/30 dark:bg-blue-950/10">
+                            {formatQty(item.godown, item.casePack)}
+                          </td>
+                          <td className="py-3 px-4 bg-emerald-50/30 dark:bg-emerald-950/10">
+                            {formatQty(item.normal, item.casePack)}
+                          </td>
+                          <td className="py-3 px-4 bg-purple-50/30 dark:bg-purple-950/10">
+                            {formatQty(item.ac, item.casePack)}
+                          </td>
+                          <td className="py-3 px-4 font-mono font-bold text-slate-900 text-right dark:text-white">
+                            {formatCurrency(item.price)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </React.Fragment>
+                ));
+              })()}
             </tbody>
             <tfoot>
               <tr className="border-t-2 border-slate-300 bg-slate-100 dark:border-slate-700 dark:bg-slate-800 font-bold text-slate-900 dark:text-white">

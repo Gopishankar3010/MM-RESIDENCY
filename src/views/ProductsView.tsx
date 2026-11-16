@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { Package, Search, Plus, Edit2, Check, X, Filter, Printer } from 'lucide-react';
 import { Product } from '../types';
-import { bottlesPerCase_ } from '../data/initialData';
+import { bottlesPerCase_, CATEGORY_ORDER, sortProductsCategoryWise } from '../data/initialData';
 
 export const ProductsView: React.FC = () => {
   const { currentUser, products, saveProduct } = useStock();
@@ -16,20 +16,34 @@ export const ProductsView: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  const categories = Array.from(new Set(products.map(p => p.category || 'Other'))).sort();
-
-  const filtered = products.filter(p => {
-    const matchesCat = !categoryFilter || p.category === categoryFilter;
-    const matchesStatus =
-      statusFilter === 'all'
-        ? true
-        : statusFilter === 'active'
-        ? p.active
-        : !p.active;
-    const q = search.trim().toLowerCase();
-    const matchesSearch = !q || (p.name + ' ' + p.category + ' ' + p.sizeML).toLowerCase().includes(q);
-    return matchesCat && matchesStatus && matchesSearch;
+  const categories = Array.from(new Set(products.map(p => p.category || 'Others'))).sort((a, b) => {
+    const ia = CATEGORY_ORDER.indexOf(a);
+    const ib = CATEGORY_ORDER.indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    return a.localeCompare(b);
   });
+
+  const filtered = sortProductsCategoryWise(
+    products.filter(p => {
+      const matchesCat = !categoryFilter || p.category === categoryFilter;
+      const matchesStatus =
+        statusFilter === 'all'
+          ? true
+          : statusFilter === 'active'
+          ? p.active
+          : !p.active;
+      const q = search.trim().toLowerCase();
+      const matchesSearch = !q || (p.name + ' ' + p.category + ' ' + p.sizeML).toLowerCase().includes(q);
+      return matchesCat && matchesStatus && matchesSearch;
+    })
+  );
+
+  const groupedByCategory = categories
+    .map(cat => ({
+      category: cat,
+      items: filtered.filter(p => (p.category || 'Others') === cat)
+    }))
+    .filter(g => g.items.length > 0);
 
   const formatCurrency = (val: number) => '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -154,6 +168,36 @@ export const ProductsView: React.FC = () => {
         </div>
       </div>
 
+      {/* Quick Category Jump Bar */}
+      <div className="no-print flex flex-wrap items-center gap-1.5">
+        <button
+          onClick={() => setCategoryFilter('')}
+          className={`rounded-lg px-2.5 py-1.5 text-xs font-bold border transition-colors cursor-pointer ${
+            !categoryFilter
+              ? 'bg-slate-900 text-white border-slate-900 dark:bg-amber-500 dark:text-slate-950 dark:border-amber-500'
+              : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-800'
+          }`}
+        >
+          All ({products.length})
+        </button>
+        {categories.map(c => {
+          const count = products.filter(p => (p.category || 'Others') === c).length;
+          return (
+            <button
+              key={c}
+              onClick={() => setCategoryFilter(categoryFilter === c ? '' : c)}
+              className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold border transition-colors cursor-pointer ${
+                categoryFilter === c
+                  ? 'bg-slate-900 text-white border-slate-900 dark:bg-amber-500 dark:text-slate-950 dark:border-amber-500'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-800'
+              }`}
+            >
+              {c} ({count})
+            </button>
+          );
+        })}
+      </div>
+
       {/* Products Table */}
       <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
         <div className="print-table-wrap overflow-x-auto">
@@ -171,48 +215,70 @@ export const ProductsView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {filtered.map((p, idx) => (
-                <tr key={p.productId} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                  <td className="py-3 px-4 font-mono text-slate-400 text-[11px]">{idx + 1}</td>
-                  <td className="py-3 px-4">
-                    <div className="font-bold text-slate-900 dark:text-white">{p.name}</div>
-                    <span className="text-[10px] font-mono text-slate-400">{p.productId}</span>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                      {p.category}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 font-mono text-slate-700 dark:text-slate-300">
-                    {p.sizeML} ml
-                  </td>
-                  <td className="py-3 px-4 font-mono font-bold text-slate-700 dark:text-slate-300">
-                    {bottlesPerCase_(p)} / case
-                  </td>
-                  <td className="py-3 px-4 font-mono font-black text-right text-emerald-600 dark:text-emerald-400">
-                    {formatCurrency(p.sellingPrice)}
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                      p.active
-                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                        : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
-                    }`}>
-                      {p.active ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  {isAdmin && (
-                    <td className="no-print py-3 px-4 text-right">
-                      <button
-                        onClick={() => setEditingProduct({ ...p })}
-                        className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                      >
-                        Edit
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              ))}
+              {(() => {
+                let runningIdx = 0;
+                return groupedByCategory.map(group => (
+                  <React.Fragment key={group.category}>
+                    <tr className="bg-slate-100/90 dark:bg-slate-800/80 border-y border-slate-200 dark:border-slate-700">
+                      <td colSpan={isAdmin ? 8 : 7} className="py-2 px-4">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-800 dark:text-amber-400">
+                            {group.category}
+                          </span>
+                          <span className="text-[11px] font-mono font-semibold text-slate-500 dark:text-slate-400">
+                            {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                    {group.items.map(p => {
+                      runningIdx += 1;
+                      return (
+                        <tr key={p.productId} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="py-3 px-4 font-mono text-slate-400 text-[11px]">{runningIdx}</td>
+                          <td className="py-3 px-4">
+                            <div className="font-bold text-slate-900 dark:text-white">{p.name}</div>
+                            <span className="text-[10px] font-mono text-slate-400">{p.productId}</span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                              {p.category}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-mono text-slate-700 dark:text-slate-300">
+                            {p.sizeML} ml
+                          </td>
+                          <td className="py-3 px-4 font-mono font-bold text-slate-700 dark:text-slate-300">
+                            {bottlesPerCase_(p)} / case
+                          </td>
+                          <td className="py-3 px-4 font-mono font-black text-right text-emerald-600 dark:text-emerald-400">
+                            {formatCurrency(p.sellingPrice)}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              p.active
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                            }`}>
+                              {p.active ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          {isAdmin && (
+                            <td className="no-print py-3 px-4 text-right">
+                              <button
+                                onClick={() => setEditingProduct({ ...p })}
+                                className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                              >
+                                Edit
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </React.Fragment>
+                ));
+              })()}
             </tbody>
           </table>
         </div>

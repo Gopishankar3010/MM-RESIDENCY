@@ -18,6 +18,7 @@ import {
   Calendar
 } from 'lucide-react';
 import { DailySalesReport, CounterLocation } from '../types';
+import { CATEGORY_ORDER, sortProductsCategoryWise } from '../data/initialData';
 
 export const DailySalesView: React.FC = () => {
   const {
@@ -100,8 +101,6 @@ export const DailySalesView: React.FC = () => {
   const formState = getReportFormLines(counter, reportDate);
   const formLines = formState.lines;
 
-  const categories = Array.from(new Set(formLines.map(l => l.category || 'Other'))).sort();
-
   // Compute calculated sales in counter form
   let formCalculatedSoldBottles = 0;
   let formCalculatedTotalValue = 0;
@@ -131,6 +130,16 @@ export const DailySalesView: React.FC = () => {
     };
   });
 
+  // Show only products with available stock (> 0) on the sales sheet
+  const availableLineCalculations = lineCalculations.filter(l => l.available > 0);
+
+  const categories = Array.from(new Set(availableLineCalculations.map(l => l.category || 'Others'))).sort((a, b) => {
+    const ia = CATEGORY_ORDER.indexOf(a);
+    const ib = CATEGORY_ORDER.indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    return a.localeCompare(b);
+  });
+
   const parsedCash = Number(cashAmount) || 0;
   const parsedUpi = Number(upiAmount) || 0;
   const parsedAcCharges = counter === 'AC' ? (Number(acChargesAmount) || 0) : 0;
@@ -138,13 +147,22 @@ export const DailySalesView: React.FC = () => {
   const expectedTotal = formCalculatedTotalValue + parsedAcCharges;
   const paymentDiff = Math.round((totalPaymentReceived - expectedTotal) * 100) / 100;
 
-  const filteredLines = lineCalculations.filter(l => {
-    const matchesCat = !categoryFilter || l.category === categoryFilter;
-    const q = searchFilter.trim().toLowerCase();
-    const matchesSearch = !q || (l.name + ' ' + l.category).toLowerCase().includes(q);
-    const matchesOnlySelected = !onlySelected || l.sold > 0;
-    return matchesCat && matchesSearch && matchesOnlySelected;
-  });
+  const filteredLines = sortProductsCategoryWise(
+    availableLineCalculations.filter(l => {
+      const matchesCat = !categoryFilter || l.category === categoryFilter;
+      const q = searchFilter.trim().toLowerCase();
+      const matchesSearch = !q || (l.name + ' ' + l.category + ' ' + l.sizeML).toLowerCase().includes(q);
+      const matchesOnlySelected = !onlySelected || l.sold > 0;
+      return matchesCat && matchesSearch && matchesOnlySelected;
+    })
+  );
+
+  const groupedFilteredLines = categories
+    .map(cat => ({
+      category: cat,
+      items: filteredLines.filter(l => (l.category || 'Others') === cat)
+    }))
+    .filter(g => g.items.length > 0);
 
   const formatCurrency = (val: number) => '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -497,7 +515,7 @@ export const DailySalesView: React.FC = () => {
                 </div>
 
                 <div className="text-xs text-slate-500">
-                  Total Items: {filteredLines.length} · Leave blank for 0 sold
+                  Available Items: {filteredLines.length} of {availableLineCalculations.length} in stock · Leave blank for 0 sold
                 </div>
               </div>
 
@@ -521,54 +539,80 @@ export const DailySalesView: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {filteredLines.map(l => (
-                        <tr
-                          key={l.productId}
-                          className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${
-                            l.sold > 0 ? 'bg-amber-50/40 dark:bg-amber-950/20' : ''
-                          }`}
-                        >
-                          <td className="py-2.5 px-3">
-                            <div className="font-bold text-slate-900 dark:text-white">{l.name}</div>
-                            <span className="text-[10px] text-slate-500">{l.sizeML}ml · {l.casePack}/case</span>
-                          </td>
-                          <td className="py-2.5 px-3 font-mono">{l.opening}</td>
-                          <td className="py-2.5 px-3 font-mono text-emerald-600 font-semibold">{l.godownIn || '—'}</td>
-                          <td className="py-2.5 px-3 font-mono text-emerald-600">{l.transferIn || '—'}</td>
-                          <td className="py-2.5 px-3 font-mono text-red-600">{l.transferOut || '—'}</td>
-                          <td className="py-2.5 px-3 font-mono text-red-600">{l.damageOut || '—'}</td>
-                          <td className="py-2.5 px-3 font-mono font-bold bg-slate-100/50 dark:bg-slate-800/40">
-                            {l.available}
-                          </td>
-                          <td className="py-2.5 px-3 bg-amber-500/5">
-                            <input
-                              type="number"
-                              min="0"
-                              max={l.available}
-                              value={l.enteredClosing}
-                              placeholder={String(l.available)}
-                              onChange={e => {
-                                const val = e.target.value;
-                                setClosingInputs(prev => ({ ...prev, [l.productId]: val }));
-                              }}
-                              className={`w-24 rounded border px-2 py-1 font-mono text-xs font-bold outline-none ${
-                                l.isInvalid
-                                  ? 'border-red-500 bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-200'
-                                  : 'border-slate-300 bg-white text-slate-900 focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white'
-                              }`}
-                            />
-                          </td>
-                          <td className="py-2.5 px-3 text-center font-mono font-black text-blue-700 dark:text-blue-400 bg-blue-50/30 dark:bg-blue-950/10">
-                            {l.sold}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-600 dark:text-slate-400">
-                            {formatCurrency(l.price)}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
-                            {l.sold > 0 ? formatCurrency(l.value) : '—'}
+                      {groupedFilteredLines.length === 0 ? (
+                        <tr>
+                          <td colSpan={11} className="py-10 px-4 text-center text-xs text-slate-500 dark:text-slate-400">
+                            {availableLineCalculations.length === 0
+                              ? 'No products with available stock (> 0) at this counter for the selected shift date.'
+                              : 'No available products match your current search/filter.'}
                           </td>
                         </tr>
-                      ))}
+                      ) : (
+                        groupedFilteredLines.map(group => (
+                          <React.Fragment key={group.category}>
+                            <tr className="bg-slate-100/90 dark:bg-slate-800/80 border-y border-slate-200 dark:border-slate-700">
+                              <td colSpan={11} className="py-1.5 px-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-800 dark:text-amber-400">
+                                    {group.category}
+                                  </span>
+                                  <span className="text-[11px] font-mono font-semibold text-slate-500 dark:text-slate-400">
+                                    {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
+                                  </span>
+                                </div>
+                              </td>
+                            </tr>
+                            {group.items.map(l => (
+                              <tr
+                                key={l.productId}
+                                className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${
+                                  l.sold > 0 ? 'bg-amber-50/40 dark:bg-amber-950/20' : ''
+                                }`}
+                              >
+                                <td className="py-2.5 px-3">
+                                  <div className="font-bold text-slate-900 dark:text-white">{l.name}</div>
+                                  <span className="text-[10px] text-slate-500">{l.sizeML}ml · {l.casePack}/case</span>
+                                </td>
+                                <td className="py-2.5 px-3 font-mono">{l.opening}</td>
+                                <td className="py-2.5 px-3 font-mono text-emerald-600 font-semibold">{l.godownIn || '—'}</td>
+                                <td className="py-2.5 px-3 font-mono text-emerald-600">{l.transferIn || '—'}</td>
+                                <td className="py-2.5 px-3 font-mono text-red-600">{l.transferOut || '—'}</td>
+                                <td className="py-2.5 px-3 font-mono text-red-600">{l.damageOut || '—'}</td>
+                                <td className="py-2.5 px-3 font-mono font-bold bg-slate-100/50 dark:bg-slate-800/40">
+                                  {l.available}
+                                </td>
+                                <td className="py-2.5 px-3 bg-amber-500/5">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max={l.available}
+                                    value={l.enteredClosing}
+                                    placeholder={String(l.available)}
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      setClosingInputs(prev => ({ ...prev, [l.productId]: val }));
+                                    }}
+                                    className={`w-24 rounded border px-2 py-1 font-mono text-xs font-bold outline-none ${
+                                      l.isInvalid
+                                        ? 'border-red-500 bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-200'
+                                        : 'border-slate-300 bg-white text-slate-900 focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white'
+                                    }`}
+                                  />
+                                </td>
+                                <td className="py-2.5 px-3 text-center font-mono font-black text-blue-700 dark:text-blue-400 bg-blue-50/30 dark:bg-blue-950/10">
+                                  {l.sold}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono text-slate-600 dark:text-slate-400">
+                                  {formatCurrency(l.price)}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
+                                  {l.sold > 0 ? formatCurrency(l.value) : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </React.Fragment>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>

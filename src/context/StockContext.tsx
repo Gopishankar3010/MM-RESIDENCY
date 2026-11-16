@@ -6,7 +6,7 @@ import {
 } from '../types';
 import {
   INITIAL_USERS, INITIAL_PRODUCTS, INITIAL_STOCK, INITIAL_SUPPLIERS,
-  INITIAL_DROPDOWN_OPTIONS, bottlesPerCase_
+  INITIAL_DROPDOWN_OPTIONS, bottlesPerCase_, sortProductsCategoryWise
 } from '../data/initialData';
 
 interface StockContextType {
@@ -99,7 +99,7 @@ interface StockContextType {
 }
 
 const STORAGE_KEY = 'mm_residency_stock_v2_store';
-const CATALOG_VERSION = '2026-10-18-v1';
+const CATALOG_VERSION = '2026-10-18-v2';
 
 const LEGACY_NAME_ALIASES: Record<string, string> = {
   'MORPHEUSXOBRANDY|750': 'MORPHEUSXOBDY|750',
@@ -161,7 +161,7 @@ function mergeCatalogueWithDefaults(existing: Product[]): Product[] {
       merged.push(p);
     }
   });
-  return merged;
+  return sortProductsCategoryWise(merged);
 }
 
 function getTodayISO(): string {
@@ -222,7 +222,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
       return mergeCatalogueWithDefaults(parsed);
     }
-    return parsed;
+    return sortProductsCategoryWise(parsed);
   });
 
   const [stock, setStock] = useState<Record<string, { godown: number; normal: number; ac: number }>>(() => {
@@ -621,7 +621,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           serverVersionRef.current = json.version || 1;
           if (Array.isArray(s.users)) setUsers(s.users);
           if (Array.isArray(s.products)) {
-            const mergedProds = s._catalogVersion === CATALOG_VERSION ? s.products : mergeCatalogueWithDefaults(s.products);
+            const mergedProds =
+              s._catalogVersion === CATALOG_VERSION
+                ? sortProductsCategoryWise(s.products as Product[])
+                : mergeCatalogueWithDefaults(s.products as Product[]);
             setProducts(mergedProds);
             localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
           }
@@ -910,7 +913,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const pack = bottlesPerCase_({ name: p.name, sizeML: p.sizeML, casePack: p.casePack });
 
     if (p.productId) {
-      setProducts(prev => prev.map(prod => prod.productId === p.productId ? {
+      setProducts(prev => sortProductsCategoryWise(prev.map(prod => prod.productId === p.productId ? {
         ...prod,
         name: p.name.trim(),
         category: p.category.trim(),
@@ -920,7 +923,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         active: p.active !== undefined ? p.active : prod.active,
         updatedAt: getNowTimestamp(),
         updatedBy: currentUser.username
-      } : prod));
+      } : prod)));
       addAudit('PRODUCT_UPDATED', p.productId, `${p.name} ${p.sizeML}ml (${pack}/case) ₹${p.sellingPrice}`);
       return p.productId;
     } else {
@@ -937,7 +940,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAt: getNowTimestamp(),
         updatedBy: currentUser.username
       };
-      setProducts(prev => [...prev, newProduct]);
+      setProducts(prev => sortProductsCategoryWise([...prev, newProduct]));
       setStock(prev => ({ ...prev, [newId]: { godown: 0, normal: 0, ac: 0 } }));
       addAudit('PRODUCT_CREATED', newId, `${p.name} ${p.sizeML}ml`);
       return newId;
