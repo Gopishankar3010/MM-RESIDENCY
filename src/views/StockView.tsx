@@ -7,8 +7,13 @@ export const StockView: React.FC = () => {
   const { stockItems } = useStock();
   const [search, setSearch] = useState('');
   const [selectedCat, setSelectedCat] = useState('');
+  const [showAllStocks, setShowAllStocks] = useState(false);
 
-  const categories = Array.from(new Set(stockItems.map(i => i.category || 'Others'))).sort((a, b) => {
+  const visibleBaseItems = showAllStocks
+    ? stockItems
+    : stockItems.filter(i => i.godown + i.normal + i.ac > 0);
+
+  const categories = Array.from(new Set(visibleBaseItems.map(i => i.category || 'Others'))).sort((a, b) => {
     const ia = CATEGORY_ORDER.indexOf(a);
     const ib = CATEGORY_ORDER.indexOf(b);
     if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
@@ -16,7 +21,7 @@ export const StockView: React.FC = () => {
   });
 
   const filtered = sortProductsCategoryWise(
-    stockItems.filter(item => {
+    visibleBaseItems.filter(item => {
       const matchesCat = !selectedCat || item.category === selectedCat;
       const q = search.trim().toLowerCase();
       const matchesSearch = !q || (item.name + ' ' + item.category + ' ' + item.sizeML).toLowerCase().includes(q);
@@ -70,7 +75,7 @@ export const StockView: React.FC = () => {
         <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
         <h2 className="text-sm font-bold uppercase tracking-wider mt-1">CURRENT PHYSICAL STOCK REPORT</h2>
         <div className="text-xs text-slate-600 mt-1">
-          Printed: {new Date().toLocaleString('en-IN')} · Filter: {selectedCat || 'All Categories'} {search ? `· Query: "${search}"` : ''}
+          Printed: {new Date().toLocaleString('en-IN')} · Filter: {selectedCat || 'All Categories'} · View: {showAllStocks ? 'All Stocks' : 'Available Stock Only'} {search ? `· Query: "${search}"` : ''}
         </div>
       </div>
 
@@ -111,7 +116,7 @@ export const StockView: React.FC = () => {
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50/50 px-2.5 py-1.5 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
               <Filter className="h-3.5 w-3.5 text-slate-400" />
               <select
@@ -128,13 +133,24 @@ export const StockView: React.FC = () => {
               </select>
             </div>
 
-            {(search || selectedCat) && (
+            <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer select-none hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors">
+              <input
+                type="checkbox"
+                checked={showAllStocks}
+                onChange={e => setShowAllStocks(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+              />
+              <span>Show All Stocks</span>
+            </label>
+
+            {(search || selectedCat || showAllStocks) && (
               <button
                 onClick={() => {
                   setSearch('');
                   setSelectedCat('');
+                  setShowAllStocks(false);
                 }}
-                className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 transition-colors"
+                className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 <X className="h-3 w-3" />
                 <span>Reset</span>
@@ -144,7 +160,7 @@ export const StockView: React.FC = () => {
         </div>
 
         <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
-          Showing {filtered.length} of {stockItems.length} products
+          Showing {filtered.length} of {visibleBaseItems.length} {showAllStocks ? 'total' : 'available'} products{!showAllStocks ? ` (${stockItems.length} total in catalogue)` : ''}
         </div>
       </div>
 
@@ -171,7 +187,15 @@ export const StockView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
-              {(() => {
+              {groupedStock.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-10 px-4 text-center text-xs text-slate-500 dark:text-slate-400">
+                    {showAllStocks
+                      ? 'No products match your current filter.'
+                      : 'No products currently in stock match your filter. Tick "Show All Stocks" to view 0-stock items.'}
+                  </td>
+                </tr>
+              ) : (() => {
                 let runningIdx = 0;
                 return groupedStock.map(group => (
                   <React.Fragment key={group.category}>
