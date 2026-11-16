@@ -71,7 +71,7 @@ const MainLayout: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-stone-100 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col font-sans transition-colors duration-150">
+    <div className="min-h-screen bg-stone-100 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col font-sans transition-colors duration-150 print:bg-white print:text-slate-900">
       {/* Top Application Header */}
       <Header onOpenPasswordModal={() => setIsPasswordModalOpen(true)} />
 
@@ -81,7 +81,7 @@ const MainLayout: React.FC = () => {
         <Sidebar currentTab={currentTab} onSelectTab={setCurrentTab} />
 
         {/* View Surface */}
-        <main className="flex-1 p-4 md:p-6 lg:p-8 max-w-7xl mx-auto w-full overflow-x-hidden">
+        <main className="print-surface flex-1 p-4 md:p-6 lg:p-8 max-w-7xl mx-auto w-full overflow-x-hidden">
           {renderActiveView()}
         </main>
       </div>

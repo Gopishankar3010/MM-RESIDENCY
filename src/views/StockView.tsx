@@ -49,11 +49,11 @@ export const StockView: React.FC = () => {
   const formatCurrency = (val: number) => '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
-    <div className="space-y-5">
+    <div className="print-surface space-y-5">
       {/* Printable Area Header (shown only in print mode) */}
-      <div className="hidden print:block mb-4">
-        <h1 className="text-xl font-bold">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
-        <h2 className="text-sm font-semibold">CURRENT PHYSICAL STOCK REPORT</h2>
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">CURRENT PHYSICAL STOCK REPORT</h2>
         <div className="text-xs text-slate-600 mt-1">
           Printed: {new Date().toLocaleString('en-IN')} · Filter: {selectedCat || 'All Categories'} {search ? `· Query: "${search}"` : ''}
         </div>
@@ -134,9 +134,9 @@ export const StockView: React.FC = () => {
       </div>
 
       {/* Stock Table */}
-      <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
+      <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+        <div className="print-table-wrap overflow-x-auto">
+          <table className="print-table w-full text-left text-xs border-collapse">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-bold uppercase tracking-wider text-[10px]">
                 <th className="py-3 px-4">#</th>

@@ -439,34 +439,50 @@ export const ConsolidatedReportView: React.FC = () => {
     : adminCounterFilter;
 
   return (
-    <div className="space-y-6">
+    <div className="print-surface space-y-6">
       {/* Print-only formal header */}
-      <div className="hidden print:block text-center border-b pb-4 mb-4">
+      <div className="print-header text-center">
         <h1 className="text-2xl font-black tracking-tight">MM RESIDENCY</h1>
         <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700 mt-1">
-          {isAcUser
+          {activeViewTab === 'reports'
+            ? reportType === 'sales'
+              ? 'LIQUOR SALES PERIOD REPORT'
+              : reportType === 'purchases'
+              ? 'PURCHASES PERIOD REPORT (GODOWN)'
+              : 'CONSOLIDATED PERIOD FINANCIAL STATEMENT'
+            : isAcUser
             ? 'AC COUNTER FINANCIAL STATEMENT'
             : isNormalUser
             ? 'NORMAL COUNTER FINANCIAL STATEMENT'
             : 'CONSOLIDATED DAILY FINANCIAL STATEMENT'}
         </h2>
         <p className="text-xs text-slate-500 mt-1">
-          Shift Date: <strong>{selectedDate}</strong> · Generated: {new Date().toLocaleString('en-IN')}
+          {activeViewTab === 'reports' ? (
+            <>
+              Period: <strong>{fromDate}</strong> to <strong>{toDate}</strong> · Generated: {new Date().toLocaleString('en-IN')}
+            </>
+          ) : (
+            <>
+              Shift Date: <strong>{selectedDate}</strong> · Generated: {new Date().toLocaleString('en-IN')}
+            </>
+          )}
         </p>
-        <div className="flex justify-center gap-6 mt-2 text-xs font-medium text-slate-800 border-t pt-2">
-          {!isAcUser && (
-            <div>
-              Normal Counter Staff: <strong>{normalSale?.cashierName || '—'} (Cashier)</strong> /{' '}
-              <strong>{normalSale?.helperName || '—'} (Helper)</strong>
-            </div>
-          )}
-          {!isNormalUser && (
-            <div>
-              AC Counter Staff: <strong>{acSale?.cashierName || '—'} (Cashier)</strong> /{' '}
-              <strong>{acSale?.helperName || '—'} (Helper)</strong>
-            </div>
-          )}
-        </div>
+        {activeViewTab === 'daily' && (
+          <div className="flex justify-center gap-6 mt-2 text-xs font-medium text-slate-800 border-t pt-2">
+            {!isAcUser && (
+              <div>
+                Normal Counter Staff: <strong>{normalSale?.cashierName || '—'} (Cashier)</strong> /{' '}
+                <strong>{normalSale?.helperName || '—'} (Helper)</strong>
+              </div>
+            )}
+            {!isNormalUser && (
+              <div>
+                AC Counter Staff: <strong>{acSale?.cashierName || '—'} (Cashier)</strong> /{' '}
+                <strong>{acSale?.helperName || '—'} (Helper)</strong>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Screen Header & Mode Switcher */}
@@ -722,8 +738,8 @@ export const ConsolidatedReportView: React.FC = () => {
           {/* KEY FINANCIAL TILES (Customized per counter role) */}
           {isAcUser || activeCounterView === 'AC' ? (
             /* AC COUNTER TILES - ROOM RENT AND EXPENSES/WAGES ARE COMPLETELY REMOVED */
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="print-grid grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">AC Liquor Sales Value</span>
                 <div className="font-mono text-lg font-black text-slate-900 dark:text-white mt-1">
                   {formatCurrency(acValue)}
@@ -731,7 +747,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-slate-400">Calculated shift stock sold</span>
               </div>
 
-              <div className="rounded-xl border border-purple-200 bg-purple-50/70 p-4 shadow-xs dark:border-purple-800 dark:bg-purple-950/30">
+              <div className="print-card rounded-xl border border-purple-200 bg-purple-50/70 p-4 shadow-xs dark:border-purple-800 dark:bg-purple-950/30">
                 <span className="text-[11px] font-bold text-purple-900 dark:text-purple-300 uppercase">AC Charges (₹)</span>
                 <div className="font-mono text-lg font-black text-purple-950 dark:text-purple-200 mt-1">
                   {formatCurrency(acCharges)}
@@ -739,7 +755,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-purple-700 dark:text-purple-300">Shift AC charges entered</span>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Cash Received</span>
                 <div className="font-mono text-lg font-black text-emerald-600 dark:text-emerald-400 mt-1">
                   {formatCurrency(acCash)}
@@ -747,7 +763,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-slate-400">Drawer physical cash</span>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">UPI / Card Received</span>
                 <div className="font-mono text-lg font-black text-blue-600 dark:text-blue-400 mt-1">
                   {formatCurrency(acUpi)}
@@ -755,7 +771,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-slate-400">Digital collections</span>
               </div>
 
-              <div className="rounded-xl border border-emerald-300 bg-emerald-50/70 p-4 shadow-xs dark:border-emerald-800 dark:bg-emerald-950/30 col-span-2 sm:col-span-1">
+              <div className="print-card rounded-xl border border-emerald-300 bg-emerald-50/70 p-4 shadow-xs dark:border-emerald-800 dark:bg-emerald-950/30 col-span-2 sm:col-span-1">
                 <span className="text-[11px] font-bold text-emerald-900 dark:text-emerald-300 uppercase">Total Received</span>
                 <div className="font-mono text-xl font-black text-emerald-950 dark:text-emerald-200 mt-1">
                   {formatCurrency(acTotalReceived)}
@@ -767,8 +783,8 @@ export const ConsolidatedReportView: React.FC = () => {
             </div>
           ) : isNormalUser || activeCounterView === 'NORMAL' ? (
             /* NORMAL COUNTER TILES */
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="print-grid grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Normal Liquor Sales</span>
                 <div className="font-mono text-lg font-black text-slate-900 dark:text-white mt-1">
                   {formatCurrency(normalValue)}
@@ -776,7 +792,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-slate-400">Calculated stock sold</span>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Cash Received</span>
                 <div className="font-mono text-lg font-black text-emerald-600 dark:text-emerald-400 mt-1">
                   {formatCurrency(normalCash)}
@@ -784,7 +800,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-slate-400">Drawer physical cash</span>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">UPI / Card Received</span>
                 <div className="font-mono text-lg font-black text-blue-600 dark:text-blue-400 mt-1">
                   {formatCurrency(normalUpi)}
@@ -792,7 +808,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-slate-400">Digital collections</span>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Total Money Received</span>
                 <div className="font-mono text-xl font-black text-slate-900 dark:text-white mt-1">
                   {formatCurrency(normalTotalReceived)}
@@ -804,8 +820,8 @@ export const ConsolidatedReportView: React.FC = () => {
             </div>
           ) : (
             /* ADMIN ALL COUNTERS COMBINED TILES */
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="print-grid grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Combined Bar Sales</span>
                 <div className="font-mono text-lg font-black text-slate-900 dark:text-white mt-1">
                   {formatCurrency(totalSalesValue)}
@@ -813,7 +829,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-slate-400">Norm: {formatCurrency(normalValue)} · AC: {formatCurrency(acValue)}</span>
               </div>
 
-              <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-4 shadow-xs dark:border-purple-800 dark:bg-purple-950/20">
+              <div className="print-card rounded-xl border border-purple-200 bg-purple-50/50 p-4 shadow-xs dark:border-purple-800 dark:bg-purple-950/20">
                 <span className="text-[11px] font-semibold text-purple-900 dark:text-purple-300">AC Charges</span>
                 <div className="font-mono text-lg font-black text-purple-950 dark:text-purple-200 mt-1">
                   {formatCurrency(totalAcCharges)}
@@ -821,7 +837,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-purple-600">Shift AC service charges</span>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Room Rent Total</span>
                 <div className="font-mono text-lg font-black text-emerald-600 dark:text-emerald-400 mt-1">
                   {formatCurrency(totalRoomRent)}
@@ -829,7 +845,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-slate-400">{roomOps.length} rooms rented</span>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                 <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Expenses & Wages</span>
                 <div className="font-mono text-lg font-black text-red-600 dark:text-red-400 mt-1">
                   {formatCurrency(totalOutflows)}
@@ -837,7 +853,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <span className="text-[10px] text-slate-400">Exp: {formatCurrency(totalExpenses)} · Wage: {formatCurrency(totalWages)}</span>
               </div>
 
-              <div className="col-span-2 sm:col-span-1 rounded-xl border border-amber-300 bg-amber-50/70 p-4 shadow-xs dark:border-amber-700/60 dark:bg-amber-950/30">
+              <div className="print-card col-span-2 sm:col-span-1 rounded-xl border border-amber-300 bg-amber-50/70 p-4 shadow-xs dark:border-amber-700/60 dark:bg-amber-950/30">
                 <span className="text-[11px] font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wider">
                   Net Surplus Day Cash
                 </span>
@@ -850,7 +866,7 @@ export const ConsolidatedReportView: React.FC = () => {
           )}
 
           {/* COUNTER SALES RECONCILIATION TABLE */}
-          <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+          <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
             <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
               <div>
                 <h2 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -862,13 +878,13 @@ export const ConsolidatedReportView: React.FC = () => {
                 </h2>
                 <span className="text-[11px] text-slate-500">Live reflection of submitted counter shifts</span>
               </div>
-              <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800">
+              <span className="no-print text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800">
                 Auto-Approved Live Feed
               </span>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
+            <div className="print-table-wrap overflow-x-auto">
+              <table className="print-table w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/60 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400">
                     <th className="py-3 px-4">Counter Location</th>
@@ -980,9 +996,9 @@ export const ConsolidatedReportView: React.FC = () => {
 
           {/* LODGING AND OPERATING OUTFLOWS (REMOVED FROM AC COUNTER AS REQUESTED) */}
           {!isAcUser && activeCounterView !== 'AC' && (
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className="print-grid grid grid-cols-1 gap-6 lg:grid-cols-2">
               {/* Room Rent Detail */}
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
                 <div className="flex items-center justify-between border-b pb-2 dark:border-slate-800">
                   <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                     Room Lodging Collections ({selectedDate})
@@ -1012,7 +1028,7 @@ export const ConsolidatedReportView: React.FC = () => {
               </div>
 
               {/* Expenses & Wages Detail */}
-              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+              <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
                 <div className="flex items-center justify-between border-b pb-2 dark:border-slate-800">
                   <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                     Operating Deductions ({selectedDate})
@@ -1064,7 +1080,7 @@ export const ConsolidatedReportView: React.FC = () => {
           )}
 
           {/* Signature lines for printed version */}
-          <div className="hidden print:flex items-center justify-between pt-12 text-xs font-bold border-t border-slate-300">
+          <div className="print-avoid-break hidden print:flex items-center justify-between pt-12 text-xs font-bold border-t border-slate-300">
             {!isAcUser && <div>Normal Counter Cashier: ____________________</div>}
             {!isNormalUser && <div>AC Counter Cashier: ____________________</div>}
             <div>Shop Admin / Proprietor: ____________________</div>
@@ -1078,7 +1094,7 @@ export const ConsolidatedReportView: React.FC = () => {
       {activeViewTab === 'reports' && (
         <div className="space-y-6">
           {/* Filter & Calendar Selection Controls Card */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+          <div className="no-print rounded-2xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <Calendar className="h-5 w-5 text-amber-500" />
@@ -1227,26 +1243,26 @@ export const ConsolidatedReportView: React.FC = () => {
           {reportType === 'sales' && (
             <div className="space-y-4">
               {/* Quick Metrics */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-grid grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Total Bottles Sold</span>
                   <div className="font-mono text-xl font-black text-slate-900 dark:text-white mt-0.5">
                     {filteredSalesData.reduce((s, r) => s + r.sold, 0)} btls
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Liquor Sales Revenue</span>
                   <div className="font-mono text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
                     {formatCurrency(filteredSalesData.reduce((s, r) => s + r.value, 0))}
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Distinct Shifts / Reports</span>
                   <div className="font-mono text-xl font-black text-blue-600 dark:text-blue-400 mt-0.5">
                     {new Set(filteredSalesData.map(r => r.reportId)).size} reports
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Report Lines Sold</span>
                   <div className="font-mono text-xl font-black text-slate-900 dark:text-white mt-0.5">
                     {filteredSalesData.length} records
@@ -1255,15 +1271,15 @@ export const ConsolidatedReportView: React.FC = () => {
               </div>
 
               {/* Data Table */}
-              <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
                 <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
                   <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                     Liquor Sales Report Data Preview ({filteredSalesData.length} records)
                   </h4>
-                  <span className="text-[11px] text-slate-400">Click Download CSV above to export</span>
+                  <span className="no-print text-[11px] text-slate-400">Click Download CSV above to export</span>
                 </div>
-                <div className="overflow-x-auto max-h-[500px]">
-                  <table className="w-full text-left text-xs border-collapse">
+                <div className="print-table-wrap overflow-x-auto max-h-[500px]">
+                  <table className="print-table w-full text-left text-xs border-collapse">
                     <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
                       <tr>
                         <th className="py-2.5 px-3">Date</th>
@@ -1328,26 +1344,26 @@ export const ConsolidatedReportView: React.FC = () => {
           {reportType === 'purchases' && isAdmin && (
             <div className="space-y-4">
               {/* Quick Metrics */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-grid grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Total Invoices</span>
                   <div className="font-mono text-xl font-black text-slate-900 dark:text-white mt-0.5">
                     {filteredPurchasesData.length} bills
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Bottles Purchased</span>
                   <div className="font-mono text-xl font-black text-blue-600 dark:text-blue-400 mt-0.5">
                     {filteredPurchasesData.reduce((s, p) => s + p.totalQty, 0)} btls
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Gross Purchase Value</span>
                   <div className="font-mono text-xl font-black text-slate-900 dark:text-white mt-0.5">
                     {formatCurrency(filteredPurchasesData.reduce((s, p) => s + p.grossTotal, 0))}
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Net Payable Spend</span>
                   <div className="font-mono text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
                     {formatCurrency(filteredPurchasesData.reduce((s, p) => s + p.netTotal, 0))}
@@ -1356,15 +1372,15 @@ export const ConsolidatedReportView: React.FC = () => {
               </div>
 
               {/* Data Table */}
-              <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
                 <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
                   <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                     Purchase Invoices Preview ({filteredPurchasesData.length} invoices)
                   </h4>
-                  <span className="text-[11px] text-slate-400">Click Download CSV above to export</span>
+                  <span className="no-print text-[11px] text-slate-400">Click Download CSV above to export</span>
                 </div>
-                <div className="overflow-x-auto max-h-[500px]">
-                  <table className="w-full text-left text-xs border-collapse">
+                <div className="print-table-wrap overflow-x-auto max-h-[500px]">
+                  <table className="print-table w-full text-left text-xs border-collapse">
                     <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
                       <tr>
                         <th className="py-2.5 px-3">Bill Date</th>
@@ -1428,7 +1444,7 @@ export const ConsolidatedReportView: React.FC = () => {
           {/* ======================================= */}
           {reportType === 'consolidated' && (
             <div className="space-y-4">
-              <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
                 <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
                   <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                     {isAcUser
@@ -1441,8 +1457,8 @@ export const ConsolidatedReportView: React.FC = () => {
                     Showing {filteredConsolidatedData.length} date entries
                   </span>
                 </div>
-                <div className="overflow-x-auto max-h-[500px]">
-                  <table className="w-full text-left text-xs border-collapse">
+                <div className="print-table-wrap overflow-x-auto max-h-[500px]">
+                  <table className="print-table w-full text-left text-xs border-collapse">
                     <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
                       <tr>
                         <th className="py-2.5 px-3">Date</th>

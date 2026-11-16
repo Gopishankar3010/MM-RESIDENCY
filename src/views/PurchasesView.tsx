@@ -313,9 +313,23 @@ export const PurchasesView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="print-surface space-y-6">
+      {/* Print-only formal header */}
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">
+          {activeSubTab === 'download' ? 'STOCK PURCHASES PERIOD REPORT' : 'GODOWN STOCK PURCHASES LOG'}
+        </h2>
+        <div className="text-xs text-slate-600 mt-1">
+          {activeSubTab === 'download'
+            ? `Period: ${downloadFromDate} to ${downloadToDate} · Supplier: ${downloadSupplierFilter} · Status: ${downloadStatusFilter}`
+            : `Business Date: ${businessDate}`}{' '}
+          · Printed: {new Date().toLocaleString('en-IN')}
+        </div>
+      </div>
+
       {/* Top Header & Sub-Tab Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="no-print flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
             Supply Chain & Procurement
@@ -373,7 +387,7 @@ export const PurchasesView: React.FC = () => {
       {activeSubTab === 'entry' && (
         <div className="space-y-6">
           {/* Purchase Entry Form */}
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+          <div className="no-print rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
             <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <Truck className="h-4 w-4 text-blue-600" />
               <span>New Supplier Purchase Invoice</span>
@@ -665,16 +679,16 @@ export const PurchasesView: React.FC = () => {
               </h2>
               <button
                 onClick={() => setActiveSubTab('download')}
-                className="text-xs font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1 cursor-pointer"
+                className="no-print text-xs font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1 cursor-pointer"
               >
                 <Download className="h-3.5 w-3.5" />
                 <span>Export by Date Range →</span>
               </button>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
+            <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+              <div className="print-table-wrap overflow-x-auto">
+                <table className="print-table w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/60 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400">
                       <th className="py-3 px-4">Purchase Date</th>
@@ -732,7 +746,7 @@ export const PurchasesView: React.FC = () => {
       {activeSubTab === 'download' && (
         <div className="space-y-6">
           {/* Filter Card */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+          <div className="no-print rounded-2xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <Calendar className="h-5 w-5 text-amber-500" />
@@ -871,8 +885,8 @@ export const PurchasesView: React.FC = () => {
           </div>
 
           {/* Period Summary KPI Tiles */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+          <div className="print-grid grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
               <span className="text-[10px] font-bold text-slate-400 uppercase">Total Invoices</span>
               <div className="font-mono text-xl font-black text-slate-900 dark:text-white mt-0.5">
                 {filteredPurchases.length} bills
@@ -880,7 +894,7 @@ export const PurchasesView: React.FC = () => {
               <span className="text-[10px] text-slate-400">Matching period criteria</span>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
               <span className="text-[10px] font-bold text-slate-400 uppercase">Bottles Purchased</span>
               <div className="font-mono text-xl font-black text-blue-600 dark:text-blue-400 mt-0.5">
                 {filteredPurchases.reduce((s, p) => s + p.totalQty, 0)} btls
@@ -888,7 +902,7 @@ export const PurchasesView: React.FC = () => {
               <span className="text-[10px] text-slate-400">Total units received</span>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
               <span className="text-[10px] font-bold text-slate-400 uppercase">Gross Purchase Value</span>
               <div className="font-mono text-xl font-black text-slate-900 dark:text-white mt-0.5">
                 {formatCurrency(filteredPurchases.reduce((s, p) => s + p.grossTotal, 0))}
@@ -896,7 +910,7 @@ export const PurchasesView: React.FC = () => {
               <span className="text-[10px] text-slate-400">Base goods amount</span>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="print-card rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
               <span className="text-[10px] font-bold text-slate-400 uppercase">Net Payable Spend</span>
               <div className="font-mono text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
                 {formatCurrency(filteredPurchases.reduce((s, p) => s + p.netTotal, 0))}
@@ -906,17 +920,17 @@ export const PurchasesView: React.FC = () => {
           </div>
 
           {/* Interactive Table Preview */}
-          <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+          <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
             <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
               <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
                 <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
                 <span>Purchases Period Table Preview ({filteredPurchases.length} invoices)</span>
               </h4>
-              <span className="text-[11px] text-slate-400">Click Download Purchases CSV above to export</span>
+              <span className="no-print text-[11px] text-slate-400">Click Download Purchases CSV above to export</span>
             </div>
 
-            <div className="overflow-x-auto max-h-[500px]">
-              <table className="w-full text-left text-xs border-collapse">
+            <div className="print-table-wrap overflow-x-auto max-h-[500px]">
+              <table className="print-table w-full text-left text-xs border-collapse">
                 <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
                   <tr>
                     <th className="py-2.5 px-3">Bill Date</th>

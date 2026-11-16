@@ -247,9 +247,20 @@ export const DailySalesView: React.FC = () => {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="print-surface space-y-6">
+      {/* Print-only formal header */}
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – DAILY SALES & RECONCILIATION</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">
+          {isAdmin ? 'DAILY SALES REPORT LEDGER' : `${counter === 'NORMAL' ? 'NORMAL COUNTER' : 'AC COUNTER'} DAILY SALES SHEET`}
+        </h2>
+        <p className="text-xs text-slate-600 mt-1">
+          Shift Date: <strong>{isAdmin ? businessDate : reportDate}</strong> · Printed: {new Date().toLocaleString('en-IN')}
+        </p>
+      </div>
+
       {/* Top Banner */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="no-print flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
             Sales & Revenue Engine
@@ -262,20 +273,30 @@ export const DailySalesView: React.FC = () => {
           </p>
         </div>
 
-        {isAdmin && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => {
-              setHistSoldMap({});
-              setHistReason('');
-              setHistReceived('0');
-              setShowHistoricalModal(true);
-            }}
-            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 transition-colors"
+            onClick={() => window.print()}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
           >
-            <PlusCircle className="h-4 w-4" />
-            <span>Create Historical Sales Entry</span>
+            <Printer className="h-4 w-4" />
+            <span>Print View</span>
           </button>
-        )}
+
+          {isAdmin && (
+            <button
+              onClick={() => {
+                setHistSoldMap({});
+                setHistReason('');
+                setHistReceived('0');
+                setShowHistoricalModal(true);
+              }}
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 transition-colors cursor-pointer"
+            >
+              <PlusCircle className="h-4 w-4" />
+              <span>Create Historical Sales Entry</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {statusMessage && (
@@ -295,7 +316,7 @@ export const DailySalesView: React.FC = () => {
         <div className="space-y-4">
           {/* Missing Past Dates Reminder Banner */}
           {missingPastDates.length > 0 && (
-            <div className="rounded-2xl border border-amber-300/80 bg-gradient-to-r from-amber-50 via-white to-amber-50 p-4 text-xs text-amber-950 dark:border-amber-700/60 dark:from-amber-950/40 dark:via-slate-900 dark:to-amber-950/20 dark:text-amber-200 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
+            <div className="no-print rounded-2xl border border-amber-300/80 bg-gradient-to-r from-amber-50 via-white to-amber-50 p-4 text-xs text-amber-950 dark:border-amber-700/60 dark:from-amber-950/40 dark:via-slate-900 dark:to-amber-950/20 dark:text-amber-200 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
               <div className="flex items-start gap-2.5">
                 <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
                 <div>
@@ -443,7 +464,7 @@ export const DailySalesView: React.FC = () => {
               </div>
 
               {/* Filter tools */}
-              <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900 flex flex-wrap items-center justify-between gap-3">
+              <div className="no-print rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2.5">
                   <input
                     type="text"
@@ -481,9 +502,9 @@ export const DailySalesView: React.FC = () => {
               </div>
 
               {/* Grid of Lines */}
-              <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
-                <div className="overflow-x-auto max-h-[500px]">
-                  <table className="w-full text-left text-xs border-collapse">
+              <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+                <div className="print-table-wrap overflow-x-auto max-h-[500px]">
+                  <table className="print-table w-full text-left text-xs border-collapse">
                     <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700 z-10">
                       <tr>
                         <th className="py-2.5 px-3">Product</th>
@@ -554,8 +575,8 @@ export const DailySalesView: React.FC = () => {
               </div>
 
               {/* Payment Collection Details */}
-              <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+              <div className="print-grid grid grid-cols-1 gap-5 lg:grid-cols-2">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
                   <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                     Payment Collection Breakdown
                   </h3>
@@ -623,7 +644,7 @@ export const DailySalesView: React.FC = () => {
                   )}
                 </div>
 
-                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3 flex flex-col justify-between">
+                <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3 flex flex-col justify-between">
                   <div>
                     <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider mb-2">
                       Shift Reconciliation Summary
@@ -664,7 +685,7 @@ export const DailySalesView: React.FC = () => {
               </div>
 
               {/* Bottom Sticky Submission Bar */}
-              <div className="sticky bottom-3 rounded-xl border border-slate-300 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-900 flex flex-wrap items-center justify-between gap-4 z-20">
+              <div className="no-print sticky bottom-3 rounded-xl border border-slate-300 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-900 flex flex-wrap items-center justify-between gap-4 z-20">
                 <div className="flex items-center gap-4 text-xs">
                   <div>
                     <span className="text-slate-500">Bottles Sold:</span>
@@ -721,7 +742,7 @@ export const DailySalesView: React.FC = () => {
           </h2>
 
           {isAdmin && (
-            <div className="flex items-center gap-2">
+            <div className="no-print flex items-center gap-2">
               <select
                 value={adminCounterFilter}
                 onChange={e => setAdminCounterFilter(e.target.value)}
@@ -746,9 +767,9 @@ export const DailySalesView: React.FC = () => {
           )}
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
+        <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+          <div className="print-table-wrap overflow-x-auto">
+            <table className="print-table w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/60 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400">
                   <th className="py-3 px-4">Date</th>
@@ -759,7 +780,7 @@ export const DailySalesView: React.FC = () => {
                   <th className="py-3 px-4">Recorded Amount</th>
                   <th className="py-3 px-4">Difference</th>
                   <th className="py-3 px-4">Submitted By</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                  <th className="no-print py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -802,7 +823,7 @@ export const DailySalesView: React.FC = () => {
                       )}
                     </td>
                     <td className="py-3 px-4 text-slate-500">{report.submittedBy}</td>
-                    <td className="py-3 px-4 text-right">
+                    <td className="no-print py-3 px-4 text-right">
                       <button
                         onClick={() => {
                           setViewingReport(report);
@@ -900,9 +921,9 @@ export const DailySalesView: React.FC = () => {
             </div>
 
             {/* Lines List */}
-            <div className="rounded-xl border border-slate-200 overflow-hidden dark:border-slate-800">
-              <div className="overflow-x-auto max-h-[300px]">
-                <table className="w-full text-left text-xs">
+            <div className="print-card rounded-xl border border-slate-200 overflow-hidden dark:border-slate-800">
+              <div className="print-table-wrap overflow-x-auto max-h-[300px]">
+                <table className="print-table w-full text-left text-xs">
                   <thead className="bg-slate-100 font-bold uppercase text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-400 sticky top-0">
                     <tr>
                       <th className="p-2.5">Product</th>

@@ -12,7 +12,8 @@ import {
   Layers,
   ArrowRightLeft,
   Receipt,
-  Truck
+  Truck,
+  Printer
 } from 'lucide-react';
 
 export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
@@ -89,7 +90,18 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
   const formatCurrency = (val: number) => '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
-    <div className="space-y-6">
+    <div className="print-surface space-y-6">
+      {/* Formal Print Masthead */}
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">
+          {isAdmin ? 'EXECUTIVE STOCK & OPERATIONS SUMMARY' : `${currentUser?.counter || 'COUNTER'} DASHBOARD SUMMARY`}
+        </h2>
+        <div className="text-xs text-slate-600 mt-1">
+          Business Date: {businessDate} · Printed: {new Date().toLocaleString('en-IN')}
+        </div>
+      </div>
+
       {/* Top Header */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -104,7 +116,14 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="no-print flex items-center gap-2">
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+          >
+            <Printer className="h-3.5 w-3.5" />
+            <span>Print Summary</span>
+          </button>
           <button
             onClick={() => onNavigate('stock')}
             className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition-colors"
@@ -121,9 +140,9 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
       </div>
 
       {/* KPI Cards Strip */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="print-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {/* Total Stock Units */}
-        <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="print-card flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400">
             <Boxes className="h-5 w-5" />
           </div>
@@ -139,7 +158,7 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
         </div>
 
         {/* Approved Sales Today */}
-        <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="print-card flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400">
             <TrendingUp className="h-5 w-5" />
           </div>
@@ -155,7 +174,7 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
         </div>
 
         {/* 30-Day Volume */}
-        <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="print-card flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-950/60 dark:text-purple-400">
             <Clock className="h-5 w-5" />
           </div>
@@ -173,7 +192,7 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
         {/* Pending Approvals */}
         <div
           onClick={() => onNavigate('approvals')}
-          className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs hover:border-amber-400 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-amber-500/50 transition-all"
+          className="print-card flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs hover:border-amber-400 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-amber-500/50 transition-all"
         >
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400">
             <CheckCircle2 className="h-5 w-5" />
@@ -191,9 +210,9 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
       </div>
 
       {/* Row 2: Stock Distribution Schematic & Counter Performance */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div className="print-grid grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Stock Distribution */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">Stock Distribution Schematic</h3>
@@ -201,7 +220,7 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
             </div>
             <button
               onClick={() => onNavigate('stock')}
-              className="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400"
+              className="no-print text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400"
             >
               Open Inventory →
             </button>
@@ -278,7 +297,7 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
         </div>
 
         {/* Counter Performance & Report Status */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">Counter Performance & Status</h3>
@@ -286,7 +305,7 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
             </div>
             <button
               onClick={() => onNavigate('sales')}
-              className="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400"
+              className="no-print text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400"
             >
               Sales Reports →
             </button>
@@ -359,9 +378,9 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
       </div>
 
       {/* Row 3: Fast Moving Items & Operational Priorities */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div className="print-grid grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Fast-Moving Items */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">Fast-Moving Stock</h3>
@@ -402,7 +421,7 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
         </div>
 
         {/* Operational Priorities & Shortcuts */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-4">
             <h3 className="text-sm font-bold text-slate-900 dark:text-white">Operational Priorities & Quick Actions</h3>
             <p className="text-xs text-slate-500 dark:text-slate-400">Audit checkpoints and high-frequency tasks</p>
@@ -428,7 +447,7 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
           </div>
 
           {/* Quick buttons */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="no-print grid grid-cols-2 gap-2">
             <button
               onClick={() => onNavigate('sales')}
               className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors"

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Search, ShoppingBag, Plus, Trash2, CheckCircle2, Clock, XCircle, ArrowRight } from 'lucide-react';
+import { Search, ShoppingBag, Plus, Trash2, CheckCircle2, Clock, XCircle, ArrowRight, Printer } from 'lucide-react';
 import { bottlesPerCase_, stockQtyLabel } from '../data/initialData';
 
 export const RequestsView: React.FC = () => {
@@ -106,22 +106,42 @@ export const RequestsView: React.FC = () => {
   const quickReasons = ['Counter replenishment', 'Stock finished', 'Running low', 'Weekend rush peak', 'Customer demand'];
 
   return (
-    <div className="space-y-6">
-      <div>
-        <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
-          Indent & Fulfillment
-        </span>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          {isAdmin ? 'Counter Stock Requests' : 'Request Stock from Central Godown'}
-        </h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Request case lots or loose bottles from Godown storage into {currentUser?.counter || 'Counter'}
-        </p>
+    <div className="print-surface space-y-6">
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">
+          {isAdmin ? 'ALL COUNTER GODOWN STOCK REQUESTS' : `${currentUser?.counter || 'COUNTER'} STOCK INDENT HISTORY`}
+        </h2>
+        <div className="text-xs text-slate-600 mt-1">
+          Business Date: {businessDate} · Printed: {new Date().toLocaleString('en-IN')} · Total Records: {requests.length}
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
+            Indent & Fulfillment
+          </span>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            {isAdmin ? 'Counter Stock Requests' : 'Request Stock from Central Godown'}
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Request case lots or loose bottles from Godown storage into {currentUser?.counter || 'Counter'}
+          </p>
+        </div>
+
+        <button
+          onClick={() => window.print()}
+          className="no-print flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer self-start sm:self-auto"
+        >
+          <Printer className="h-4 w-4" />
+          <span>Print Requests Log</span>
+        </button>
       </div>
 
       {statusMessage && (
         <div
-          className={`rounded-xl border p-4 text-xs font-semibold ${
+          className={`no-print rounded-xl border p-4 text-xs font-semibold ${
             statusMessage.type === 'ok'
               ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
               : 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300'
@@ -133,7 +153,7 @@ export const RequestsView: React.FC = () => {
 
       {/* COUNTER WORKSPACE: Request Builder */}
       {!isAdmin && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="no-print grid grid-cols-1 gap-6 lg:grid-cols-3">
           {/* Item Selector Form */}
           <div className="lg:col-span-2 rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
             <h2 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -436,9 +456,9 @@ export const RequestsView: React.FC = () => {
           {isAdmin ? 'All Counter Requests' : 'My Requests History'}
         </h2>
 
-        <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
+        <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+          <div className="print-table-wrap overflow-x-auto">
+            <table className="print-table w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/60 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400">
                   <th className="py-3 px-4">Date</th>

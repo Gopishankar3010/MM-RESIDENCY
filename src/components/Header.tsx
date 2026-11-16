@@ -32,7 +32,7 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void }> = ({ onOpenPa
   const todayISO = new Date().toISOString().slice(0, 10);
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-slate-800 bg-[#0e2540] px-4 py-3 text-white shadow-md dark:border-slate-800 dark:bg-slate-900 md:px-6">
+    <header className="no-print sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-slate-800 bg-[#0e2540] px-4 py-3 text-white shadow-md dark:border-slate-800 dark:bg-slate-900 md:px-6">
       {/* Brand */}
       <div className="flex items-center gap-2.5">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-800 to-slate-900 border border-amber-500/40 text-amber-300 shadow-xs">

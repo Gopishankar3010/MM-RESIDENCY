@@ -3,7 +3,7 @@ import { useStock } from '../context/StockContext';
 import { Product, AuditLogEntry, StockLedgerEntry } from '../types';
 import { 
   FileCheck, History, Search, RefreshCw, CheckCircle2, 
-  AlertTriangle, Filter, ArrowDownUp, ShieldCheck, DatabaseZap
+  AlertTriangle, Filter, ArrowDownUp, ShieldCheck, DatabaseZap, Printer
 } from 'lucide-react';
 
 export const AuditView: React.FC = () => {
@@ -62,9 +62,19 @@ export const AuditView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="print-surface space-y-6">
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">
+          {activeTab === 'audit' ? 'SYSTEM ACTIVITY AUDIT TRAIL' : 'IMMUTABLE STOCK MOVEMENT LEDGER'}
+        </h2>
+        <div className="text-xs text-slate-600 mt-1">
+          Printed: {new Date().toLocaleString('en-IN')} · Records: {activeTab === 'audit' ? filteredAudit.length : filteredLedger.length}
+        </div>
+      </div>
+
       {/* Page Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-stone-900 p-6 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-xs">
+      <div className="print-card flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-stone-900 p-6 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-xs">
         <div>
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
@@ -77,7 +87,15 @@ export const AuditView: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="no-print flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-2 bg-white hover:bg-stone-50 dark:bg-stone-800 dark:hover:bg-stone-700 border border-stone-200 dark:border-stone-700 text-stone-800 dark:text-stone-200 px-3.5 py-2.5 rounded-xl font-bold text-xs shadow-xs transition-colors cursor-pointer"
+          >
+            <Printer className="w-4 h-4" />
+            <span>Print {activeTab === 'audit' ? 'Audit Log' : 'Ledger'}</span>
+          </button>
+
           <button
             onClick={handleSyncLedger}
             className="flex items-center gap-2 bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 text-stone-800 dark:text-stone-200 px-3.5 py-2.5 rounded-xl font-bold text-xs shadow-xs transition-colors cursor-pointer"
@@ -139,7 +157,7 @@ export const AuditView: React.FC = () => {
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-stone-200 dark:border-stone-800 gap-6">
+      <div className="no-print flex border-b border-stone-200 dark:border-stone-800 gap-6">
         <button
           onClick={() => setActiveTab('audit')}
           className={`flex items-center gap-2 pb-3.5 px-1 font-bold text-sm border-b-2 transition-colors cursor-pointer ${
@@ -165,7 +183,7 @@ export const AuditView: React.FC = () => {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      <div className="no-print flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400" />
           <input
@@ -210,9 +228,9 @@ export const AuditView: React.FC = () => {
 
       {/* Content Tables */}
       {activeTab === 'audit' ? (
-        <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden shadow-xs">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+        <div className="print-card bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden shadow-xs">
+          <div className="print-table-wrap overflow-x-auto">
+            <table className="print-table w-full text-left text-xs">
               <thead className="bg-stone-50 dark:bg-stone-950/50 text-stone-500 dark:text-stone-400 font-bold border-b border-stone-200 dark:border-stone-800 uppercase tracking-wider">
                 <tr>
                   <th className="py-3 px-4">Timestamp</th>
@@ -257,9 +275,9 @@ export const AuditView: React.FC = () => {
           </div>
         </div>
       ) : (
-        <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden shadow-xs">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+        <div className="print-card bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden shadow-xs">
+          <div className="print-table-wrap overflow-x-auto">
+            <table className="print-table w-full text-left text-xs">
               <thead className="bg-stone-50 dark:bg-stone-950/50 text-stone-500 dark:text-stone-400 font-bold border-b border-stone-200 dark:border-stone-800 uppercase tracking-wider">
                 <tr>
                   <th className="py-3 px-4">Seq #</th>

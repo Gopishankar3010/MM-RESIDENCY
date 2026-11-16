@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { CheckCircle2, ArrowRightLeft, Truck, Check, X, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, ArrowRightLeft, Truck, Check, X, ShieldCheck, Printer } from 'lucide-react';
 import { RequestGroup } from '../types';
 
 export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onNavigateToSales }) => {
@@ -98,22 +98,40 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
-          Review & Compliance
-        </span>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          Admin Approvals Queue
-        </h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Only stock requests from Central Godown require Admin approval. Daily Sales, Transfers, and Operations are auto-approved.
-        </p>
+    <div className="print-surface space-y-6">
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">ADMIN APPROVALS QUEUE SUMMARY</h2>
+        <div className="text-xs text-slate-600 mt-1">
+          Printed: {new Date().toLocaleString('en-IN')} · Stock Requests: {requestGroups.length} · Pending Purchases: {pendingPurchases.length}
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
+            Review & Compliance
+          </span>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Admin Approvals Queue
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Only stock requests from Central Godown require Admin approval. Daily Sales, Transfers, and Operations are auto-approved.
+          </p>
+        </div>
+
+        <button
+          onClick={() => window.print()}
+          className="no-print flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer self-start sm:self-auto"
+        >
+          <Printer className="h-4 w-4" />
+          <span>Print Approvals Queue</span>
+        </button>
       </div>
 
       {statusMsg && (
         <div
-          className={`rounded-xl border p-4 text-xs font-semibold ${
+          className={`no-print rounded-xl border p-4 text-xs font-semibold ${
             statusMsg.type === 'ok'
               ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
               : 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300'
@@ -124,7 +142,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
       )}
 
       {/* Policy Banner */}
-      <div className="rounded-2xl border border-emerald-300/80 bg-gradient-to-r from-emerald-50 via-white to-emerald-50 p-4 text-xs text-emerald-950 dark:border-emerald-800/60 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800 dark:text-emerald-300 flex items-center justify-between gap-3 shadow-xs">
+      <div className="no-print rounded-2xl border border-emerald-300/80 bg-gradient-to-r from-emerald-50 via-white to-emerald-50 p-4 text-xs text-emerald-950 dark:border-emerald-800/60 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800 dark:text-emerald-300 flex items-center justify-between gap-3 shadow-xs">
         <div className="flex items-center gap-2.5">
           <ShieldCheck className="h-5 w-5 text-emerald-600 shrink-0" />
           <div>
@@ -145,7 +163,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
       </div>
 
       {/* 1. PRIMARY: Counter Stock Requests Approvals (From Godown) */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
         <div className="flex items-center justify-between border-b pb-3 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <ArrowRightLeft className="h-4 w-4 text-purple-600" />
@@ -165,7 +183,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
               const availableCount = g.items.length - g.shortCount;
 
               return (
-                <div key={g.groupKey} className="py-3 space-y-3 text-xs">
+                <div key={g.groupKey} className="print-avoid-break py-3 space-y-3 text-xs">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div>
                       <div className="font-bold text-slate-900 dark:text-white">
@@ -176,7 +194,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="no-print flex items-center gap-2">
                       <button
                         onClick={() => {
                           setRemarkModal({
@@ -255,7 +273,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
       </div>
 
       {/* 2. Stock Purchases Approvals */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+      <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
         <div className="flex items-center justify-between border-b pb-3 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <Truck className="h-4 w-4 text-blue-600" />
@@ -268,7 +286,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
         {pendingPurchases.length > 0 ? (
           <div className="divide-y divide-slate-100 dark:divide-slate-800">
             {pendingPurchases.map(p => (
-              <div key={p.batchId} className="py-3 space-y-2 text-xs">
+              <div key={p.batchId} className="print-avoid-break py-3 space-y-2 text-xs">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                   <div>
                     <div className="font-bold text-slate-900 dark:text-white">
@@ -279,7 +297,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="no-print flex items-center gap-2">
                     <button
                       onClick={() => {
                         setRemarkModal({

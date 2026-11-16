@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Home, Check, CreditCard, Banknote, Smartphone } from 'lucide-react';
+import { Home, Check, CreditCard, Banknote, Smartphone, Printer } from 'lucide-react';
 
 export const RoomsView: React.FC = () => {
   const { businessDate, operations, saveDailyOperation } = useStock();
@@ -58,22 +58,40 @@ export const RoomsView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
-          Lodging & Hospitality
-        </span>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          Rooms Rented
-        </h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Record guest lodging collections for Rooms 1 through 9 on {businessDate}
-        </p>
+    <div className="print-surface space-y-6">
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">DAILY ROOM RENTALS & OCCUPANCY REPORT</h2>
+        <div className="text-xs text-slate-600 mt-1">
+          Business Date: {businessDate} · Occupancy: {occupiedRoomNumbers.size}/9 · Total Revenue: {formatCurrency(totalRoomRevenue)} · Printed: {new Date().toLocaleString('en-IN')}
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
+            Lodging & Hospitality
+          </span>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Rooms Rented
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Record guest lodging collections for Rooms 1 through 9 on {businessDate}
+          </p>
+        </div>
+
+        <button
+          onClick={() => window.print()}
+          className="no-print flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer self-start sm:self-auto"
+        >
+          <Printer className="h-4 w-4" />
+          <span>Print Room Report</span>
+        </button>
       </div>
 
       {statusMsg && (
         <div
-          className={`rounded-xl border p-4 text-xs font-semibold ${
+          className={`no-print rounded-xl border p-4 text-xs font-semibold ${
             statusMsg.type === 'ok'
               ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
               : 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300'
@@ -84,7 +102,7 @@ export const RoomsView: React.FC = () => {
       )}
 
       {/* 9 Rooms Grid Status */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+      <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
             Room Occupancy Overview ({occupiedRoomNumbers.size} of 9 Booked)
@@ -127,7 +145,7 @@ export const RoomsView: React.FC = () => {
       </div>
 
       {/* Entry Form */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <div className="no-print rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
         <h2 className="text-sm font-bold text-slate-900 dark:text-white">
           Record Room Rent Receipt
         </h2>
@@ -209,9 +227,9 @@ export const RoomsView: React.FC = () => {
           Room Collections Log ({businessDate})
         </h2>
 
-        <div className="rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
+        <div className="print-card rounded-xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+          <div className="print-table-wrap overflow-x-auto">
+            <table className="print-table w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/60 font-bold uppercase text-[10px] text-slate-600 dark:text-slate-400">
                   <th className="py-3 px-4">Room #</th>

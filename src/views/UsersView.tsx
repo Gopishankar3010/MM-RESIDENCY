@@ -3,7 +3,7 @@ import { useStock } from '../context/StockContext';
 import { User, Role } from '../types';
 import { 
   Users, UserPlus, KeyRound, Shield, CheckCircle2, 
-  XCircle, Search, Power
+  XCircle, Search, Power, Printer
 } from 'lucide-react';
 
 export const UsersView: React.FC = () => {
@@ -109,9 +109,17 @@ export const UsersView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="print-surface space-y-6">
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">STAFF & COUNTER USER DIRECTORY</h2>
+        <div className="text-xs text-slate-600 mt-1">
+          Printed: {new Date().toLocaleString('en-IN')} · Total Accounts: {filteredUsers.length}
+        </div>
+      </div>
+
       {/* Header & Controls */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-stone-900 p-6 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-xs">
+      <div className="print-card flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-stone-900 p-6 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-xs">
         <div>
           <div className="flex items-center gap-2">
             <Users className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
@@ -122,31 +130,41 @@ export const UsersView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={handleOpenAdd}
-          className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-xl font-bold shadow-xs transition-colors cursor-pointer"
-        >
-          <UserPlus className="w-5 h-5" />
-          <span>Add New Account</span>
-        </button>
+        <div className="no-print flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-2 bg-white hover:bg-stone-50 dark:bg-stone-800 dark:hover:bg-stone-700 border border-stone-200 dark:border-stone-700 text-stone-800 dark:text-stone-200 px-3.5 py-2.5 rounded-xl font-bold text-xs shadow-xs transition-colors cursor-pointer"
+          >
+            <Printer className="w-4 h-4" />
+            <span>Print Staff List</span>
+          </button>
+
+          <button
+            onClick={handleOpenAdd}
+            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2.5 rounded-xl font-bold shadow-xs transition-colors cursor-pointer"
+          >
+            <UserPlus className="w-5 h-5" />
+            <span>Add New Account</span>
+          </button>
+        </div>
       </div>
 
       {success && (
-        <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 p-4 rounded-xl flex items-center gap-3 text-emerald-800 dark:text-emerald-300">
+        <div className="no-print bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 p-4 rounded-xl flex items-center gap-3 text-emerald-800 dark:text-emerald-300">
           <CheckCircle2 className="w-5 h-5 shrink-0" />
           <span className="font-semibold text-sm">{success}</span>
         </div>
       )}
 
       {error && (
-        <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 p-4 rounded-xl flex items-center gap-3 text-red-800 dark:text-red-300">
+        <div className="no-print bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 p-4 rounded-xl flex items-center gap-3 text-red-800 dark:text-red-300">
           <XCircle className="w-5 h-5 shrink-0" />
           <span className="font-semibold text-sm">{error}</span>
         </div>
       )}
 
       {/* Search & Filter */}
-      <div className="relative">
+      <div className="no-print relative">
         <Search className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400" />
         <input
           type="text"
@@ -158,16 +176,16 @@ export const UsersView: React.FC = () => {
       </div>
 
       {/* Users Table */}
-      <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden shadow-xs">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+      <div className="print-card bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden shadow-xs">
+        <div className="print-table-wrap overflow-x-auto">
+          <table className="print-table w-full text-left text-sm">
             <thead className="bg-stone-50 dark:bg-stone-950/50 text-stone-500 dark:text-stone-400 font-bold border-b border-stone-200 dark:border-stone-800">
               <tr>
                 <th className="py-4 px-6">User / Staff Name</th>
                 <th className="py-4 px-6">Username</th>
                 <th className="py-4 px-6">Role & Assignment</th>
                 <th className="py-4 px-6">Status</th>
-                <th className="py-4 px-6 text-right">Actions</th>
+                <th className="no-print py-4 px-6 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
@@ -226,7 +244,7 @@ export const UsersView: React.FC = () => {
                         {user.active ? 'Active' : 'Disabled'}
                       </span>
                     </td>
-                    <td className="py-4 px-6 text-right">
+                    <td className="no-print py-4 px-6 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button
                           onClick={() => { setResetUserId(user.userId); setNewPassword(''); }}

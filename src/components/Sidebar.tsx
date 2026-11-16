@@ -70,7 +70,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
   const items = isAdmin ? adminNav : counterNav;
 
   return (
-    <aside className="w-full md:w-60 md:shrink-0 border-b md:border-b-0 md:border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 transition-colors">
+    <aside className="no-print w-full md:w-60 md:shrink-0 border-b md:border-b-0 md:border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 transition-colors">
       <div className="flex md:flex-col overflow-x-auto md:overflow-y-auto p-2 md:p-3 gap-1 md:sticky md:top-[61px] md:h-[calc(100vh-61px)]">
         <div className="hidden md:block px-3 py-2 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
           {isAdmin ? 'ADMINISTRATIVE SUITE' : `${currentUser?.counter || 'COUNTER'} WORKSPACE`}

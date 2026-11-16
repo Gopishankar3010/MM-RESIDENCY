@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Plus, Trash2, Wallet, PlusCircle, Check } from 'lucide-react';
+import { Plus, Trash2, Wallet, PlusCircle, Check, Printer } from 'lucide-react';
 
 interface EntryRow {
   name: string;
@@ -99,22 +99,40 @@ export const ExpensesWagesView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
-          Daily Outflows
-        </span>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          Expenses & Wages
-        </h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Record operational costs and daily helper/cashier wage payouts for {businessDate}
-        </p>
+    <div className="print-surface space-y-6">
+      <div className="print-header text-center">
+        <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
+        <h2 className="text-sm font-bold uppercase tracking-wider mt-1">DAILY OPERATIONAL EXPENSES & STAFF WAGES REPORT</h2>
+        <div className="text-xs text-slate-600 mt-1">
+          Business Date: {businessDate} · Printed: {new Date().toLocaleString('en-IN')}
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <span className="text-[11px] font-extrabold tracking-widest text-amber-600 dark:text-amber-400 uppercase">
+            Daily Outflows
+          </span>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Expenses & Wages
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Record operational costs and daily helper/cashier wage payouts for {businessDate}
+          </p>
+        </div>
+
+        <button
+          onClick={() => window.print()}
+          className="no-print flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer self-start sm:self-auto"
+        >
+          <Printer className="h-4 w-4" />
+          <span>Print Expenses & Wages</span>
+        </button>
       </div>
 
       {statusMessage && (
         <div
-          className={`rounded-xl border p-4 text-xs font-semibold ${
+          className={`no-print rounded-xl border p-4 text-xs font-semibold ${
             statusMessage.type === 'ok'
               ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
               : 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300'
@@ -125,7 +143,7 @@ export const ExpensesWagesView: React.FC = () => {
       )}
 
       {/* SECTION 1: DAILY EXPENSES */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b pb-3 dark:border-slate-800">
           <div>
             <h2 className="text-sm font-bold text-slate-900 dark:text-white">Daily Operational Expenses</h2>
@@ -133,7 +151,7 @@ export const ExpensesWagesView: React.FC = () => {
           </div>
           <button
             onClick={() => setShowAddOptionModal({ type: 'EXPENSE' })}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            className="no-print flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
           >
             <PlusCircle className="h-3.5 w-3.5 text-amber-500" />
             <span>+ New Expense Category</span>
@@ -141,14 +159,14 @@ export const ExpensesWagesView: React.FC = () => {
         </div>
 
         {/* Expenses Table Input */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+        <div className="print-table-wrap overflow-x-auto">
+          <table className="print-table w-full text-left text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 font-bold uppercase text-[10px]">
                 <th className="py-2.5 px-3">Expense Category</th>
                 <th className="py-2.5 px-3 w-40">Amount (₹)</th>
                 <th className="py-2.5 px-3">Note / Memo</th>
-                <th className="py-2.5 px-3 w-16"></th>
+                <th className="no-print py-2.5 px-3 w-16"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -195,7 +213,7 @@ export const ExpensesWagesView: React.FC = () => {
                       className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                     />
                   </td>
-                  <td className="py-2 px-3 text-center">
+                  <td className="no-print py-2 px-3 text-center">
                     {expenseRows.length > 1 && (
                       <button
                         onClick={() => setExpenseRows(prev => prev.filter((_, i) => i !== idx))}
@@ -220,7 +238,7 @@ export const ExpensesWagesView: React.FC = () => {
           </table>
         </div>
 
-        <div className="flex items-center justify-between pt-2">
+        <div className="no-print flex items-center justify-between pt-2">
           <button
             onClick={() => setExpenseRows(prev => [...prev, { name: '', amount: '', note: '' }])}
             className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
@@ -261,7 +279,7 @@ export const ExpensesWagesView: React.FC = () => {
       </div>
 
       {/* SECTION 2: DAILY WAGES */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b pb-3 dark:border-slate-800">
           <div>
             <h2 className="text-sm font-bold text-slate-900 dark:text-white">Daily Helper & Cashier Wages</h2>
@@ -269,7 +287,7 @@ export const ExpensesWagesView: React.FC = () => {
           </div>
           <button
             onClick={() => setShowAddOptionModal({ type: 'WAGE' })}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            className="no-print flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
           >
             <PlusCircle className="h-3.5 w-3.5 text-amber-500" />
             <span>+ Add Employee Name</span>
@@ -277,14 +295,14 @@ export const ExpensesWagesView: React.FC = () => {
         </div>
 
         {/* Wages Table Input */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+        <div className="print-table-wrap overflow-x-auto">
+          <table className="print-table w-full text-left text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 font-bold uppercase text-[10px]">
                 <th className="py-2.5 px-3">Employee Name</th>
                 <th className="py-2.5 px-3 w-40">Amount Paid (₹)</th>
                 <th className="py-2.5 px-3">Note / Shift</th>
-                <th className="py-2.5 px-3 w-16"></th>
+                <th className="no-print py-2.5 px-3 w-16"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -331,7 +349,7 @@ export const ExpensesWagesView: React.FC = () => {
                       className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                     />
                   </td>
-                  <td className="py-2 px-3 text-center">
+                  <td className="no-print py-2 px-3 text-center">
                     {wageRows.length > 1 && (
                       <button
                         onClick={() => setWageRows(prev => prev.filter((_, i) => i !== idx))}
@@ -356,7 +374,7 @@ export const ExpensesWagesView: React.FC = () => {
           </table>
         </div>
 
-        <div className="flex items-center justify-between pt-2">
+        <div className="no-print flex items-center justify-between pt-2">
           <button
             onClick={() => setWageRows(prev => [...prev, { name: '', amount: '', note: '' }])}
             className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"

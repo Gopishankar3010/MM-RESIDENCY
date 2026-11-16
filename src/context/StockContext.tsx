@@ -99,6 +99,70 @@ interface StockContextType {
 }
 
 const STORAGE_KEY = 'mm_residency_stock_v2_store';
+const CATALOG_VERSION = '2026-10-18-v1';
+
+const LEGACY_NAME_ALIASES: Record<string, string> = {
+  'MORPHEUSXOBRANDY|750': 'MORPHEUSXOBDY|750',
+  'MORPHEUSXOBRANDY|60': 'MORPHEUSXOBDY|60',
+  '100PIPERSEXQUISITEWHY|750': '100PIPERSEXQUISTEWHY|750',
+  'SULASHIRAZCABERNETRED|750': 'SULASHRIAZCABERNETRED|750'
+};
+
+function normCatalogKey(name: string, sizeML: number): string {
+  const raw = String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '') + '|' + Number(sizeML || 0);
+  return LEGACY_NAME_ALIASES[raw] || raw;
+}
+
+function mergeCatalogueWithDefaults(existing: Product[]): Product[] {
+  if (!Array.isArray(existing) || existing.length === 0) return INITIAL_PRODUCTS;
+  const existingByKey = new Map<string, Product>();
+  existing.forEach(p => {
+    existingByKey.set(normCatalogKey(p.name, p.sizeML), p);
+  });
+  const usedExistingIds = new Set<string>();
+  const merged: Product[] = [];
+  const takenIds = new Set<string>(existing.map(p => p.productId));
+  let maxNum = existing.reduce(
+    (m, p) => Math.max(m, Number(String(p.productId).replace(/\D/g, '')) || 0),
+    INITIAL_PRODUCTS.length
+  );
+
+  INITIAL_PRODUCTS.forEach(def => {
+    const defKey = normCatalogKey(def.name, def.sizeML);
+    const byKey = existingByKey.get(defKey);
+    const byId =
+      Number(String(def.productId).replace(/\D/g, '')) <= 33
+        ? existing.find(p => p.productId === def.productId)
+        : undefined;
+    const match = byKey || byId;
+    if (match) {
+      usedExistingIds.add(match.productId);
+      merged.push({
+        ...match,
+        name: def.name,
+        category: def.category,
+        sizeML: def.sizeML,
+        casePack: def.casePack,
+        sellingPrice: def.sellingPrice
+      });
+    } else {
+      let pid = def.productId;
+      if (takenIds.has(pid)) {
+        maxNum += 1;
+        pid = `PRD-${String(maxNum).padStart(6, '0')}`;
+      }
+      takenIds.add(pid);
+      merged.push({ ...def, productId: pid });
+    }
+  });
+
+  existing.forEach(p => {
+    if (!usedExistingIds.has(p.productId)) {
+      merged.push(p);
+    }
+  });
+  return merged;
+}
 
 function getTodayISO(): string {
   const d = new Date();
@@ -148,12 +212,28 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const [products, setProducts] = useState<Product[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_products');
-    return raw ? JSON.parse(raw) : INITIAL_PRODUCTS;
+    const storedVer = localStorage.getItem(STORAGE_KEY + '_catalog_version');
+    if (!raw) {
+      localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
+      return INITIAL_PRODUCTS;
+    }
+    const parsed = JSON.parse(raw) as Product[];
+    if (storedVer !== CATALOG_VERSION) {
+      localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
+      return mergeCatalogueWithDefaults(parsed);
+    }
+    return parsed;
   });
 
   const [stock, setStock] = useState<Record<string, { godown: number; normal: number; ac: number }>>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_stock');
-    return raw ? JSON.parse(raw) : INITIAL_STOCK;
+    const base = raw ? JSON.parse(raw) : { ...INITIAL_STOCK };
+    INITIAL_PRODUCTS.forEach(p => {
+      if (!base[p.productId]) {
+        base[p.productId] = { godown: 0, normal: 0, ac: 0 };
+      }
+    });
+    return base;
   });
 
   const [purchases, setPurchases] = useState<PurchaseBatch[]>(() => {
@@ -540,8 +620,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (isInitial || (json.version && json.version > serverVersionRef.current)) {
           serverVersionRef.current = json.version || 1;
           if (Array.isArray(s.users)) setUsers(s.users);
-          if (Array.isArray(s.products)) setProducts(s.products);
-          if (Array.isArray(s.stock)) setStock(s.stock);
+          if (Array.isArray(s.products)) {
+            const mergedProds = s._catalogVersion === CATALOG_VERSION ? s.products : mergeCatalogueWithDefaults(s.products);
+            setProducts(mergedProds);
+            localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
+          }
+          if (s.stock && typeof s.stock === 'object' && !Array.isArray(s.stock)) {
+            setStock(s.stock);
+          }
           if (Array.isArray(s.purchases)) setPurchases(s.purchases);
           if (Array.isArray(s.requests)) setRequests(s.requests);
           if (Array.isArray(s.transfers)) setTransfers(s.transfers);
@@ -617,6 +703,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     if (!isServerHydrated.current) return;
     const payload = {
+      _catalogVersion: CATALOG_VERSION,
       users,
       products,
       stock,
@@ -837,7 +924,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addAudit('PRODUCT_UPDATED', p.productId, `${p.name} ${p.sizeML}ml (${pack}/case) ₹${p.sellingPrice}`);
       return p.productId;
     } else {
-      const newId = `PRD-${String(products.length + 1).padStart(6, '0')}`;
+      const nextNum = products.reduce((m, x) => Math.max(m, Number(String(x.productId).replace(/\D/g, '')) || 0), 0) + 1;
+      const newId = `PRD-${String(nextNum).padStart(6, '0')}`;
       const newProduct: Product = {
         productId: newId,
         name: p.name.trim(),
@@ -1783,6 +1871,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const resetToSampleData = () => {
     localStorage.clear();
+    localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
     setUsers(INITIAL_USERS);
     setProducts(INITIAL_PRODUCTS);
     setStock(INITIAL_STOCK);
