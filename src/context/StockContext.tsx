@@ -63,7 +63,7 @@ interface StockContextType {
   submitPurchaseBatch: (batch: {
     supplier: string; date: string; billDate: string; invoiceNo: string;
     permitNumber?: string; documentNumber?: string;
-    lines: { productId: string; qty: number; enteredQty?: number; unit?: 'CASE' | 'BOTTLE'; rate: number; sedAmt: number; discountAmt: number; tcsPct: number }[];
+    lines: { productId: string; qty: number; enteredQty?: number; enteredPrice?: number; unit?: 'CASE' | 'BOTTLE'; rate: number; sedAmt: number; discountAmt: number; tcsPct: number }[];
   }) => Promise<string>;
   reviewPurchaseBill: (batchId: string, decision: 'APPROVE' | 'REJECT', remark?: string) => Promise<void>;
   editPurchaseRecord: (id: string, updates: { date: string; billDate: string; supplier: string; invoiceNo: string; qty: number; rate: number; sedAmt: number; discountAmt: number; tcsPct: number; reason: string }) => Promise<void>;
@@ -385,11 +385,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
   const isServerHydrated = React.useRef(false);
   const isSyncingRef = React.useRef(false);
+  const isPullingRef = React.useRef(false);
+  const pendingPullRef = React.useRef(false);
   const serverVersionRef = React.useRef(0);
+  const serverUpdatedAtRef = React.useRef<string>('');
   const localDirtySeqRef = React.useRef(0);
   const pushedSeqRef = React.useRef(0);
+  const dirtySlicesRef = React.useRef<Set<string>>(new Set());
+  const clientIdRef = React.useRef<string>(`tab-${Math.random().toString(36).slice(2, 9)}-${Date.now()}`);
   const pushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenPendingIdsRef = React.useRef<Set<string> | null>(null);
+  const currentUserRef = React.useRef(currentUser);
+  currentUserRef.current = currentUser;
 
   const latestRef = React.useRef({
     users,
@@ -450,11 +457,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ...(extra || {})
   });
 
-  // Synchronously updates latestRef, React states, localStorage, and increments dirty counter
+  // Synchronously updates latestRef, React states, localStorage, and tracks dirty slices
   const commitLocalState = (partial: Partial<typeof latestRef.current>, auditEntries?: AuditLogEntry[]) => {
     const next = { ...latestRef.current, ...partial };
+    Object.keys(partial).forEach(k => dirtySlicesRef.current.add(k));
     if (auditEntries && auditEntries.length > 0) {
       next.auditLog = [...auditEntries, ...next.auditLog];
+      dirtySlicesRef.current.add('auditLog');
     }
     latestRef.current = next;
     localDirtySeqRef.current += 1;
@@ -626,25 +635,144 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [requests, currentUser?.role, soundEnabled]);
 
+  // Apply an authoritative server snapshot locally without marking it dirty
+  const applyServerSnapshot = (s: any, version: number, updatedAt: string, isInitial: boolean): boolean => {
+    serverVersionRef.current = version || 1;
+    if (updatedAt) serverUpdatedAtRef.current = updatedAt;
+    const nextState = { ...latestRef.current };
+    let needsPushBack = false;
+
+    if (Array.isArray(s.users)) {
+      const mergedUsers = mergeUsersSafe(s.users, latestRef.current.users);
+      nextState.users = mergedUsers;
+      setUsers(mergedUsers);
+      persistSliceToLocalStorage('_users', mergedUsers);
+      if (mergedUsers.length !== s.users.length) {
+        needsPushBack = true;
+      }
+      const activeUser = currentUserRef.current;
+      if (activeUser) {
+        const refreshed = mergedUsers.find(u => u.userId === activeUser.userId || u.username.toLowerCase() === activeUser.username.toLowerCase());
+        if (refreshed) {
+          if (!refreshed.active) {
+            setCurrentUser(null);
+            localStorage.removeItem('mm_user');
+          } else if (
+            refreshed.fullName !== activeUser.fullName ||
+            refreshed.password !== activeUser.password ||
+            refreshed.role !== activeUser.role ||
+            refreshed.updatedAt !== activeUser.updatedAt
+          ) {
+            setCurrentUser(refreshed);
+            localStorage.setItem('mm_user', JSON.stringify(refreshed));
+          }
+        }
+      }
+    }
+    if (Array.isArray(s.products)) {
+      const mergedProds =
+        s._catalogVersion === CATALOG_VERSION
+          ? sortProductsCategoryWise(s.products as Product[])
+          : mergeCatalogueWithDefaults(s.products as Product[]);
+      nextState.products = mergedProds;
+      setProducts(mergedProds);
+      persistSliceToLocalStorage('_products', mergedProds);
+      localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
+    }
+    if (s.stock && typeof s.stock === 'object' && !Array.isArray(s.stock)) {
+      nextState.stock = s.stock;
+      setStock(s.stock);
+      persistSliceToLocalStorage('_stock', s.stock);
+    }
+    if (Array.isArray(s.purchases)) {
+      nextState.purchases = s.purchases;
+      setPurchases(s.purchases);
+      persistSliceToLocalStorage('_purchases', s.purchases);
+    }
+    if (Array.isArray(s.requests)) {
+      if (isInitial && seenPendingIdsRef.current === null) {
+        seenPendingIdsRef.current = new Set(
+          s.requests.filter((r: any) => r.status === 'Pending').map((r: any) => r.requestId)
+        );
+      }
+      nextState.requests = s.requests;
+      setRequests(s.requests);
+      persistSliceToLocalStorage('_requests', s.requests);
+    }
+    if (Array.isArray(s.transfers)) {
+      nextState.transfers = s.transfers;
+      setTransfers(s.transfers);
+      persistSliceToLocalStorage('_transfers', s.transfers);
+    }
+    if (Array.isArray(s.dailySales)) {
+      const normalizedSales = s.dailySales.map((r: any) =>
+        r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r
+      );
+      nextState.dailySales = normalizedSales;
+      setDailySales(normalizedSales);
+      persistSliceToLocalStorage('_daily_sales', normalizedSales);
+    }
+    if (Array.isArray(s.operations)) {
+      nextState.operations = s.operations;
+      setOperations(s.operations);
+      persistSliceToLocalStorage('_operations', s.operations);
+    }
+    if (Array.isArray(s.ledger)) {
+      nextState.ledger = s.ledger;
+      setLedger(s.ledger);
+      persistSliceToLocalStorage('_ledger', s.ledger);
+    }
+    if (Array.isArray(s.auditLog)) {
+      nextState.auditLog = s.auditLog;
+      setAuditLog(s.auditLog);
+      persistSliceToLocalStorage('_audit', s.auditLog);
+    }
+    if (Array.isArray(s.suppliers)) {
+      nextState.suppliers = s.suppliers;
+      setSuppliers(s.suppliers);
+      persistSliceToLocalStorage('_suppliers', s.suppliers);
+    }
+    if (Array.isArray(s.dropdownOptions)) {
+      nextState.dropdownOptions = s.dropdownOptions;
+      setDropdownOptions(s.dropdownOptions);
+      persistSliceToLocalStorage('_dropdowns', s.dropdownOptions);
+    }
+
+    latestRef.current = nextState;
+    return needsPushBack;
+  };
+
   // Push state to /api/state
   const pushServerState = async (payloadOverride?: any): Promise<boolean> => {
     const targetSeq = localDirtySeqRef.current;
-    const payload = payloadOverride || buildPayloadFromRef();
+    const dirtyList = Array.from(dirtySlicesRef.current);
+    const payload = payloadOverride || buildPayloadFromRef({
+      _baseVersion: serverVersionRef.current,
+      _dirtySlices: dirtyList,
+      _clientId: clientIdRef.current
+    });
     try {
       setSyncStatus('syncing');
       isSyncingRef.current = true;
       const res = await fetch('/api/state', {
         method: 'POST',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
       if (res.ok) {
         const json = await res.json();
-        if (json.version) {
-          serverVersionRef.current = json.version;
+        if (json.merged && json.data && localDirtySeqRef.current === targetSeq) {
+          applyServerSnapshot(json.data, json.version, json.updatedAt || '', false);
+        } else {
+          if (json.version) serverVersionRef.current = json.version;
+          if (json.updatedAt) serverUpdatedAtRef.current = json.updatedAt;
         }
         if (targetSeq > pushedSeqRef.current) {
           pushedSeqRef.current = targetSeq;
+        }
+        if (localDirtySeqRef.current === targetSeq) {
+          dirtySlicesRef.current.clear();
         }
         setSyncStatus('synced');
         setLastSyncTime(new Date().toLocaleTimeString());
@@ -658,9 +786,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return false;
     } finally {
       isSyncingRef.current = false;
-      // If more local edits happened while this push was in-flight, push again immediately
       if (!payloadOverride && localDirtySeqRef.current > pushedSeqRef.current) {
         schedulePush(20);
+      } else if (pendingPullRef.current) {
+        pendingPullRef.current = false;
+        pullServerState(false);
       }
     }
   };
@@ -687,15 +817,23 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Pull state from /api/state (never clobbers dirty local edits)
   const pullServerState = async (isInitial = false) => {
-    if (isSyncingRef.current) return;
+    if (isSyncingRef.current) {
+      pendingPullRef.current = true;
+      return;
+    }
+    if (isPullingRef.current) return;
     // If there are unsaved local edits, push them instead of overwriting local state
     if (!isInitial && localDirtySeqRef.current > pushedSeqRef.current) {
       await flushServerPush();
       return;
     }
     const seqBeforeFetch = localDirtySeqRef.current;
+    isPullingRef.current = true;
     try {
-      const res = await fetch('/api/state');
+      const res = await fetch(`/api/state?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
+      });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const json = await res.json();
 
@@ -727,94 +865,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             auditLog: []
           });
           await pushServerState(buildPayloadFromRef());
-        } else if (isInitial || (json.version && json.version > serverVersionRef.current)) {
-          serverVersionRef.current = json.version || 1;
-          const nextState = { ...latestRef.current };
-          let needsPushBack = false;
+        } else {
+          const remoteVer = Number(json.version || 0);
+          const remoteUpdatedAt = String(json.updatedAt || '');
+          const hasChanged =
+            isInitial ||
+            (remoteVer > 0 && remoteVer !== serverVersionRef.current) ||
+            (remoteUpdatedAt && remoteUpdatedAt !== serverUpdatedAtRef.current);
 
-          if (Array.isArray(s.users)) {
-            const mergedUsers = mergeUsersSafe(s.users, latestRef.current.users);
-            nextState.users = mergedUsers;
-            setUsers(mergedUsers);
-            persistSliceToLocalStorage('_users', mergedUsers);
-            if (mergedUsers.length !== s.users.length) {
-              needsPushBack = true;
+          if (hasChanged) {
+            const needsPushBack = applyServerSnapshot(s, remoteVer, remoteUpdatedAt, isInitial);
+            if (needsPushBack) {
+              localDirtySeqRef.current += 1;
+              dirtySlicesRef.current.add('users');
+              await pushServerState(buildPayloadFromRef({ _baseVersion: remoteVer, _dirtySlices: ['users'], _clientId: clientIdRef.current }));
             }
-          }
-          if (Array.isArray(s.products)) {
-            const mergedProds =
-              s._catalogVersion === CATALOG_VERSION
-                ? sortProductsCategoryWise(s.products as Product[])
-                : mergeCatalogueWithDefaults(s.products as Product[]);
-            nextState.products = mergedProds;
-            setProducts(mergedProds);
-            persistSliceToLocalStorage('_products', mergedProds);
-            localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
-          }
-          if (s.stock && typeof s.stock === 'object' && !Array.isArray(s.stock)) {
-            nextState.stock = s.stock;
-            setStock(s.stock);
-            persistSliceToLocalStorage('_stock', s.stock);
-          }
-          if (Array.isArray(s.purchases)) {
-            nextState.purchases = s.purchases;
-            setPurchases(s.purchases);
-            persistSliceToLocalStorage('_purchases', s.purchases);
-          }
-          if (Array.isArray(s.requests)) {
-            if (isInitial && seenPendingIdsRef.current === null) {
-              seenPendingIdsRef.current = new Set(
-                s.requests.filter((r: any) => r.status === 'Pending').map((r: any) => r.requestId)
-              );
-            }
-            nextState.requests = s.requests;
-            setRequests(s.requests);
-            persistSliceToLocalStorage('_requests', s.requests);
-          }
-          if (Array.isArray(s.transfers)) {
-            nextState.transfers = s.transfers;
-            setTransfers(s.transfers);
-            persistSliceToLocalStorage('_transfers', s.transfers);
-          }
-          if (Array.isArray(s.dailySales)) {
-            const normalizedSales = s.dailySales.map((r: any) =>
-              r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r
-            );
-            nextState.dailySales = normalizedSales;
-            setDailySales(normalizedSales);
-            persistSliceToLocalStorage('_daily_sales', normalizedSales);
-          }
-          if (Array.isArray(s.operations)) {
-            nextState.operations = s.operations;
-            setOperations(s.operations);
-            persistSliceToLocalStorage('_operations', s.operations);
-          }
-          if (Array.isArray(s.ledger)) {
-            nextState.ledger = s.ledger;
-            setLedger(s.ledger);
-            persistSliceToLocalStorage('_ledger', s.ledger);
-          }
-          if (Array.isArray(s.auditLog)) {
-            nextState.auditLog = s.auditLog;
-            setAuditLog(s.auditLog);
-            persistSliceToLocalStorage('_audit', s.auditLog);
-          }
-          if (Array.isArray(s.suppliers)) {
-            nextState.suppliers = s.suppliers;
-            setSuppliers(s.suppliers);
-            persistSliceToLocalStorage('_suppliers', s.suppliers);
-          }
-          if (Array.isArray(s.dropdownOptions)) {
-            nextState.dropdownOptions = s.dropdownOptions;
-            setDropdownOptions(s.dropdownOptions);
-            persistSliceToLocalStorage('_dropdowns', s.dropdownOptions);
-          }
-
-          latestRef.current = nextState;
-
-          if (needsPushBack) {
-            localDirtySeqRef.current += 1;
-            await pushServerState(buildPayloadFromRef());
           }
         }
       } else {
@@ -826,7 +891,37 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch {
       setSyncStatus('offline');
     } finally {
+      isPullingRef.current = false;
       isServerHydrated.current = true;
+    }
+  };
+
+  // Lightweight version check every 2 seconds so cross-device updates arrive promptly even without SSE
+  const checkServerVersionAndSync = async () => {
+    if (localDirtySeqRef.current > pushedSeqRef.current) {
+      await flushServerPush();
+      return;
+    }
+    if (isSyncingRef.current || isPullingRef.current) return;
+    try {
+      const res = await fetch(`/api/version?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      const remoteVer = Number(json.version || 0);
+      const remoteUpdatedAt = String(json.updatedAt || '');
+      if (
+        (remoteVer > 0 && remoteVer !== serverVersionRef.current) ||
+        (remoteUpdatedAt && remoteUpdatedAt !== serverUpdatedAtRef.current)
+      ) {
+        await pullServerState(false);
+      } else {
+        setSyncStatus(prev => (prev === 'offline' ? 'synced' : prev));
+      }
+    } catch {
+      setSyncStatus('offline');
     }
   };
 
@@ -842,21 +937,31 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     pullServerState(true);
     const interval = setInterval(() => {
-      if (localDirtySeqRef.current > pushedSeqRef.current) {
-        flushServerPush();
-      } else {
-        pullServerState(false);
-      }
-    }, 5000);
+      checkServerVersionAndSync();
+    }, 2000);
 
     let es: EventSource | null = null;
     if (typeof EventSource !== 'undefined') {
       try {
         es = new EventSource('/api/events');
+        es.addEventListener('connected', (ev: MessageEvent) => {
+          try {
+            const data = JSON.parse(ev.data);
+            if (data?.version && data.version !== serverVersionRef.current) {
+              pullServerState(false);
+            }
+          } catch {
+            pullServerState(false);
+          }
+        });
         es.addEventListener('state_updated', (ev: MessageEvent) => {
           try {
             const data = JSON.parse(ev.data);
-            if (data?.version && data.version > serverVersionRef.current) {
+            if (data?.clientId && data.clientId === clientIdRef.current) return;
+            if (
+              (data?.version && data.version !== serverVersionRef.current) ||
+              (data?.updatedAt && data.updatedAt !== serverUpdatedAtRef.current)
+            ) {
               pullServerState(false);
             }
           } catch {
@@ -867,7 +972,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           pullServerState(false);
         });
       } catch {
-        // Fallback to interval polling if EventSource fails
+        // Fallback to 2s version polling if EventSource fails
       }
     }
 
@@ -877,7 +982,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           fetch('/api/state', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(buildPayloadFromRef()),
+            body: JSON.stringify(
+              buildPayloadFromRef({
+                _baseVersion: serverVersionRef.current,
+                _dirtySlices: Array.from(dirtySlicesRef.current),
+                _clientId: clientIdRef.current
+              })
+            ),
             keepalive: true
           });
         } catch {
@@ -892,11 +1003,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } else if (localDirtySeqRef.current > pushedSeqRef.current) {
         flushServerPush();
       } else {
+        checkServerVersionAndSync();
+      }
+    };
+
+    const handleOnlineOrShow = () => {
+      if (localDirtySeqRef.current > pushedSeqRef.current) {
+        flushServerPush();
+      } else {
         pullServerState(false);
       }
     };
 
     window.addEventListener('focus', handleFocusOrVisibility);
+    window.addEventListener('online', handleOnlineOrShow);
+    window.addEventListener('pageshow', handleOnlineOrShow);
     window.addEventListener('pagehide', flushOnUnload);
     window.addEventListener('beforeunload', flushOnUnload);
     document.addEventListener('visibilitychange', handleFocusOrVisibility);
@@ -906,6 +1027,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
       if (es) es.close();
       window.removeEventListener('focus', handleFocusOrVisibility);
+      window.removeEventListener('online', handleOnlineOrShow);
+      window.removeEventListener('pageshow', handleOnlineOrShow);
       window.removeEventListener('pagehide', flushOnUnload);
       window.removeEventListener('beforeunload', flushOnUnload);
       document.removeEventListener('visibilitychange', handleFocusOrVisibility);
@@ -1215,7 +1338,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const submitPurchaseBatch = async (data: {
     supplier: string; date: string; billDate: string; invoiceNo: string;
     permitNumber?: string; documentNumber?: string;
-    lines: { productId: string; qty: number; enteredQty?: number; unit?: 'CASE' | 'BOTTLE'; rate: number; sedAmt: number; discountAmt: number; tcsPct: number }[];
+    lines: { productId: string; qty: number; enteredQty?: number; enteredPrice?: number; unit?: 'CASE' | 'BOTTLE'; rate: number; sedAmt: number; discountAmt: number; tcsPct: number }[];
   }) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     if (!data.lines.length) throw new Error('Add at least one item.');
@@ -1233,7 +1356,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const parsedLines = data.lines.map((l, i) => {
       const p = productMap.get(l.productId);
-      const gross = Math.round(l.qty * l.rate * 100) / 100;
+      const pack = p ? bottlesPerCase_(p) : 1;
+      const effectiveRate =
+        l.enteredPrice !== undefined && l.enteredPrice > 0 && pack > 0
+          ? l.enteredPrice / pack
+          : l.rate;
+      const gross =
+        l.unit === 'CASE' && l.enteredPrice !== undefined && l.enteredPrice > 0
+          ? Math.round((l.enteredQty || 1) * l.enteredPrice * 100) / 100
+          : Math.round(l.qty * effectiveRate * 100) / 100;
       const taxable = Math.max(0, gross + l.sedAmt - l.discountAmt);
       const tcs = Math.round(taxable * (l.tcsPct / 100) * 100) / 100;
       const net = Math.round((taxable + tcs) * 100) / 100;
@@ -1249,11 +1380,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         id: `PUR-${batchId.slice(4)}-${String(i + 1).padStart(3, '0')}`,
         productId: l.productId,
         productName: p ? `${p.name} ${p.sizeML}ml` : l.productId,
-        casePack: p ? bottlesPerCase_(p) : 1,
+        casePack: pack,
         qty: l.qty,
         enteredQty: l.enteredQty || l.qty,
+        enteredPrice: l.enteredPrice,
         unit: l.unit || 'BOTTLE',
-        rate: l.rate,
+        rate: effectiveRate,
         sedAmt: l.sedAmt,
         discountAmt: l.discountAmt,
         tcsPct: l.tcsPct,
@@ -1277,7 +1409,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       sedTotal: Math.round(sedTotal * 100) / 100,
       discountTotal: Math.round(discountTotal * 100) / 100,
       tcsTotal: Math.round(tcsTotal * 100) / 100,
-      netTotal: Math.round(netTotal * 100) / 100,
+      netTotal: Math.round(netTotal),
       createdBy: currentUser.username,
       createdAt: getNowTimestamp()
     };
@@ -1372,7 +1504,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           invoiceNo: updates.invoiceNo,
           lines: updatedLines,
           totalQty: updatedLines.reduce((s, l) => s + l.qty, 0),
-          netTotal: updatedLines.reduce((s, l) => s + l.netAmount, 0),
+          netTotal: Math.round(updatedLines.reduce((s, l) => s + l.netAmount, 0)),
           remark: `${batch.remark ? batch.remark + ' | ' : ''}Admin correction: ${updates.reason}`
         };
       }
@@ -2378,7 +2510,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
     setCurrentUser(INITIAL_USERS[0]);
     localStorage.setItem('mm_user', JSON.stringify(INITIAL_USERS[0]));
-    pushServerState(buildPayloadFromRef({ _resetRequested: true }));
+    dirtySlicesRef.current.clear();
+    pushServerState(buildPayloadFromRef({ _resetRequested: true, _clientId: clientIdRef.current }));
   };
 
   return (

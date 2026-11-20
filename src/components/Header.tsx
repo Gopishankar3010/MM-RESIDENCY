@@ -233,7 +233,7 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void; onNavigate?: (t
                 </div>
 
                 <div className="border-t border-slate-800 p-2.5 bg-slate-950/60 flex items-center justify-between gap-2">
-                  <span className="text-[10px] text-slate-400">Real-time SSE + 5s sync active</span>
+                  <span className="text-[10px] text-slate-400">Real-time SSE + 2s sync active</span>
                   {onNavigate && (
                     <button
                       type="button"

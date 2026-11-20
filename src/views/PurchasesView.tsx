@@ -401,25 +401,30 @@ export const PurchasesView: React.FC = () => {
     const prod = productMap.get(r.productId);
     const pack = prod ? bottlesPerCase_(prod) : 1;
     const qty = Number(r.enteredQty) || 0;
-    const price = Number(r.enteredPrice) || 0;
-    const itemGross = qty * price;
+    const casePrice = Number(r.enteredPrice) || 0;
     const btls = r.unit === 'CASE' ? qty * pack : qty;
+    const ratePerBottle = pack > 0 ? casePrice / pack : casePrice;
+    const itemGross =
+      r.unit === 'CASE'
+        ? Math.round(qty * casePrice * 100) / 100
+        : Math.round(qty * ratePerBottle * 100) / 100;
     grossSum += itemGross;
     totalBottles += btls;
 
     return {
       ...r,
       pack,
+      casePrice,
       itemGross,
       bottles: btls,
-      ratePerBottle: r.unit === 'CASE' ? (pack > 0 ? price / pack : price) : price
+      ratePerBottle
     };
   });
 
   const parsedDisc = Number(discountTotal) || 0;
   const parsedTcsPct = Number(tcsPct) || 0;
   let totalSed = 0;
-  let netSum = 0;
+  let rawNetSum = 0;
 
   const finalRows = rowCalcs.map(r => {
     const sed = Number(r.sedAmt) || 0;
@@ -429,7 +434,7 @@ export const PurchasesView: React.FC = () => {
     const taxable = Math.max(0, r.itemGross + sed - itemDisc);
     const tcs = Math.round(taxable * (parsedTcsPct / 100) * 100) / 100;
     const net = Math.round((taxable + tcs) * 100) / 100;
-    netSum += net;
+    rawNetSum += net;
 
     return {
       ...r,
@@ -439,6 +444,10 @@ export const PurchasesView: React.FC = () => {
       net
     };
   });
+
+  rawNetSum = Math.round(rawNetSum * 100) / 100;
+  const netSum = Math.round(rawNetSum);
+  const roundOffAmt = Math.round((netSum - rawNetSum) * 100) / 100;
 
   const [showPurchasePreview, setShowPurchasePreview] = useState(false);
   const [isSubmittingPurchase, setIsSubmittingPurchase] = useState(false);
@@ -489,6 +498,7 @@ export const PurchasesView: React.FC = () => {
           productId: r.productId,
           qty: r.bottles,
           enteredQty: Number(r.enteredQty),
+          enteredPrice: Number(r.enteredPrice),
           unit: r.unit,
           rate: r.ratePerBottle,
           sedAmt: r.sed,
@@ -738,7 +748,7 @@ export const PurchasesView: React.FC = () => {
                     <th className="py-2.5 px-3">Unit</th>
                     <th className="py-2.5 px-3 w-24">Qty</th>
                     <th className="py-2.5 px-3">Pack</th>
-                    <th className="py-2.5 px-3 w-28">Price / Unit (₹)</th>
+                    <th className="py-2.5 px-3 w-32">Case Price (₹)</th>
                     <th className="py-2.5 px-3 w-24">SED Duty (₹)</th>
                     <th className="py-2.5 px-3 text-right">Gross (₹)</th>
                     <th className="py-2.5 px-3 text-right">Net Payable (₹)</th>
@@ -796,7 +806,7 @@ export const PurchasesView: React.FC = () => {
                           type="number"
                           min="0"
                           step="0.01"
-                          placeholder="Price"
+                          placeholder="Case price"
                           value={r.enteredPrice}
                           onChange={e => {
                             const val = e.target.value;
@@ -804,6 +814,11 @@ export const PurchasesView: React.FC = () => {
                           }}
                           className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-mono font-bold dark:bg-slate-800 dark:text-white dark:border-slate-700"
                         />
+                        {r.productId && r.casePrice > 0 && (
+                          <div className="mt-1 text-[10px] font-mono font-semibold text-slate-500 dark:text-slate-400">
+                            {formatCurrency(r.ratePerBottle)}/btl
+                          </div>
+                        )}
                       </td>
 
                       <td className="py-2 px-3">
@@ -873,7 +888,7 @@ export const PurchasesView: React.FC = () => {
                   Total: <strong>{totalBottles} bottles</strong> across {rows.filter(r => r.productId).length} items
                 </span>
                 <div className="text-[11px] text-slate-500">
-                  Gross: {formatCurrency(grossSum)} · SED: +{formatCurrency(totalSed)} · Disc: -{formatCurrency(parsedDisc)} · TCS: +{formatCurrency(finalRows.reduce((s, r) => s + r.tcs, 0))}
+                  Gross: {formatCurrency(grossSum)} · SED: +{formatCurrency(totalSed)} · Disc: -{formatCurrency(parsedDisc)} · TCS: +{formatCurrency(finalRows.reduce((s, r) => s + r.tcs, 0))} · Round Off: {roundOffAmt >= 0 ? '+' : ''}{formatCurrency(roundOffAmt)}
                 </div>
               </div>
 
@@ -1437,7 +1452,7 @@ export const PurchasesView: React.FC = () => {
                       <div>
                         <div className="font-bold text-slate-900 dark:text-white">{prod?.name || 'Product'} {prod?.sizeML}ml</div>
                         <span className="text-[11px] text-slate-500">
-                          {r.enteredQty} {r.unit.toLowerCase()}(s) = {r.bottles} bottles @ {formatCurrency(r.ratePerBottle)}/btl
+                          {r.enteredQty} {r.unit.toLowerCase()}(s) = {r.bottles} btls · Case {formatCurrency(r.casePrice)} ({formatCurrency(r.ratePerBottle)}/btl)
                         </span>
                       </div>
                       <div className="text-right">
@@ -1458,9 +1473,12 @@ export const PurchasesView: React.FC = () => {
               <div>
                 <span className="text-slate-600 dark:text-slate-400">Total Purchase Volume:</span>
                 <strong className="ml-1 font-mono text-slate-900 dark:text-white">{totalBottles} bottles</strong>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Before Round Off: {formatCurrency(rawNetSum)} · Round Off: {roundOffAmt >= 0 ? '+' : ''}{formatCurrency(roundOffAmt)}
+                </div>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-slate-600 dark:text-slate-400">Total Net Payable:</span>
+                <span className="text-slate-600 dark:text-slate-400">Total Net Payable (Rounded):</span>
                 <span className="font-mono text-lg font-black text-emerald-700 dark:text-emerald-300">
                   {formatCurrency(netSum)}
                 </span>
