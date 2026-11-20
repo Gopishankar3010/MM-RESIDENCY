@@ -90,6 +90,7 @@ interface StockContextType {
   }) => Promise<string>;
   adminEditReport: (reportId: string, data: { recordedAmount: number; reason: string; lines: { productId: string; closing?: number; sold?: number }[] }) => Promise<void>;
   reviewDailySales: (reportId: string, decision: 'APPROVE' | 'REJECT', remark?: string) => Promise<void>;
+  adminDeleteDailySales: (reportId: string, reason?: string) => Promise<void>;
 
   // Daily Operations
   saveDailyOperation: (data: {
@@ -1301,9 +1302,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     }
 
-    // Opening stock comes from last approved report closing
+    // Opening stock comes from last approved report strictly prior to this date
     const lastApproved = dailySales
-      .filter(r => r.counter === counter && r.status === 'Approved')
+      .filter(r => r.counter === counter && r.status === 'Approved' && r.date < date)
       .sort((a, b) => b.date.localeCompare(a.date))[0];
 
     const openingMap = new Map<string, number>();
@@ -1311,36 +1312,44 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lastApproved.lines.forEach(l => openingMap.set(l.productId, l.closing));
     }
 
-    // Movements since last approved cutoff
+    // Movements for this date (only physical stock movements: REQUEST, TRANSFER, DAMAGE)
     const godownInMap = new Map<string, number>();
     const transferInMap = new Map<string, number>();
     const transferOutMap = new Map<string, number>();
     const damageOutMap = new Map<string, number>();
 
-    // Calculate approved movements for today
     ledger.filter(l => l.location === counter && l.businessDate === date).forEach(l => {
       if (l.delta > 0) {
         if (l.refType === 'REQUEST') {
           godownInMap.set(l.productId, (godownInMap.get(l.productId) || 0) + l.delta);
-        } else {
+        } else if (l.refType === 'TRANSFER') {
           transferInMap.set(l.productId, (transferInMap.get(l.productId) || 0) + l.delta);
         }
       } else if (l.delta < 0) {
         if (l.refType === 'DAMAGE') {
           damageOutMap.set(l.productId, (damageOutMap.get(l.productId) || 0) - l.delta);
-        } else if (l.refType !== 'SALE') {
+        } else if (l.refType === 'TRANSFER') {
           transferOutMap.set(l.productId, (transferOutMap.get(l.productId) || 0) - l.delta);
         }
       }
     });
 
+    const counterKey = counter.toLowerCase() as 'normal' | 'ac';
+
     const lines = products.filter(p => p.active).map(p => {
-      const open = openingMap.get(p.productId) || (stock[p.productId]?.[counter.toLowerCase() as 'normal' | 'ac'] || 0);
+      const liveQty = stock[p.productId]?.[counterKey] || 0;
       const gIn = godownInMap.get(p.productId) || 0;
       const tIn = transferInMap.get(p.productId) || 0;
       const tOut = transferOutMap.get(p.productId) || 0;
       const dOut = damageOutMap.get(p.productId) || 0;
-      const avail = Math.max(0, open + gIn + tIn - tOut - dOut);
+
+      const hasPriorClosing = openingMap.has(p.productId);
+      const avail = hasPriorClosing
+        ? Math.max(0, openingMap.get(p.productId)! + gIn + tIn - tOut - dOut)
+        : liveQty;
+      const open = hasPriorClosing
+        ? openingMap.get(p.productId)!
+        : Math.max(0, liveQty - gIn - tIn + tOut + dOut);
 
       return {
         productId: p.productId,
@@ -1639,6 +1648,40 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       decision === 'APPROVE' ? 'APPROVED_SALES' : 'REJECTED_SALES',
       reportId,
       `${report.counter} | ${report.date} | sold ${report.totalSoldQty} btls ${remark ? `(${remark})` : ''}`
+    );
+  };
+
+  const adminDeleteDailySales = async (reportId: string, reason?: string) => {
+    if (currentUser?.role !== 'ADMIN') {
+      throw new Error('Admin permission required to delete a daily sales report.');
+    }
+    const report = dailySales.find(r => r.reportId === reportId);
+    if (!report) {
+      throw new Error('Daily sales report not found.');
+    }
+
+    const isHistoricalOnly = report.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
+
+    if (report.status === 'Approved' && !isHistoricalOnly) {
+      const reverseMoves = report.lines
+        .filter(l => l.sold > 0)
+        .map(l => ({
+          loc: report.counter as StockLocation,
+          productId: l.productId,
+          delta: l.sold
+        }));
+
+      if (reverseMoves.length > 0) {
+        applyMovements(reverseMoves, 'SALES_CORRECTION', reportId, report.date);
+      }
+    }
+
+    setDailySales(prev => prev.filter(r => r.reportId !== reportId));
+
+    addAudit(
+      'ADMIN_SALES_DELETED',
+      reportId,
+      `${report.date} | ${report.counter} | reversed ${report.totalSoldQty} btls (₹${report.totalSalesValue})${reason?.trim() ? ` | Reason: ${reason.trim()}` : ''}`
     );
   };
 
@@ -1946,6 +1989,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         adminCreateHistoricalReport,
         adminEditReport,
         reviewDailySales,
+        adminDeleteDailySales,
 
         saveDailyOperation,
         saveDailyOperationsBatch,

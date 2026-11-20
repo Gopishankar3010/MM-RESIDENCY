@@ -13,7 +13,8 @@ import {
   ArrowRightLeft,
   Receipt,
   Truck,
-  Printer
+  Printer,
+  IndianRupee
 } from 'lucide-react';
 
 export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
@@ -30,12 +31,17 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
 
   const isAdmin = currentUser?.role === 'ADMIN';
 
-  // Total stock units
+  // Total stock units & exact MRP valuation
   const totalGodown = stockItems.reduce((acc, i) => acc + i.godown, 0);
   const totalNormal = stockItems.reduce((acc, i) => acc + i.normal, 0);
   const totalAC = stockItems.reduce((acc, i) => acc + i.ac, 0);
   const totalStockUnits = totalGodown + totalNormal + totalAC;
   const zeroStockProducts = stockItems.filter(i => (i.godown + i.normal + i.ac) === 0).length;
+
+  const godownStockValue = stockItems.reduce((acc, i) => acc + i.godown * i.price, 0);
+  const normalStockValue = stockItems.reduce((acc, i) => acc + i.normal * i.price, 0);
+  const acStockValue = stockItems.reduce((acc, i) => acc + i.ac * i.price, 0);
+  const totalStockValue = godownStockValue + normalStockValue + acStockValue;
 
   // Sales Today (for selected businessDate)
   const approvedToday = dailySales.filter(r => r.date === businessDate && r.status === 'Approved');
@@ -126,16 +132,18 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
           </button>
           <button
             onClick={() => onNavigate('stock')}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition-colors"
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
           >
             View Stock
           </button>
-          <button
-            onClick={() => onNavigate('sales')}
-            className="rounded-lg bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 transition-colors"
-          >
-            Daily Sales
-          </button>
+          {!isAdmin && (
+            <button
+              onClick={() => onNavigate('sales')}
+              className="rounded-lg bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 transition-colors cursor-pointer"
+            >
+              Daily Sales
+            </button>
+          )}
         </div>
       </div>
 
@@ -209,6 +217,83 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
         </div>
       </div>
 
+      {/* Admin Exact Stock Valuation Strip */}
+      {isAdmin && (
+        <div className="print-card rounded-xl border border-amber-200/80 bg-white p-5 shadow-xs dark:border-amber-900/40 dark:bg-slate-900 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                <IndianRupee className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Current Stock Valuation by Location (Exact MRP Worth)
+                </h2>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Exact live stock value held in Godown Central, Normal Counter, and AC Counter
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => onNavigate('stock')}
+              className="no-print text-xs font-bold text-amber-700 hover:text-amber-800 dark:text-amber-400 cursor-pointer self-start sm:self-auto"
+            >
+              Inspect Counter Stock →
+            </button>
+          </div>
+
+          <div className="print-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3.5 dark:border-blue-900/50 dark:bg-blue-950/20">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-blue-800 dark:text-blue-300">
+                Godown Central Worth
+              </span>
+              <div className="mt-1 font-mono text-xl font-black text-blue-950 dark:text-blue-100">
+                {formatCurrency(godownStockValue)}
+              </div>
+              <span className="text-[11px] font-mono text-blue-700 dark:text-blue-400">
+                {totalGodown.toLocaleString('en-IN')} bottles in Godown
+              </span>
+            </div>
+
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5 dark:border-emerald-900/50 dark:bg-emerald-950/20">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+                Normal Counter Worth
+              </span>
+              <div className="mt-1 font-mono text-xl font-black text-emerald-950 dark:text-emerald-100">
+                {formatCurrency(normalStockValue)}
+              </div>
+              <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400">
+                {totalNormal.toLocaleString('en-IN')} bottles at Normal Counter
+              </span>
+            </div>
+
+            <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-3.5 dark:border-purple-900/50 dark:bg-purple-950/20">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-purple-800 dark:text-purple-300">
+                AC Counter Worth
+              </span>
+              <div className="mt-1 font-mono text-xl font-black text-purple-950 dark:text-purple-100">
+                {formatCurrency(acStockValue)}
+              </div>
+              <span className="text-[11px] font-mono text-purple-700 dark:text-purple-400">
+                {totalAC.toLocaleString('en-IN')} bottles at AC Counter
+              </span>
+            </div>
+
+            <div className="rounded-xl border border-amber-300 bg-amber-50/80 p-3.5 dark:border-amber-700/60 dark:bg-amber-950/30">
+              <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-900 dark:text-amber-300">
+                Total Combined Worth
+              </span>
+              <div className="mt-1 font-mono text-xl font-black text-amber-950 dark:text-amber-100">
+                {formatCurrency(totalStockValue)}
+              </div>
+              <span className="text-[11px] font-mono text-amber-800 dark:text-amber-400">
+                {totalStockUnits.toLocaleString('en-IN')} total bottles across bar
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Row 2: Stock Distribution Schematic & Counter Performance */}
       <div className="print-grid grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Stock Distribution */}
@@ -278,20 +363,26 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
           <div className="mt-5 flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center dark:border-slate-800 dark:bg-slate-800/40">
             <div className="flex-1 rounded-lg bg-white p-2.5 shadow-xs dark:bg-slate-900">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Godown</span>
-              <div className="font-mono text-lg font-black text-blue-600 dark:text-blue-400">{totalGodown}</div>
-              <span className="text-[10px] text-slate-500">Central Storage</span>
+              <div className="font-mono text-lg font-black text-blue-600 dark:text-blue-400">{totalGodown.toLocaleString('en-IN')}</div>
+              <span className="text-[10px] text-slate-500">
+                {isAdmin ? formatCurrency(godownStockValue) : 'Central Storage'}
+              </span>
             </div>
             <span className="text-amber-500 font-bold">⇄</span>
             <div className="flex-1 rounded-lg bg-white p-2.5 shadow-xs dark:bg-slate-900">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Normal</span>
-              <div className="font-mono text-lg font-black text-emerald-600 dark:text-emerald-400">{totalNormal}</div>
-              <span className="text-[10px] text-slate-500">Counter Stock</span>
+              <div className="font-mono text-lg font-black text-emerald-600 dark:text-emerald-400">{totalNormal.toLocaleString('en-IN')}</div>
+              <span className="text-[10px] text-slate-500">
+                {isAdmin ? formatCurrency(normalStockValue) : 'Counter Stock'}
+              </span>
             </div>
             <span className="text-amber-500 font-bold">⇄</span>
             <div className="flex-1 rounded-lg bg-white p-2.5 shadow-xs dark:bg-slate-900">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">AC Bar</span>
-              <div className="font-mono text-lg font-black text-purple-600 dark:text-purple-400">{totalAC}</div>
-              <span className="text-[10px] text-slate-500">Lounge Stock</span>
+              <div className="font-mono text-lg font-black text-purple-600 dark:text-purple-400">{totalAC.toLocaleString('en-IN')}</div>
+              <span className="text-[10px] text-slate-500">
+                {isAdmin ? formatCurrency(acStockValue) : 'Lounge Stock'}
+              </span>
             </div>
           </div>
         </div>
@@ -304,10 +395,10 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
               <p className="text-xs text-slate-500 dark:text-slate-400">Daily sales report submission on {businessDate}</p>
             </div>
             <button
-              onClick={() => onNavigate('sales')}
-              className="no-print text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400"
+              onClick={() => onNavigate(isAdmin ? 'closing' : 'sales')}
+              className="no-print text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400 cursor-pointer"
             >
-              Sales Reports →
+              {isAdmin ? 'Consolidated Report →' : 'Sales Reports →'}
             </button>
           </div>
 
@@ -448,16 +539,29 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
 
           {/* Quick buttons */}
           <div className="no-print grid grid-cols-2 gap-2">
-            <button
-              onClick={() => onNavigate('sales')}
-              className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <Receipt className="h-4 w-4 text-emerald-600" />
-                <span>Daily Sales</span>
-              </div>
-              <ArrowRight className="h-3 w-3 text-slate-400" />
-            </button>
+            {isAdmin ? (
+              <button
+                onClick={() => onNavigate('approvals')}
+                className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  <span>Approvals Queue</span>
+                </div>
+                <ArrowRight className="h-3 w-3 text-slate-400" />
+              </button>
+            ) : (
+              <button
+                onClick={() => onNavigate('sales')}
+                className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <Receipt className="h-4 w-4 text-emerald-600" />
+                  <span>Daily Sales</span>
+                </div>
+                <ArrowRight className="h-3 w-3 text-slate-400" />
+              </button>
+            )}
 
             <button
               onClick={() => onNavigate('transfers')}

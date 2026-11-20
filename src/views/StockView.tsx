@@ -53,10 +53,28 @@ export const StockView: React.FC = () => {
       acc.godown += i.godown;
       acc.normal += i.normal;
       acc.ac += i.ac;
+      acc.godownValue += i.godown * i.price;
+      acc.normalValue += i.normal * i.price;
+      acc.acValue += i.ac * i.price;
       return acc;
     },
-    { godown: 0, normal: 0, ac: 0 }
+    { godown: 0, normal: 0, ac: 0, godownValue: 0, normalValue: 0, acValue: 0 }
   );
+
+  const exactValuation = stockItems.reduce(
+    (acc, i) => {
+      acc.godownQty += i.godown;
+      acc.normalQty += i.normal;
+      acc.acQty += i.ac;
+      acc.godownValue += i.godown * i.price;
+      acc.normalValue += i.normal * i.price;
+      acc.acValue += i.ac * i.price;
+      return acc;
+    },
+    { godownQty: 0, normalQty: 0, acQty: 0, godownValue: 0, normalValue: 0, acValue: 0 }
+  );
+  const grandTotalQty = exactValuation.godownQty + exactValuation.normalQty + exactValuation.acQty;
+  const grandTotalValue = exactValuation.godownValue + exactValuation.normalValue + exactValuation.acValue;
 
   const formatQty = (totalQty: number, casePack: number) => {
     const pack = Math.max(1, casePack || 1);
@@ -183,6 +201,59 @@ export const StockView: React.FC = () => {
           <button onClick={() => setStatusMsg(null)} className="text-slate-500 hover:text-slate-800 dark:hover:text-white cursor-pointer">
             <X className="h-3.5 w-3.5" />
           </button>
+        </div>
+      )}
+
+      {/* Admin Exact Stock Valuation Cards */}
+      {isAdmin && (
+        <div className="print-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="print-card rounded-xl border border-blue-200 bg-blue-50/60 p-3.5 shadow-xs dark:border-blue-900/60 dark:bg-blue-950/25">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-800 dark:text-blue-300">
+              Godown Central Stock Worth
+            </span>
+            <div className="mt-1 font-mono text-xl font-black text-blue-950 dark:text-blue-100">
+              {formatCurrency(exactValuation.godownValue)}
+            </div>
+            <div className="text-[11px] font-mono text-blue-700 dark:text-blue-400">
+              {exactValuation.godownQty.toLocaleString('en-IN')} bottles
+            </div>
+          </div>
+
+          <div className="print-card rounded-xl border border-emerald-200 bg-emerald-50/60 p-3.5 shadow-xs dark:border-emerald-900/60 dark:bg-emerald-950/25">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+              Normal Counter Stock Worth
+            </span>
+            <div className="mt-1 font-mono text-xl font-black text-emerald-950 dark:text-emerald-100">
+              {formatCurrency(exactValuation.normalValue)}
+            </div>
+            <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400">
+              {exactValuation.normalQty.toLocaleString('en-IN')} bottles
+            </div>
+          </div>
+
+          <div className="print-card rounded-xl border border-purple-200 bg-purple-50/60 p-3.5 shadow-xs dark:border-purple-900/60 dark:bg-purple-950/25">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-purple-800 dark:text-purple-300">
+              AC Counter Stock Worth
+            </span>
+            <div className="mt-1 font-mono text-xl font-black text-purple-950 dark:text-purple-100">
+              {formatCurrency(exactValuation.acValue)}
+            </div>
+            <div className="text-[11px] font-mono text-purple-700 dark:text-purple-400">
+              {exactValuation.acQty.toLocaleString('en-IN')} bottles
+            </div>
+          </div>
+
+          <div className="print-card rounded-xl border border-amber-300 bg-amber-50/80 p-3.5 shadow-xs dark:border-amber-700/60 dark:bg-amber-950/30">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-900 dark:text-amber-300">
+              Total Combined Stock Worth
+            </span>
+            <div className="mt-1 font-mono text-xl font-black text-amber-950 dark:text-amber-100">
+              {formatCurrency(grandTotalValue)}
+            </div>
+            <div className="text-[11px] font-mono text-amber-800 dark:text-amber-400">
+              {grandTotalQty.toLocaleString('en-IN')} total bottles
+            </div>
+          </div>
         </div>
       )}
 
@@ -354,19 +425,27 @@ export const StockView: React.FC = () => {
             <tfoot>
               <tr className="border-t-2 border-slate-300 bg-slate-100 dark:border-slate-700 dark:bg-slate-800 font-bold text-slate-900 dark:text-white">
                 <td colSpan={4} className="py-3 px-4 text-right uppercase text-[11px] tracking-wider">
-                  Total Bottles Across {filtered.length} Products:
+                  Total Across {filtered.length} Products:
                 </td>
                 <td className="py-3 px-4 font-mono text-blue-700 dark:text-blue-400">
-                  {totals.godown} bottles
+                  <div>{totals.godown.toLocaleString('en-IN')} bottles</div>
+                  {isAdmin && <div className="text-[11px] font-extrabold">{formatCurrency(totals.godownValue)}</div>}
                 </td>
                 <td className="py-3 px-4 font-mono text-emerald-700 dark:text-emerald-400">
-                  {totals.normal} bottles
+                  <div>{totals.normal.toLocaleString('en-IN')} bottles</div>
+                  {isAdmin && <div className="text-[11px] font-extrabold">{formatCurrency(totals.normalValue)}</div>}
                 </td>
                 <td className="py-3 px-4 font-mono text-purple-700 dark:text-purple-400">
-                  {totals.ac} bottles
+                  <div>{totals.ac.toLocaleString('en-IN')} bottles</div>
+                  {isAdmin && <div className="text-[11px] font-extrabold">{formatCurrency(totals.acValue)}</div>}
                 </td>
                 <td className="py-3 px-4 text-right font-mono text-amber-700 dark:text-amber-400">
-                  Total: {totals.godown + totals.normal + totals.ac} btls
+                  <div>{(totals.godown + totals.normal + totals.ac).toLocaleString('en-IN')} btls</div>
+                  {isAdmin && (
+                    <div className="text-[11px] font-extrabold">
+                      {formatCurrency(totals.godownValue + totals.normalValue + totals.acValue)}
+                    </div>
+                  )}
                 </td>
                 {isAdmin && <td className="no-print py-3 px-4" />}
               </tr>

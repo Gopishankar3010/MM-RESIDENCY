@@ -10,12 +10,16 @@ import {
   Filter,
   ArrowDownToLine,
   CheckCircle2,
-  Clock
+  Clock,
+  Trash2,
+  Eye,
+  X,
+  AlertTriangle
 } from 'lucide-react';
-import { CounterLocation } from '../types';
+import { CounterLocation, DailySalesReport } from '../types';
 
 export const ConsolidatedReportView: React.FC = () => {
-  const { currentUser, businessDate, dailySales, operations, purchases } = useStock();
+  const { currentUser, businessDate, dailySales, operations, purchases, adminDeleteDailySales } = useStock();
 
   const isAdmin = currentUser?.role === 'ADMIN';
   const isAcUser = currentUser?.counter === 'AC' || currentUser?.role === 'AC';
@@ -33,6 +37,37 @@ export const ConsolidatedReportView: React.FC = () => {
 
   // Admin counter filter for Consolidated view
   const [adminCounterFilter, setAdminCounterFilter] = useState<'ALL' | 'NORMAL' | 'AC'>('ALL');
+
+  // Admin inspect & delete daily sales report states
+  const [inspectingReport, setInspectingReport] = useState<DailySalesReport | null>(null);
+  const [deleteConfirmReport, setDeleteConfirmReport] = useState<DailySalesReport | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deletingReport, setDeletingReport] = useState(false);
+  const [actionStatus, setActionStatus] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+  const handleConfirmDeleteReport = async () => {
+    if (!deleteConfirmReport) return;
+    try {
+      setDeletingReport(true);
+      setActionStatus(null);
+      const target = deleteConfirmReport;
+      await adminDeleteDailySales(target.reportId, deleteReason);
+      const isHistorical = target.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
+      setActionStatus({
+        type: 'ok',
+        text: `Deleted ${target.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} daily sales report (${target.reportId}) for ${target.date}.${!isHistorical && target.totalSoldQty > 0 ? ` Restored ${target.totalSoldQty} sold bottles back to ${target.counter} stock.` : ''} Counter staff can now re-enter and submit ${target.date} sales.`
+      });
+      setDeleteConfirmReport(null);
+      setDeleteReason('');
+      if (inspectingReport?.reportId === target.reportId) {
+        setInspectingReport(null);
+      }
+    } catch (err: any) {
+      setActionStatus({ type: 'err', text: err?.message || 'Failed to delete daily sales report.' });
+    } finally {
+      setDeletingReport(false);
+    }
+  };
 
   const formatCurrency = (val: number) =>
     '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -543,6 +578,33 @@ export const ConsolidatedReportView: React.FC = () => {
         </div>
       </div>
 
+      {/* Admin Action Feedback Banner */}
+      {actionStatus && (
+        <div
+          className={`no-print flex items-center justify-between gap-3 rounded-xl border p-3.5 text-xs font-semibold ${
+            actionStatus.type === 'ok'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+              : 'border-red-200 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {actionStatus.type === 'ok' ? (
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+            )}
+            <span>{actionStatus.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionStatus(null)}
+            className="text-slate-500 hover:text-slate-800 dark:hover:text-white cursor-pointer"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* ======================================================== */}
       {/* VIEW MODE 1: DAILY CLOSING TAB                           */}
       {/* ======================================================== */}
@@ -899,6 +961,7 @@ export const ConsolidatedReportView: React.FC = () => {
                     <th className="py-3 px-4 bg-emerald-50/40 dark:bg-emerald-950/20 font-bold">Total Received</th>
                     <th className="py-3 px-4">Difference</th>
                     <th className="py-3 px-4">Status</th>
+                    {isAdmin && <th className="no-print py-3 px-4 text-right">Manage Report</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -933,6 +996,35 @@ export const ConsolidatedReportView: React.FC = () => {
                           {normalSale ? normalSale.status : 'No Report'}
                         </span>
                       </td>
+                      {isAdmin && (
+                        <td className="no-print py-3 px-4 text-right">
+                          {normalSale ? (
+                            <div className="inline-flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setInspectingReport(normalSale)}
+                                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+                              >
+                                <Eye className="h-3 w-3" />
+                                <span>Inspect</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDeleteReason('');
+                                  setDeleteConfirmReport(normalSale);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 cursor-pointer"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                <span>Delete</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">—</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   )}
 
@@ -969,6 +1061,35 @@ export const ConsolidatedReportView: React.FC = () => {
                           {acSale ? acSale.status : 'No Report'}
                         </span>
                       </td>
+                      {isAdmin && (
+                        <td className="no-print py-3 px-4 text-right">
+                          {acSale ? (
+                            <div className="inline-flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setInspectingReport(acSale)}
+                                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+                              >
+                                <Eye className="h-3 w-3" />
+                                <span>Inspect</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDeleteReason('');
+                                  setDeleteConfirmReport(acSale);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 cursor-pointer"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                <span>Delete</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">—</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   )}
                 </tbody>
@@ -987,12 +1108,118 @@ export const ConsolidatedReportView: React.FC = () => {
                       </td>
                       <td className="py-3 px-4 font-mono">{formatCurrency(normalDiff + acDiff)}</td>
                       <td className="py-3 px-4 text-slate-500 text-[10px]">Verified</td>
+                      {isAdmin && <td className="no-print py-3 px-4" />}
                     </tr>
                   </tfoot>
                 )}
               </table>
             </div>
           </div>
+
+          {/* Admin Submitted Daily Sales Manager (Recent / All Submitted Reports) */}
+          {isAdmin && (
+            <div className="no-print rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Submitted Counter Daily Sales Reports ({dailySales.length})
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Counter reports auto-approve on submission. If a counter staff entered wrong counts, delete that day&apos;s report here to restore stock and allow re-entry.
+                  </p>
+                </div>
+              </div>
+
+              {dailySales.length > 0 ? (
+                <div className="overflow-x-auto max-h-72">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800 font-bold uppercase text-[10px] text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+                      <tr>
+                        <th className="py-2 px-3">Date</th>
+                        <th className="py-2 px-3">Counter</th>
+                        <th className="py-2 px-3">Report ID</th>
+                        <th className="py-2 px-3">Staff (Cashier / Helper)</th>
+                        <th className="py-2 px-3 text-right">Sold</th>
+                        <th className="py-2 px-3 text-right">Sales Value</th>
+                        <th className="py-2 px-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {[...dailySales]
+                        .sort((a, b) => b.date.localeCompare(a.date) || b.submittedAt.localeCompare(a.submittedAt))
+                        .map(rep => (
+                          <tr
+                            key={rep.reportId}
+                            className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 ${
+                              rep.date === selectedDate ? 'bg-amber-50/40 dark:bg-amber-950/15' : ''
+                            }`}
+                          >
+                            <td className="py-2.5 px-3 font-mono font-bold text-slate-900 dark:text-white">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedDate(rep.date)}
+                                className="hover:underline cursor-pointer"
+                                title="View this date in Daily Closing"
+                              >
+                                {rep.date}
+                              </button>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                  rep.counter === 'NORMAL'
+                                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                    : 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300'
+                                }`}
+                              >
+                                {rep.counter === 'NORMAL' ? 'Normal' : 'AC'}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-slate-500">{rep.reportId}</td>
+                            <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                              {rep.cashierName || '—'} / {rep.helperName || '—'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
+                              {rep.totalSoldQty} btls
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                              {formatCurrency(rep.totalSalesValue)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setInspectingReport(rep)}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+                                >
+                                  <Eye className="h-3 w-3" />
+                                  <span>Inspect</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDeleteReason('');
+                                    setDeleteConfirmReport(rep);
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 cursor-pointer"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                  <span>Delete</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 py-3 text-center">
+                  No daily sales reports have been submitted yet.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* LODGING AND OPERATING OUTFLOWS (REMOVED FROM AC COUNTER AS REQUESTED) */}
           {!isAcUser && activeCounterView !== 'AC' && (
@@ -1572,6 +1799,145 @@ export const ConsolidatedReportView: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Inspect Submitted Daily Sales Report Modal */}
+      {isAdmin && inspectingReport && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5 dark:border-slate-800">
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-600 dark:text-amber-400">
+                  {inspectingReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} · {inspectingReport.reportId}
+                </span>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Daily Sales Inspection — {inspectingReport.date}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Cashier: {inspectingReport.cashierName || '—'} · Helper: {inspectingReport.helperName || '—'} · Sold: {inspectingReport.totalSoldQty} btls · Value: {formatCurrency(inspectingReport.totalSalesValue)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectingReport(null)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 dark:bg-slate-800 font-bold uppercase text-[10px] text-slate-500 border-b border-slate-200 dark:border-slate-700">
+                  <tr>
+                    <th className="py-2 px-3">Product</th>
+                    <th className="py-2 px-3 text-right">Avail</th>
+                    <th className="py-2 px-3 text-right">Closing</th>
+                    <th className="py-2 px-3 text-right">Sold</th>
+                    <th className="py-2 px-3 text-right">MRP</th>
+                    <th className="py-2 px-3 text-right">Value</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {inspectingReport.lines.filter(l => l.sold > 0 || l.available > 0).map(l => (
+                    <tr key={l.lineId}>
+                      <td className="py-2 px-3 font-semibold text-slate-900 dark:text-white">{l.name}</td>
+                      <td className="py-2 px-3 text-right font-mono">{l.available}</td>
+                      <td className="py-2 px-3 text-right font-mono">{l.closing}</td>
+                      <td className="py-2 px-3 text-right font-mono font-bold text-blue-600 dark:text-blue-400">{l.sold}</td>
+                      <td className="py-2 px-3 text-right font-mono">{formatCurrency(l.price)}</td>
+                      <td className="py-2 px-3 text-right font-mono font-bold">{formatCurrency(l.value)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 border-t border-slate-200 p-4 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteReason('');
+                  setDeleteConfirmReport(inspectingReport);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-red-700 cursor-pointer"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Delete Report &amp; Allow Re-entry</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setInspectingReport(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Daily Sales Confirmation Modal */}
+      {isAdmin && deleteConfirmReport && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-6 shadow-2xl dark:border-red-900/60 dark:bg-slate-900 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-400">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Delete Daily Sales Report?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  <strong>{deleteConfirmReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}</strong> · Date: <strong className="font-mono">{deleteConfirmReport.date}</strong> ({deleteConfirmReport.reportId})
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200 space-y-1">
+              <div>
+                • Sold Stock: <strong>{deleteConfirmReport.totalSoldQty} bottles</strong> ({formatCurrency(deleteConfirmReport.totalSalesValue)})
+              </div>
+              <div>
+                • Deleting this report will restore the sold bottles back to <strong>{deleteConfirmReport.counter}</strong> stock and unlock <strong>{deleteConfirmReport.date}</strong> so counter staff can submit the corrected report again.
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Reason for Deletion (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Wrong closing stock entered by counter staff"
+                value={deleteReason}
+                onChange={e => setDeleteReason(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 p-2 text-xs outline-none focus:border-red-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmReport(null)}
+                disabled={deletingReport}
+                className="rounded-lg border border-slate-300 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteReport}
+                disabled={deletingReport}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>{deletingReport ? 'Deleting...' : 'Confirm Delete & Restore Stock'}</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

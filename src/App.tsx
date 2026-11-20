@@ -34,6 +34,7 @@ const MainLayout: React.FC = () => {
     return <LoginView />;
   }
 
+  const isAdmin = currentUser?.role === 'ADMIN';
   const isAcUser = currentUser?.counter === 'AC' || currentUser?.role === 'AC';
 
   const renderActiveView = () => {
@@ -43,7 +44,7 @@ const MainLayout: React.FC = () => {
       case 'stock':
         return <StockView />;
       case 'sales':
-        return <DailySalesView />;
+        return isAdmin ? <DashboardView onNavigate={(tab) => setCurrentTab(tab)} /> : <DailySalesView />;
       case 'transfers':
         return <TransfersView />;
       case 'requests':
@@ -57,7 +58,7 @@ const MainLayout: React.FC = () => {
       case 'closing':
         return <ConsolidatedReportView />;
       case 'approvals':
-        return <ApprovalsView onNavigateToSales={() => setCurrentTab('sales')} />;
+        return <ApprovalsView onNavigateToSales={() => setCurrentTab(isAdmin ? 'closing' : 'sales')} />;
       case 'purchases':
         return <PurchasesView />;
       case 'products':

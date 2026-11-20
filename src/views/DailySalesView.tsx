@@ -43,25 +43,29 @@ export const DailySalesView: React.FC = () => {
     setReportDate(businessDate);
   }, [businessDate]);
 
-  // Identify past dates with missing daily sales reports for this counter (only from shop opening day onwards)
-  const missingPastDates = useMemo(() => {
-    if (isAdmin) return [];
-    const missed: string[] = [];
+  // Recent past dates (last 5 days prior to today) for entering or updating previous days' sales
+  const recentPastDates = useMemo(() => {
+    const dates: { date: string; normalDone: boolean; acDone: boolean }[] = [];
     const today = new Date();
-    const openingDate = '2026-11-20';
+    const pad = (n: number) => ('0' + n).slice(-2);
     for (let i = 1; i <= 5; i++) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
-      const pad = (n: number) => ('0' + n).slice(-2);
       const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-      if (dateStr < openingDate) continue;
-      const hasReport = dailySales.some(r => r.counter === counter && r.date === dateStr && r.status !== 'Rejected');
-      if (!hasReport) {
-        missed.push(dateStr);
-      }
+      const normalDone = dailySales.some(r => r.counter === 'NORMAL' && r.date === dateStr && r.status !== 'Rejected');
+      const acDone = dailySales.some(r => r.counter === 'AC' && r.date === dateStr && r.status !== 'Rejected');
+      dates.push({ date: dateStr, normalDone, acDone });
     }
-    return missed;
-  }, [dailySales, counter, isAdmin]);
+    return dates;
+  }, [dailySales]);
+
+  // Identify past dates with missing daily sales reports for this counter (last 5 days)
+  const missingPastDates = useMemo(() => {
+    if (isAdmin) return [];
+    return recentPastDates
+      .filter(d => (counter === 'NORMAL' ? !d.normalDone : !d.acDone))
+      .map(d => d.date);
+  }, [recentPastDates, counter, isAdmin]);
 
   // State for counter submission form
   const [closingInputs, setClosingInputs] = useState<Record<string, string>>({});
@@ -91,6 +95,8 @@ export const DailySalesView: React.FC = () => {
   const [histReason, setHistReason] = useState('');
   const [histReceived, setHistReceived] = useState('0');
   const [histSoldMap, setHistSoldMap] = useState<Record<string, number>>({});
+  const [histSearch, setHistSearch] = useState('');
+  const [histError, setHistError] = useState<string | null>(null);
 
   // Share text modal
   const [shareText, setShareText] = useState<string | null>(null);
@@ -305,9 +311,12 @@ export const DailySalesView: React.FC = () => {
           {isAdmin && (
             <button
               onClick={() => {
+                setHistDate(recentPastDates[0]?.date || businessDate);
                 setHistSoldMap({});
                 setHistReason('');
                 setHistReceived('0');
+                setHistSearch('');
+                setHistError(null);
                 setShowHistoricalModal(true);
               }}
               className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 transition-colors cursor-pointer"
@@ -328,6 +337,83 @@ export const DailySalesView: React.FC = () => {
           }`}
         >
           {statusMessage.text}
+        </div>
+      )}
+
+      {/* ADMIN WORKSPACE: Recent Past Dates Quick-Entry Strip */}
+      {isAdmin && recentPastDates.length > 0 && (
+        <div className="no-print rounded-2xl border border-amber-300/80 bg-gradient-to-r from-amber-50 via-white to-amber-50 p-4 text-xs text-amber-950 dark:border-amber-700/60 dark:from-amber-950/40 dark:via-slate-900 dark:to-amber-950/20 dark:text-amber-200 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-start gap-2.5">
+              <History className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="block text-sm font-bold text-amber-900 dark:text-amber-300">
+                  Update Previous Days' Sales (Last 5 Days)
+                </strong>
+                <span className="text-slate-600 dark:text-slate-400">
+                  Pick any recent past date below to enter missing Normal Counter or AC Counter sales without altering today's opening stock:
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            {recentPastDates.map(({ date, normalDone, acDone }) => (
+              <div
+                key={date}
+                className="rounded-xl border border-amber-200/80 bg-white/90 p-2.5 dark:border-slate-700 dark:bg-slate-800/80 space-y-2"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs font-bold text-slate-900 dark:text-white">{date}</span>
+                  <span className="text-[10px] font-semibold text-slate-500">
+                    {normalDone && acDone ? '✓ Both' : 'Missing'}
+                  </span>
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHistDate(date);
+                      setHistCounter('NORMAL');
+                      setHistSoldMap({});
+                      setHistReason('');
+                      setHistReceived('0');
+                      setHistSearch('');
+                      setHistError(null);
+                      setShowHistoricalModal(true);
+                    }}
+                    className={`flex-1 rounded-lg px-2 py-1 text-[10px] font-bold transition-colors cursor-pointer ${
+                      normalDone
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                        : 'bg-amber-500 text-slate-950 hover:bg-amber-400'
+                    }`}
+                  >
+                    {normalDone ? '✓ Normal' : '+ Normal'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHistDate(date);
+                      setHistCounter('AC');
+                      setHistSoldMap({});
+                      setHistReason('');
+                      setHistReceived('0');
+                      setHistSearch('');
+                      setHistError(null);
+                      setShowHistoricalModal(true);
+                    }}
+                    className={`flex-1 rounded-lg px-2 py-1 text-[10px] font-bold transition-colors cursor-pointer ${
+                      acDone
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                        : 'bg-purple-600 text-white hover:bg-purple-500'
+                    }`}
+                  >
+                    {acDone ? '✓ AC' : '+ AC'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -426,6 +512,15 @@ export const DailySalesView: React.FC = () => {
                       className="rounded-xl border border-amber-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 shadow-xs cursor-pointer"
                       title="Select date you are recording closing stock for"
                     />
+                    {reportDate !== todayISO && (
+                      <button
+                        type="button"
+                        onClick={() => setReportDate(todayISO)}
+                        className="rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 cursor-pointer"
+                      >
+                        Back to Today ({todayISO})
+                      </button>
+                    )}
                     <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300">
                       {counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}
                     </span>
@@ -1062,7 +1157,32 @@ export const DailySalesView: React.FC = () => {
                   Adds missing historical revenue data without mutating current physical stock balances.
                 </p>
               </div>
-              <button onClick={() => setShowHistoricalModal(false)} className="text-slate-400">✕</button>
+              <button onClick={() => setShowHistoricalModal(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">✕</button>
+            </div>
+
+            {histError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs font-semibold text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
+                {histError}
+              </div>
+            )}
+
+            {/* Quick Recent Dates Picker inside Modal */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mr-1">Last 5 Days:</span>
+              {recentPastDates.map(({ date }) => (
+                <button
+                  key={date}
+                  type="button"
+                  onClick={() => setHistDate(date)}
+                  className={`rounded-lg px-2.5 py-1 font-mono text-[11px] font-bold transition-colors cursor-pointer ${
+                    histDate === date
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  {date}
+                </button>
+              ))}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -1070,6 +1190,7 @@ export const DailySalesView: React.FC = () => {
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Date</label>
                 <input
                   type="date"
+                  max={todayISO}
                   value={histDate}
                   onChange={e => setHistDate(e.target.value)}
                   className="w-full rounded-lg border p-2 text-xs dark:bg-slate-800 dark:text-white dark:border-slate-700"
@@ -1088,43 +1209,61 @@ export const DailySalesView: React.FC = () => {
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Amount Received (₹)
-              </label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={histReceived}
-                onChange={e => setHistReceived(e.target.value)}
-                className="w-full rounded-lg border p-2 text-xs dark:bg-slate-800 dark:text-white dark:border-slate-700"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Amount Received (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={histReceived}
+                  onChange={e => setHistReceived(e.target.value)}
+                  className="w-full rounded-lg border p-2 text-xs dark:bg-slate-800 dark:text-white dark:border-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Reason / Reference *
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Backdated register entry from manual sales log"
+                  value={histReason}
+                  onChange={e => setHistReason(e.target.value)}
+                  className="w-full rounded-lg border p-2 text-xs dark:bg-slate-800 dark:text-white dark:border-slate-700"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Reason / Reference *
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Backdated register entry from manual sales log"
-                value={histReason}
-                onChange={e => setHistReason(e.target.value)}
-                className="w-full rounded-lg border p-2 text-xs dark:bg-slate-800 dark:text-white dark:border-slate-700"
-              />
-            </div>
-
-            <div className="border rounded-xl p-3 dark:border-slate-800">
-              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 mb-2 block">
-                Enter Sold Quantities for Each Product:
-              </span>
+            <div className="border rounded-xl p-3 dark:border-slate-800 space-y-2.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Enter Sold Quantities for Each Product
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search product name or size..."
+                  value={histSearch}
+                  onChange={e => setHistSearch(e.target.value)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-900 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                />
+              </div>
               <div className="max-h-60 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-                {products.filter(p => p.active).map(p => (
+                {sortProductsCategoryWise(
+                  products.filter(p => {
+                    if (!p.active) return false;
+                    const q = histSearch.trim().toLowerCase();
+                    if (!q) return true;
+                    return `${p.name} ${p.category} ${p.sizeML}`.toLowerCase().includes(q);
+                  })
+                ).map(p => (
                   <div key={p.productId} className="py-2 flex items-center justify-between gap-3">
                     <div>
                       <div className="font-bold text-slate-900 dark:text-white">{p.name} {p.sizeML}ml</div>
-                      <span className="text-slate-500">{formatCurrency(p.sellingPrice)}</span>
+                      <span className="text-slate-500">{p.category} · {formatCurrency(p.sellingPrice)}</span>
                     </div>
                     <input
                       type="number"
@@ -1140,18 +1279,32 @@ export const DailySalesView: React.FC = () => {
                   </div>
                 ))}
               </div>
+              <div className="flex items-center justify-between border-t pt-2 text-xs dark:border-slate-800">
+                <span className="text-slate-500">
+                  Calculated Total:{' '}
+                  <strong className="font-mono text-emerald-600 dark:text-emerald-400">
+                    {formatCurrency(
+                      products.reduce((sum, p) => sum + (histSoldMap[p.productId] || 0) * (p.sellingPrice || 0), 0)
+                    )}
+                  </strong>
+                </span>
+                <span className="font-mono text-slate-600 dark:text-slate-300">
+                  {Object.values(histSoldMap).reduce((s, v) => s + (v || 0), 0)} btls
+                </span>
+              </div>
             </div>
 
             <div className="flex justify-end gap-2 pt-3 border-t dark:border-slate-800">
               <button
                 onClick={() => setShowHistoricalModal(false)}
-                className="rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700"
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700 cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={async () => {
                   try {
+                    setHistError(null);
                     if (!histReason.trim()) throw new Error('Enter a reason for the historical entry.');
                     const lines = Object.entries(histSoldMap)
                       .filter(([_, sold]) => sold > 0)
@@ -1167,12 +1320,16 @@ export const DailySalesView: React.FC = () => {
                       lines
                     });
 
+                    setStatusMessage({
+                      type: 'ok',
+                      text: `Historical sales entry created for ${histDate} (${histCounter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}).`
+                    });
                     setShowHistoricalModal(false);
                   } catch (e: any) {
-                    alert(e.message);
+                    setHistError(e.message || 'Failed to create historical sales entry.');
                   }
                 }}
-                className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
+                className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
               >
                 Create Entry
               </button>

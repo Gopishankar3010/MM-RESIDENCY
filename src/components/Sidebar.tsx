@@ -35,7 +35,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
   const adminNav: NavItem[] = [
     { id: 'dashboard', label: 'Home Dashboard', icon: LayoutDashboard },
     { id: 'stock', label: 'Current Stock', icon: Boxes },
-    { id: 'sales', label: 'Daily Sales', icon: Receipt },
     { id: 'transfers', label: 'Transfer to Counter', icon: ArrowRightLeft },
     { id: 'requests', label: 'Stock Requests', icon: ArrowRightLeft },
     { id: 'expenses', label: 'Expense & Wages', icon: Wallet },
