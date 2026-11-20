@@ -36,6 +36,20 @@ if (fs.existsSync(DATA_FILE)) {
   }
 }
 
+// Connected SSE clients for instant cross-device notifications
+const sseClients = new Set<express.Response>();
+
+function broadcastSSE(event: string, data: any) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(payload);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
 // Enable CORS for API routes
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -45,6 +59,32 @@ app.use((req, res, next) => {
     return res.sendStatus(200);
   }
   next();
+});
+
+// GET /api/events - Real-time SSE stream for multi-device sync & admin request alerts
+app.get('/api/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  res.write(`event: connected\ndata: ${JSON.stringify({ version: cachedState?._version || 0, serverTime: new Date().toISOString() })}\n\n`);
+  sseClients.add(res);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': keepalive\n\n');
+    } catch {
+      clearInterval(heartbeat);
+      sseClients.delete(res);
+    }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseClients.delete(res);
+  });
 });
 
 // GET /api/state - Return synchronized state to any device
@@ -73,8 +113,18 @@ app.post('/api/state', (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid state payload' });
     }
 
+    const prevPendingIds = new Set<string>(
+      Array.isArray(cachedState?.requests)
+        ? cachedState.requests.filter((r: any) => r?.status === 'Pending').map((r: any) => String(r.requestId))
+        : []
+    );
+
     const version = (cachedState?._version || 0) + 1;
     const updatedAt = new Date().toISOString();
+
+    const newPendingRequests = Array.isArray(incoming.requests)
+      ? incoming.requests.filter((r: any) => r?.status === 'Pending' && !prevPendingIds.has(String(r.requestId)))
+      : [];
 
     cachedState = {
       ...incoming,
@@ -88,6 +138,16 @@ app.post('/api/state', (req, res) => {
         console.error('[Store] Error persisting state to file:', err);
       }
     });
+
+    broadcastSSE('state_updated', { version, updatedAt });
+    if (newPendingRequests.length > 0) {
+      broadcastSSE('new_request', {
+        version,
+        updatedAt,
+        count: newPendingRequests.length,
+        requests: newPendingRequests
+      });
+    }
 
     return res.json({
       success: true,

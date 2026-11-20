@@ -27,10 +27,25 @@ interface StockContextType {
   dropdownOptions: DropdownOption[];
   pendingCount: number;
 
-  // Cloud & Multi-Device Sync
+  // Cloud & Multi-Device Sync & Admin Request Notifications
   syncStatus: 'synced' | 'syncing' | 'offline';
   lastSyncTime: string;
   triggerManualSync: () => Promise<void>;
+  pendingRequests: StockRequestItem[];
+  latestRequestAlert: {
+    id: string;
+    counter: string;
+    itemCount: number;
+    totalBottles: number;
+    reason: string;
+    createdAt: string;
+    productNames: string[];
+  } | null;
+  dismissRequestAlert: () => void;
+  soundEnabled: boolean;
+  toggleSoundAlerts: () => void;
+  browserNotifStatus: 'default' | 'granted' | 'denied' | 'unsupported';
+  requestBrowserNotifPermission: () => Promise<'default' | 'granted' | 'denied' | 'unsupported'>;
 
   // Actions
   login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
@@ -40,8 +55,9 @@ interface StockContextType {
   toggleTheme: () => void;
   changePassword: (oldPw: string, newPw: string) => Promise<void>;
 
-  // Products
+  // Products & Stock Adjustments
   saveProduct: (p: Partial<Product> & { name: string; category: string; sizeML: number; casePack: number; sellingPrice: number }) => Promise<string>;
+  adminAdjustStock: (data: { productId: string; godown: number; normal: number; ac: number; reason?: string }) => Promise<void>;
 
   // Purchases
   submitPurchaseBatch: (batch: {
@@ -99,7 +115,41 @@ interface StockContextType {
 }
 
 const STORAGE_KEY = 'mm_residency_stock_v2_store';
-const CATALOG_VERSION = '2026-10-18-v2';
+const CATALOG_VERSION = '2026-11-20-opening-v1';
+const OPENING_EPOCH = '2026-11-20-opening-v1';
+
+function buildInitialStockMap(): Record<string, { godown: number; normal: number; ac: number }> {
+  const base: Record<string, { godown: number; normal: number; ac: number }> = {};
+  INITIAL_PRODUCTS.forEach(p => {
+    const s = INITIAL_STOCK[p.productId];
+    base[p.productId] = s ? { ...s } : { godown: 0, normal: 0, ac: 0 };
+  });
+  return base;
+}
+
+function ensureOpeningEpochReset(): void {
+  try {
+    const curEpoch = localStorage.getItem(STORAGE_KEY + '_opening_epoch');
+    if (curEpoch !== OPENING_EPOCH) {
+      [
+        '_products',
+        '_stock',
+        '_purchases',
+        '_requests',
+        '_transfers',
+        '_daily_sales',
+        '_operations',
+        '_ledger',
+        '_audit'
+      ].forEach(suffix => localStorage.removeItem(STORAGE_KEY + suffix));
+      localStorage.setItem(STORAGE_KEY + '_opening_epoch', OPENING_EPOCH);
+      localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
+      localStorage.setItem('mm_business_date', getTodayISO());
+    }
+  } catch {
+    // Ignore storage access issues
+  }
+}
 
 const LEGACY_NAME_ALIASES: Record<string, string> = {
   'MORPHEUSXOBRANDY|750': 'MORPHEUSXOBDY|750',
@@ -179,6 +229,8 @@ function getNowTimestamp(): string {
 const StockContext = createContext<StockContextType | undefined>(undefined);
 
 export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  ensureOpeningEpochReset();
+
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
       const saved = localStorage.getItem('mm_user');
@@ -227,7 +279,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const [stock, setStock] = useState<Record<string, { godown: number; normal: number; ac: number }>>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_stock');
-    const base = raw ? JSON.parse(raw) : { ...INITIAL_STOCK };
+    const base = raw ? JSON.parse(raw) : buildInitialStockMap();
     INITIAL_PRODUCTS.forEach(p => {
       if (!base[p.productId]) {
         base[p.productId] = { godown: 0, normal: 0, ac: 0 };
@@ -238,119 +290,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const [purchases, setPurchases] = useState<PurchaseBatch[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_purchases');
-    if (raw) return JSON.parse(raw);
-    // Seed initial historical purchase
-    const today = getTodayISO();
-    return [
-      {
-        batchId: 'PBT-000001',
-        supplier: 'United Spirits Ltd (Diageo)',
-        date: today,
-        billDate: today,
-        invoiceNo: 'INV/2026/USL-4481',
-        permitNumber: 'PRM-TN-2026-9921',
-        documentNumber: 'DOC-90112',
-        status: 'Approved',
-        lines: [
-          {
-            id: 'PUR-000001',
-            productId: 'PRD-000010',
-            productName: 'Mansion House French Bdy 750ml',
-            casePack: 12,
-            qty: 24,
-            enteredQty: 2,
-            unit: 'CASE',
-            rate: 680,
-            sedAmt: 240,
-            discountAmt: 200,
-            tcsPct: 2,
-            grossAmount: 16560,
-            netAmount: 16687.2
-          },
-          {
-            id: 'PRD-000002',
-            productId: 'PRD-000018',
-            productName: 'Blenders Pride Whisky 750ml',
-            casePack: 12,
-            qty: 24,
-            enteredQty: 2,
-            unit: 'CASE',
-            rate: 820,
-            sedAmt: 300,
-            discountAmt: 300,
-            tcsPct: 2,
-            grossAmount: 19980,
-            netAmount: 20073.6
-          }
-        ],
-        totalQty: 48,
-        grossTotal: 36540,
-        sedTotal: 540,
-        discountTotal: 500,
-        tcsTotal: 720.8,
-        netTotal: 36760.8,
-        createdBy: 'admin',
-        createdAt: today + ' 10:15:00',
-        reviewedBy: 'admin',
-        reviewedAt: today + ' 10:20:00',
-        remark: 'Initial godown intake approved'
-      }
-    ];
+    return raw ? JSON.parse(raw) : [];
   });
 
   const [requests, setRequests] = useState<StockRequestItem[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_requests');
-    if (raw) return JSON.parse(raw);
-    const today = getTodayISO();
-    return [
-      {
-        requestId: 'REQ-000001',
-        counter: 'NORMAL',
-        productId: 'PRD-000001',
-        productName: 'Kingfisher Strong Beer 650ml',
-        category: 'Beer',
-        sizeML: 650,
-        casePack: 12,
-        qty: 12,
-        enteredQty: 1,
-        unit: 'CASE',
-        reason: 'Restock for evening counter peak',
-        status: 'Approved',
-        date: today,
-        createdBy: 'normal',
-        createdAt: today + ' 11:30:00',
-        reviewedBy: 'admin',
-        reviewedAt: today + ' 11:45:00',
-        remark: 'Approved by admin'
-      }
-    ];
+    return raw ? JSON.parse(raw) : [];
   });
 
   const [transfers, setTransfers] = useState<StockTransfer[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_transfers');
-    if (raw) return JSON.parse(raw);
-    const today = getTodayISO();
-    return [
-      {
-        transferId: 'TRF-000001',
-        type: 'COUNTER_TO_COUNTER',
-        fromLoc: 'NORMAL',
-        toLoc: 'AC',
-        productId: 'PRD-000004',
-        productName: 'Budweiser Magnum Beer 650ml',
-        casePack: 12,
-        qty: 6,
-        enteredQty: 6,
-        unit: 'BOTTLE',
-        note: 'AC counter guest request',
-        status: 'Approved',
-        createdBy: 'normal',
-        createdAt: today + ' 12:00:00',
-        reviewedBy: 'AUTO',
-        reviewedAt: today + ' 12:00:00',
-        remark: 'Auto-approved (counter to counter)'
-      }
-    ];
+    return raw ? JSON.parse(raw) : [];
   });
 
   const [dailySales, setDailySales] = useState<DailySalesReport[]>(() => {
@@ -358,199 +308,27 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (raw) {
       try {
         const parsed = JSON.parse(raw);
-        // Auto-approve any pending sales reports per user requirement
         return parsed.map((r: any) => r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r);
       } catch {
         // Fallback
       }
     }
-    const today = getTodayISO();
-    // Seed approved report for demonstration
-    return [
-      {
-        reportId: 'RPT-000001',
-        date: today,
-        counter: 'NORMAL',
-        status: 'Approved',
-        totalSoldQty: 28,
-        totalSalesValue: 12640,
-        recordedAmount: 12640,
-        cashAmount: 8200,
-        upiAmount: 4440,
-        cardAmount: 0,
-        cashierName: 'Murugan',
-        helperName: 'Senthil',
-        paymentDifference: 0,
-        cutoffSeq: 2,
-        submittedBy: 'normal',
-        submittedAt: today + ' 23:10:00',
-        reviewedBy: 'admin',
-        reviewedAt: today + ' 23:25:00',
-        remark: 'Verified and approved',
-        lines: [
-          {
-            lineId: 'SLN-000001',
-            reportId: 'RPT-000001',
-            productId: 'PRD-000001',
-            name: 'Kingfisher Strong Beer 650ml',
-            opening: 36,
-            godownIn: 12,
-            transferIn: 0,
-            transferOut: 0,
-            damageOut: 0,
-            inQty: 12,
-            outQty: 0,
-            available: 48,
-            closing: 34,
-            sold: 14,
-            price: 190,
-            value: 2660
-          },
-          {
-            lineId: 'SLN-000002',
-            reportId: 'RPT-000001',
-            productId: 'PRD-000010',
-            name: 'Mansion House French Bdy 750ml',
-            opening: 22,
-            godownIn: 0,
-            transferIn: 0,
-            transferOut: 0,
-            damageOut: 0,
-            inQty: 0,
-            outQty: 0,
-            available: 22,
-            closing: 16,
-            sold: 6,
-            price: 940,
-            value: 5640
-          },
-          {
-            lineId: 'SLN-000003',
-            reportId: 'RPT-000001',
-            productId: 'PRD-000011',
-            name: 'Mansion House French Bdy 90ml',
-            opening: 96,
-            godownIn: 0,
-            transferIn: 0,
-            transferOut: 0,
-            damageOut: 0,
-            inQty: 0,
-            outQty: 0,
-            available: 96,
-            closing: 88,
-            sold: 8,
-            price: 130,
-            value: 1040
-          },
-          {
-            lineId: 'SLN-000004',
-            reportId: 'RPT-000001',
-            productId: 'PRD-000017',
-            name: 'Royal Stag Double Dark 750ml',
-            opening: 18,
-            godownIn: 0,
-            transferIn: 0,
-            transferOut: 0,
-            damageOut: 0,
-            inQty: 0,
-            outQty: 0,
-            available: 18,
-            closing: 14,
-            sold: 4,
-            price: 860,
-            value: 3440
-          }
-        ]
-      }
-    ];
+    return [];
   });
 
   const [operations, setOperations] = useState<DailyOperation[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_operations');
-    if (raw) return JSON.parse(raw);
-    const today = getTodayISO();
-    return [
-      {
-        operationId: 'OPR-000001',
-        type: 'ROOM',
-        date: today,
-        name: 'Room 3 - Mr. Anand',
-        amount: 1800,
-        payment: 'UPI',
-        roomNo: 3,
-        status: 'Approved',
-        createdBy: 'admin',
-        createdAt: today + ' 14:00:00',
-        reviewedBy: 'SELF',
-        reviewedAt: today + ' 14:00:00'
-      },
-      {
-        operationId: 'OPR-000002',
-        type: 'EXPENSE',
-        date: today,
-        name: 'Ice Blocks & Cubes',
-        amount: 350,
-        status: 'Approved',
-        createdBy: 'normal',
-        createdAt: today + ' 15:30:00',
-        reviewedBy: 'SELF',
-        reviewedAt: today + ' 15:30:00',
-        reason: '2 ice blocks for bar coolers'
-      },
-      {
-        operationId: 'OPR-000003',
-        type: 'WAGE',
-        date: today,
-        name: 'Sundar (Night Security)',
-        amount: 600,
-        status: 'Approved',
-        createdBy: 'admin',
-        createdAt: today + ' 18:00:00',
-        reviewedBy: 'SELF',
-        reviewedAt: today + ' 18:00:00',
-        reason: 'Daily night shift wage'
-      }
-    ];
+    return raw ? JSON.parse(raw) : [];
   });
 
   const [ledger, setLedger] = useState<StockLedgerEntry[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_ledger');
-    if (raw) return JSON.parse(raw);
-    const today = getTodayISO();
-    return [
-      {
-        seq: 1,
-        ledgerId: 'LED-000001',
-        timestamp: today + ' 08:00:00',
-        location: 'GODOWN',
-        productId: 'PRD-000001',
-        productName: 'Kingfisher Strong Beer 650ml',
-        delta: 144,
-        balanceAfter: 144,
-        refType: 'OPENING',
-        refId: 'OPENING-SYNC',
-        approvedBy: 'setup',
-        businessDate: today
-      }
-    ];
+    return raw ? JSON.parse(raw) : [];
   });
 
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_audit');
-    if (raw) return JSON.parse(raw);
-    const today = getTodayISO();
-    return [
-      {
-        auditId: 'AUD-000001',
-        timestamp: today + ' 08:00:00',
-        userId: 'SETUP',
-        username: 'setup',
-        role: 'SYSTEM',
-        action: 'SYSTEM_INITIALIZED',
-        refId: 'INIT',
-        details: 'MM Residency Stock Management system loaded'
-      }
-    ];
+    return raw ? JSON.parse(raw) : [];
   });
 
   const [suppliers, setSuppliers] = useState<string[]>(() => {
@@ -601,12 +379,129 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem(STORAGE_KEY + '_dropdowns', JSON.stringify(dropdownOptions));
   }, [dropdownOptions]);
 
-  // Cloud Multi-Device Sync Engine
+  // Cloud Multi-Device Sync Engine + Real-Time Admin Notifications
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('synced');
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
   const isServerHydrated = React.useRef(false);
   const isSyncingRef = React.useRef(false);
+  const isApplyingRemoteRef = React.useRef(false);
   const serverVersionRef = React.useRef(0);
+  const seenPendingIdsRef = React.useRef<Set<string> | null>(null);
+
+  const [latestRequestAlert, setLatestRequestAlert] = useState<StockContextType['latestRequestAlert']>(null);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('mm_notif_sound');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [browserNotifStatus, setBrowserNotifStatus] = useState<'default' | 'granted' | 'denied' | 'unsupported'>(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+    return Notification.permission as 'default' | 'granted' | 'denied';
+  });
+
+  const playNotificationChime = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      [660, 880].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + i * 0.14);
+        gain.gain.setValueAtTime(0.001, now + i * 0.14);
+        gain.gain.exponentialRampToValueAtTime(0.14, now + i * 0.14 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.14 + 0.22);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + i * 0.14);
+        osc.stop(now + i * 0.14 + 0.24);
+      });
+    } catch {
+      // Ignore audio errors if blocked by browser autoplay policy
+    }
+  };
+
+  const toggleSoundAlerts = () => {
+    setSoundEnabled(prev => {
+      const next = !prev;
+      localStorage.setItem('mm_notif_sound', String(next));
+      if (next) playNotificationChime();
+      return next;
+    });
+  };
+
+  const requestBrowserNotifPermission = async (): Promise<'default' | 'granted' | 'denied' | 'unsupported'> => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setBrowserNotifStatus('unsupported');
+      return 'unsupported';
+    }
+    try {
+      const perm = await Notification.requestPermission();
+      setBrowserNotifStatus(perm);
+      return perm;
+    } catch {
+      return browserNotifStatus;
+    }
+  };
+
+  const dismissRequestAlert = () => setLatestRequestAlert(null);
+
+  // Detect newly arrived pending requests and alert Admin immediately
+  useEffect(() => {
+    const currentPending = requests.filter(r => r.status === 'Pending');
+    const currentPendingIds = new Set(currentPending.map(r => r.requestId));
+
+    if (!isServerHydrated.current) return;
+
+    if (seenPendingIdsRef.current === null) {
+      seenPendingIdsRef.current = currentPendingIds;
+      return;
+    }
+
+    const newlyArrived = currentPending.filter(r => !seenPendingIdsRef.current!.has(r.requestId));
+    seenPendingIdsRef.current = currentPendingIds;
+
+    if (newlyArrived.length > 0 && currentUser?.role === 'ADMIN') {
+      const totalBottles = newlyArrived.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+      const first = newlyArrived[0];
+      const counterLabel = first.counter === 'AC' ? 'AC Counter' : 'Normal Counter';
+      const productNames = newlyArrived.slice(0, 3).map(r => `${r.productName} (${r.enteredQty || r.qty} ${r.unit || 'BTL'})`);
+
+      setLatestRequestAlert({
+        id: first.requestId,
+        counter: counterLabel,
+        itemCount: newlyArrived.length,
+        totalBottles,
+        reason: first.reason || 'Counter replenishment',
+        createdAt: first.createdAt || getNowTimestamp(),
+        productNames
+      });
+
+      if (soundEnabled) {
+        playNotificationChime();
+      }
+
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        try {
+          const n = new Notification(`New Stock Request · ${counterLabel}`, {
+            body: `${newlyArrived.length} item(s) · ${totalBottles} bottles (${productNames.join(', ')})`,
+            tag: `req-${first.requestId}`
+          });
+          n.onclick = () => {
+            window.focus();
+            n.close();
+          };
+        } catch {
+          // Notification constructor may be restricted in some embedded WebViews
+        }
+      }
+    }
+  }, [requests, currentUser?.role, soundEnabled]);
 
   // Pull state from /api/state
   const pullServerState = async (isInitial = false) => {
@@ -617,7 +512,27 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const json = await res.json();
       if (json.success && json.data) {
         const s = json.data;
-        if (isInitial || (json.version && json.version > serverVersionRef.current)) {
+        if (s._openingEpoch !== OPENING_EPOCH) {
+          // Stale pre-opening server state detected: keep clean 2026-11-20 opening dataset and overwrite server store
+          const cleanStock = buildInitialStockMap();
+          await pushServerState({
+            _catalogVersion: CATALOG_VERSION,
+            _openingEpoch: OPENING_EPOCH,
+            users: INITIAL_USERS,
+            products: INITIAL_PRODUCTS,
+            stock: cleanStock,
+            purchases: [],
+            requests: [],
+            transfers: [],
+            dailySales: [],
+            operations: [],
+            ledger: [],
+            auditLog: [],
+            suppliers,
+            dropdownOptions
+          });
+        } else if (isInitial || (json.version && json.version > serverVersionRef.current)) {
+          isApplyingRemoteRef.current = true;
           serverVersionRef.current = json.version || 1;
           if (Array.isArray(s.users)) setUsers(s.users);
           if (Array.isArray(s.products)) {
@@ -632,7 +547,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             setStock(s.stock);
           }
           if (Array.isArray(s.purchases)) setPurchases(s.purchases);
-          if (Array.isArray(s.requests)) setRequests(s.requests);
+          if (Array.isArray(s.requests)) {
+            if (isInitial && seenPendingIdsRef.current === null) {
+              seenPendingIdsRef.current = new Set(
+                s.requests.filter((r: any) => r.status === 'Pending').map((r: any) => r.requestId)
+              );
+            }
+            setRequests(s.requests);
+          }
           if (Array.isArray(s.transfers)) setTransfers(s.transfers);
           if (Array.isArray(s.dailySales)) {
             setDailySales(s.dailySales.map((r: any) => r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r));
@@ -643,6 +565,24 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (Array.isArray(s.suppliers)) setSuppliers(s.suppliers);
           if (Array.isArray(s.dropdownOptions)) setDropdownOptions(s.dropdownOptions);
         }
+      } else {
+        // Server store empty: push fresh 2026-11-20 opening dataset immediately so all devices sync cleanly
+        await pushServerState({
+          _catalogVersion: CATALOG_VERSION,
+          _openingEpoch: OPENING_EPOCH,
+          users,
+          products,
+          stock,
+          purchases,
+          requests,
+          transfers,
+          dailySales,
+          operations,
+          ledger,
+          auditLog,
+          suppliers,
+          dropdownOptions
+        });
       }
       setSyncStatus('synced');
       setLastSyncTime(new Date().toLocaleTimeString());
@@ -684,12 +624,34 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     await pullServerState(true);
   };
 
-  // Hydrate from server on mount, poll every 5s, and sync on focus/visibility
+  // Hydrate from server on mount, subscribe to live SSE events, plus 5s polling fallback
   useEffect(() => {
     pullServerState(true);
     const interval = setInterval(() => {
       pullServerState(false);
     }, 5000);
+
+    let es: EventSource | null = null;
+    if (typeof EventSource !== 'undefined') {
+      try {
+        es = new EventSource('/api/events');
+        es.addEventListener('state_updated', (ev: MessageEvent) => {
+          try {
+            const data = JSON.parse(ev.data);
+            if (data?.version && data.version > serverVersionRef.current) {
+              pullServerState(false);
+            }
+          } catch {
+            pullServerState(false);
+          }
+        });
+        es.addEventListener('new_request', () => {
+          pullServerState(false);
+        });
+      } catch {
+        // Fallback to interval polling if EventSource fails
+      }
+    }
 
     const handleFocus = () => pullServerState(false);
     window.addEventListener('focus', handleFocus);
@@ -697,16 +659,22 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     return () => {
       clearInterval(interval);
+      if (es) es.close();
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleFocus);
     };
   }, []);
 
-  // Debounced push to server whenever state is modified
+  // Debounced push to server whenever local state is modified
   useEffect(() => {
     if (!isServerHydrated.current) return;
+    if (isApplyingRemoteRef.current) {
+      isApplyingRemoteRef.current = false;
+      return;
+    }
     const payload = {
       _catalogVersion: CATALOG_VERSION,
+      _openingEpoch: OPENING_EPOCH,
       users,
       products,
       stock,
@@ -722,7 +690,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
     const handler = setTimeout(() => {
       pushServerState(payload);
-    }, 400);
+    }, 200);
 
     return () => clearTimeout(handler);
   }, [users, products, stock, purchases, requests, transfers, dailySales, operations, ledger, auditLog, suppliers, dropdownOptions]);
@@ -945,6 +913,47 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       addAudit('PRODUCT_CREATED', newId, `${p.name} ${p.sizeML}ml`);
       return newId;
     }
+  };
+
+  // Admin direct stock adjustment
+  const adminAdjustStock = async (data: {
+    productId: string;
+    godown: number;
+    normal: number;
+    ac: number;
+    reason?: string;
+  }) => {
+    if (currentUser?.role !== 'ADMIN') {
+      throw new Error('Admin permission required to edit stock.');
+    }
+    const prod = products.find(p => p.productId === data.productId);
+    if (!prod) throw new Error('Product not found.');
+
+    const nextGodown = Math.max(0, Math.floor(Number(data.godown) || 0));
+    const nextNormal = Math.max(0, Math.floor(Number(data.normal) || 0));
+    const nextAc = Math.max(0, Math.floor(Number(data.ac) || 0));
+
+    const cur = stock[data.productId] || { godown: 0, normal: 0, ac: 0 };
+    const moves: { loc: StockLocation; productId: string; delta: number }[] = [];
+    if (nextGodown !== (cur.godown || 0)) {
+      moves.push({ loc: 'GODOWN', productId: data.productId, delta: nextGodown - (cur.godown || 0) });
+    }
+    if (nextNormal !== (cur.normal || 0)) {
+      moves.push({ loc: 'NORMAL', productId: data.productId, delta: nextNormal - (cur.normal || 0) });
+    }
+    if (nextAc !== (cur.ac || 0)) {
+      moves.push({ loc: 'AC', productId: data.productId, delta: nextAc - (cur.ac || 0) });
+    }
+
+    if (moves.length === 0) return;
+
+    const refId = `ADJ-${Date.now().toString().slice(-6)}`;
+    applyMovements(moves, 'ADJUSTMENT', refId, businessDate);
+    addAudit(
+      'ADMIN_STOCK_EDITED',
+      refId,
+      `${prod.name} ${prod.sizeML}ml | Godown: ${cur.godown || 0}→${nextGodown}, Normal: ${cur.normal || 0}→${nextNormal}, AC: ${cur.ac || 0}→${nextAc}${data.reason?.trim() ? ` | Reason: ${data.reason.trim()}` : ''}`
+    );
   };
 
   // Purchases
@@ -1874,10 +1883,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const resetToSampleData = () => {
     localStorage.clear();
+    localStorage.setItem(STORAGE_KEY + '_opening_epoch', OPENING_EPOCH);
     localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
+    localStorage.setItem('mm_business_date', getTodayISO());
+    setBusinessDateState(getTodayISO());
     setUsers(INITIAL_USERS);
     setProducts(INITIAL_PRODUCTS);
-    setStock(INITIAL_STOCK);
+    setStock(buildInitialStockMap());
     setSuppliers(INITIAL_SUPPLIERS);
     setDropdownOptions(INITIAL_DROPDOWN_OPTIONS);
     setPurchases([]);
@@ -1888,7 +1900,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setLedger([]);
     setAuditLog([]);
     setCurrentUser(INITIAL_USERS[0]);
-    addAudit('DATABASE_RESET', 'RESET', 'Restored pristine initial dataset');
+    localStorage.setItem('mm_user', JSON.stringify(INITIAL_USERS[0]));
   };
 
   return (
@@ -1919,6 +1931,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         changePassword,
 
         saveProduct,
+        adminAdjustStock,
         submitPurchaseBatch,
         reviewPurchaseBill,
         editPurchaseRecord,
@@ -1949,7 +1962,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         syncStatus,
         lastSyncTime,
-        triggerManualSync
+        triggerManualSync,
+        pendingRequests: requests.filter(r => r.status === 'Pending'),
+        latestRequestAlert,
+        dismissRequestAlert,
+        soundEnabled,
+        toggleSoundAlerts,
+        browserNotifStatus,
+        requestBrowserNotifPermission
       }}
     >
       {children}

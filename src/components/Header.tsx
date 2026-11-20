@@ -1,8 +1,14 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useStock } from '../context/StockContext';
-import { Moon, Sun, User as UserIcon, Calendar, LogOut, Shield, ChevronDown, RefreshCw } from 'lucide-react';
+import {
+  Moon, Sun, User as UserIcon, Calendar, LogOut, Shield, ChevronDown, RefreshCw,
+  Bell, BellRing, Volume2, VolumeX, CheckCircle2
+} from 'lucide-react';
 
-export const Header: React.FC<{ onOpenPasswordModal: () => void }> = ({ onOpenPasswordModal }) => {
+export const Header: React.FC<{ onOpenPasswordModal: () => void; onNavigate?: (tab: string) => void }> = ({
+  onOpenPasswordModal,
+  onNavigate
+}) => {
   const {
     currentUser,
     businessDate,
@@ -12,8 +18,28 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void }> = ({ onOpenPa
     logout,
     syncStatus,
     lastSyncTime,
-    triggerManualSync
+    triggerManualSync,
+    pendingRequests,
+    soundEnabled,
+    toggleSoundAlerts,
+    browserNotifStatus,
+    requestBrowserNotifPermission
   } = useStock();
+
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setIsNotifOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, []);
+
+  const isAdmin = currentUser?.role === 'ADMIN';
 
   const formattedDate = () => {
     try {
@@ -94,6 +120,137 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void }> = ({ onOpenPa
             {syncStatus === 'synced' ? 'Synced' : syncStatus === 'syncing' ? 'Syncing...' : 'Offline'}
           </span>
         </button>
+
+        {/* Admin Live Request Notifications Bell */}
+        {isAdmin && (
+          <div className="relative" ref={notifRef}>
+            <button
+              type="button"
+              onClick={() => setIsNotifOpen(prev => !prev)}
+              aria-label="Admin request notifications"
+              title={
+                pendingRequests.length > 0
+                  ? `${pendingRequests.length} pending stock request(s)`
+                  : 'Admin Notification Center'
+              }
+              className={`relative flex h-8 w-8 items-center justify-center rounded-lg border transition-colors cursor-pointer ${
+                pendingRequests.length > 0
+                  ? 'border-amber-500/60 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'
+                  : 'border-slate-700 bg-slate-800/80 text-slate-200 hover:bg-slate-700'
+              }`}
+            >
+              {pendingRequests.length > 0 ? (
+                <BellRing className="h-4 w-4 animate-pulse" />
+              ) : (
+                <Bell className="h-4 w-4" />
+              )}
+              {pendingRequests.length > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white shadow-xs">
+                  {pendingRequests.length}
+                </span>
+              )}
+            </button>
+
+            {isNotifOpen && (
+              <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 rounded-xl border border-slate-700 bg-slate-900 text-white shadow-2xl z-50 overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3 bg-slate-950/60">
+                  <div>
+                    <div className="text-xs font-bold text-amber-300 uppercase tracking-wider">
+                      Admin Request Alerts
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {pendingRequests.length > 0
+                        ? `${pendingRequests.length} pending request item(s) waiting for approval`
+                        : 'All counter requests are cleared'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={toggleSoundAlerts}
+                      title={soundEnabled ? 'Mute sound alert' : 'Enable sound alert'}
+                      className={`rounded-lg border p-1.5 text-xs transition-colors cursor-pointer ${
+                        soundEnabled
+                          ? 'border-emerald-600/50 bg-emerald-950/50 text-emerald-300'
+                          : 'border-slate-700 bg-slate-800 text-slate-400'
+                      }`}
+                    >
+                      {soundEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+                    </button>
+                    {browserNotifStatus !== 'unsupported' && (
+                      <button
+                        type="button"
+                        onClick={requestBrowserNotifPermission}
+                        className={`rounded-lg border px-2 py-1 text-[10px] font-bold transition-colors cursor-pointer ${
+                          browserNotifStatus === 'granted'
+                            ? 'border-emerald-600/50 bg-emerald-950/50 text-emerald-300'
+                            : browserNotifStatus === 'denied'
+                            ? 'border-red-600/40 bg-red-950/40 text-red-300'
+                            : 'border-amber-500/60 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
+                        }`}
+                      >
+                        {browserNotifStatus === 'granted'
+                          ? 'Desktop Alerts On'
+                          : browserNotifStatus === 'denied'
+                          ? 'Alerts Blocked'
+                          : 'Enable Alerts'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="max-h-72 overflow-y-auto divide-y divide-slate-800">
+                  {pendingRequests.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-400">
+                      <CheckCircle2 className="h-6 w-6 text-emerald-400 mx-auto mb-1.5 opacity-80" />
+                      No pending stock requests right now. New requests from Normal or AC Counter appear here instantly.
+                    </div>
+                  ) : (
+                    pendingRequests.slice(0, 12).map(r => (
+                      <div key={r.requestId} className="px-4 py-2.5 hover:bg-slate-800/60 transition-colors">
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                              r.counter === 'AC'
+                                ? 'bg-purple-500/20 text-purple-300'
+                                : 'bg-emerald-500/20 text-emerald-300'
+                            }`}
+                          >
+                            {r.counter === 'AC' ? 'AC Counter' : 'Normal Counter'}
+                          </span>
+                          <span className="font-mono text-[10px] text-slate-400">{r.createdAt}</span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-xs">
+                          <span className="font-bold text-white truncate">{r.productName}</span>
+                          <span className="font-mono font-bold text-amber-300 shrink-0 ml-2">
+                            {r.enteredQty || r.qty} {r.unit || 'BTL'} ({r.qty} btls)
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 truncate mt-0.5">{r.reason}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="border-t border-slate-800 p-2.5 bg-slate-950/60 flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-slate-400">Real-time SSE + 5s sync active</span>
+                  {onNavigate && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsNotifOpen(false);
+                        onNavigate('approvals');
+                      }}
+                      className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400 transition-colors cursor-pointer"
+                    >
+                      Open Approvals Queue
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* User profile & quick role switch */}
         {currentUser && (

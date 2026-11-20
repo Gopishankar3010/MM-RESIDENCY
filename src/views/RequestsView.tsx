@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Search, ShoppingBag, Plus, Trash2, CheckCircle2, Clock, XCircle, ArrowRight, Printer } from 'lucide-react';
+import { Search, ShoppingBag, Plus, Trash2, CheckCircle2, Clock, XCircle, ArrowRight, Printer, Copy, Share2 } from 'lucide-react';
 import { bottlesPerCase_, stockQtyLabel } from '../data/initialData';
 
 export const RequestsView: React.FC = () => {
@@ -17,6 +17,8 @@ export const RequestsView: React.FC = () => {
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [lastSubmittedAlertText, setLastSubmittedAlertText] = useState<string>('');
+  const [copiedAlert, setCopiedAlert] = useState(false);
 
   const selectedProduct = stockItems.find(p => p.productId === selectedProductId);
   const pack = selectedProduct ? bottlesPerCase_(selectedProduct) : 1;
@@ -92,8 +94,15 @@ export const RequestsView: React.FC = () => {
         }))
       });
 
+      const totalBottles = basket.reduce((s, b) => s + b.bottles, 0);
+      const counterLabel = currentUser?.counter === 'AC' ? 'AC Counter' : 'Normal Counter';
+      const itemLines = basket.map(b => `• ${b.name} ${b.sizeML}ml × ${b.qty} ${b.unit} (${b.bottles} btls)`).join('\n');
+      const alertTxt = `*MM Residency – New Stock Request*\nCounter: ${counterLabel}\nDate: ${businessDate}\nTotal: ${basket.length} item(s), ${totalBottles} bottles\nReason: ${finalReason}\n\n${itemLines}\n\nPlease approve in Admin Approvals Queue.`;
+
+      setLastSubmittedAlertText(alertTxt);
+      setCopiedAlert(false);
       setShowPreviewModal(false);
-      setStatusMessage({ type: 'ok', text: `${basket.length} item(s) requested successfully. Waiting for Admin approval.` });
+      setStatusMessage({ type: 'ok', text: `${basket.length} item(s) requested successfully. Admin has been notified live for approval.` });
       setBasket([]);
       setReason('');
     } catch (e: any) {
@@ -141,13 +150,37 @@ export const RequestsView: React.FC = () => {
 
       {statusMessage && (
         <div
-          className={`no-print rounded-xl border p-4 text-xs font-semibold ${
+          className={`no-print rounded-xl border p-4 text-xs font-semibold space-y-2.5 ${
             statusMessage.type === 'ok'
               ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
               : 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300'
           }`}
         >
-          {statusMessage.text}
+          <div>{statusMessage.text}</div>
+          {statusMessage.type === 'ok' && lastSubmittedAlertText && (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(lastSubmittedAlertText);
+                  setCopiedAlert(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-2.5 py-1 text-[11px] font-bold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-slate-900 dark:text-emerald-300 cursor-pointer"
+              >
+                <Copy className="h-3 w-3" />
+                <span>{copiedAlert ? 'Copied!' : 'Copy Request Message'}</span>
+              </button>
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(lastSubmittedAlertText)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 transition-colors"
+              >
+                <Share2 className="h-3 w-3" />
+                <span>Send WhatsApp Alert to Admin</span>
+              </a>
+            </div>
+          )}
         </div>
       )}
 

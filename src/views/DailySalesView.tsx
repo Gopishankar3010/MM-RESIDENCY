@@ -43,16 +43,18 @@ export const DailySalesView: React.FC = () => {
     setReportDate(businessDate);
   }, [businessDate]);
 
-  // Identify past dates with missing daily sales reports for this counter
+  // Identify past dates with missing daily sales reports for this counter (only from shop opening day onwards)
   const missingPastDates = useMemo(() => {
     if (isAdmin) return [];
     const missed: string[] = [];
     const today = new Date();
+    const openingDate = '2026-11-20';
     for (let i = 1; i <= 5; i++) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
       const pad = (n: number) => ('0' + n).slice(-2);
       const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      if (dateStr < openingDate) continue;
       const hasReport = dailySales.some(r => r.counter === counter && r.date === dateStr && r.status !== 'Rejected');
       if (!hasReport) {
         missed.push(dateStr);

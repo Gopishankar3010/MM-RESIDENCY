@@ -321,7 +321,19 @@ export const CASE_PACK_MAP: Record<string, number> = {
   "MORPHEUSXOBRANDY|750": 12,
   "MORPHEUSXOBRANDY|60": 150,
   "100PIPERSEXQUISITEWHY|750": 12,
-  "SULASHIRAZCABERNETRED|750": 12
+  "SULASHIRAZCABERNETRED|750": 12,
+  "BUZZBALLZGUAVAAROMATIZD|180": 48,
+  "FOSTERGOLDSTRONGBEER|500": 24,
+  "M2PREMGRAINVODKA|750": 12,
+  "OLDMONKWHITERUM|750": 12,
+  "PLUNGEFLOVERS|330": 24,
+  "SEAGRAMROYALSTAGBARREL|90": 96,
+  "SEAGRAMSROYALSTAG|90": 96,
+  "SEGRAMS100PIPERSSCHWH|750": 12,
+  "COLONIALPREMIUMVSOPBDY|750": 12,
+  "DAVIDLOUISXOBDY|750": 12,
+  "HEINEKENLAGERBEER|330": 24,
+  "JACKDANIELSORGHONEY|750": 12
 };
 
 export function packKey_(name: string, size: number | string): string {
@@ -404,6 +416,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000122', name: 'DISCO PANDA LEMON SHANDY', category: 'Beer', sizeML: 330, casePack: 24, sellingPrice: 228, active: true },
   { productId: 'PRD-000123', name: 'DISCO PANDA MANGO TANGO', category: 'Beer', sizeML: 330, casePack: 24, sellingPrice: 228, active: true },
   { productId: 'PRD-000126', name: 'FOSTER GOLD STRONG BEER', category: 'Beer', sizeML: 650, casePack: 12, sellingPrice: 129, active: true },
+  { productId: 'PRD-000319', name: 'FOSTER GOLD STRONG BEER', category: 'Beer', sizeML: 500, casePack: 24, sellingPrice: 0, active: true },
   { productId: 'PRD-000127', name: 'FOSTERS PUNCH STRONG', category: 'Beer', sizeML: 650, casePack: 12, sellingPrice: 118, active: true },
   { productId: 'PRD-000132', name: 'GOD FATHER', category: 'Beer', sizeML: 650, casePack: 12, sellingPrice: 132, active: true },
   { productId: 'PRD-000133', name: 'GOD FATHER', category: 'Beer', sizeML: 500, casePack: 24, sellingPrice: 102, active: true },
@@ -411,6 +424,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000151', name: 'HAYWARDS 5000 STRONG BEER', category: 'Beer', sizeML: 500, casePack: 24, sellingPrice: 101, active: true },
   { productId: 'PRD-000007', name: 'HEINEKEN LAGER BEER', category: 'Beer', sizeML: 650, casePack: 12, sellingPrice: 190, active: true },
   { productId: 'PRD-000152', name: 'HEINEKEN LAGER BEER', category: 'Beer', sizeML: 500, casePack: 24, sellingPrice: 140, active: true },
+  { productId: 'PRD-000328', name: 'HEINEKEN LAGER BEER', category: 'Beer', sizeML: 330, casePack: 24, sellingPrice: 105, active: true },
   { productId: 'PRD-000002', name: 'KINGFISHER LAGER BEER', category: 'Beer', sizeML: 650, casePack: 12, sellingPrice: 125, active: true },
   { productId: 'PRD-000179', name: 'KINGFISHER LAGER BEER', category: 'Beer', sizeML: 500, casePack: 24, sellingPrice: 100, active: true },
   { productId: 'PRD-000001', name: 'KINGFISHER STRONG BEER', category: 'Beer', sizeML: 650, casePack: 12, sellingPrice: 134, active: true },
@@ -437,11 +451,13 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000081', name: 'BLUE GRAPE FRENCH BDY', category: 'Brandy', sizeML: 90, casePack: 96, sellingPrice: 72, active: true },
   { productId: 'PRD-000115', name: 'CLOVIS XO BRANDY', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 887, active: true },
   { productId: 'PRD-000116', name: 'CLOVIS XO BRANDY', category: 'Brandy', sizeML: 60, casePack: 150, sellingPrice: 78, active: true },
+  { productId: 'PRD-000326', name: 'COLONIAL PREMIUM VSOP BDY', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 594, active: true },
   { productId: 'PRD-000117', name: 'COURRIER NAPOLEAN', category: 'Brandy', sizeML: 1000, casePack: 9, sellingPrice: 630, active: true },
   { productId: 'PRD-000016', name: 'COURRIER NAPOLEAN', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 474, active: true },
   { productId: 'PRD-000118', name: 'COURRIER NAPOLEAN', category: 'Brandy', sizeML: 90, casePack: 96, sellingPrice: 59, active: true },
   { productId: 'PRD-000119', name: 'COURRIER NAPOLEAN GREEN', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 774, active: true },
   { productId: 'PRD-000120', name: 'COURRIER NAPOLEAN GREEN', category: 'Brandy', sizeML: 90, casePack: 96, sellingPrice: 95, active: true },
+  { productId: 'PRD-000327', name: 'DAVID LOUIS XO BDY', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 990, active: true },
   { productId: 'PRD-000128', name: 'GEO\'S PREMIER LEAGUE XO', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 628, active: true },
   { productId: 'PRD-000129', name: 'GEO\'S PREMIER LEAGUE XO', category: 'Brandy', sizeML: 90, casePack: 96, sellingPrice: 78, active: true },
   { productId: 'PRD-000130', name: 'GOA XXX VSOP IND', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 288, active: true },
@@ -458,7 +474,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000144', name: 'GOLDEN BALLET VSOP', category: 'Brandy', sizeML: 90, casePack: 96, sellingPrice: 74, active: true },
   { productId: 'PRD-000145', name: 'GOLDEN TOUCH 24CARAT BDY', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 590, active: true },
   { productId: 'PRD-000146', name: 'GOLDEN TOUCH 24CARAT BDY', category: 'Brandy', sizeML: 90, casePack: 96, sellingPrice: 74, active: true },
-  { productId: 'PRD-000147', name: 'GRAYSONS INDIAN BRANDY', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 0, active: true },
+  { productId: 'PRD-000147', name: 'GRAYSONS INDIAN BRANDY', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 310, active: true },
   { productId: 'PRD-000148', name: 'GRAYSONS INDIAN BRANDY', category: 'Brandy', sizeML: 90, casePack: 96, sellingPrice: 36, active: true },
   { productId: 'PRD-000154', name: 'HOBSON XR BRANDY', category: 'Brandy', sizeML: 750, casePack: 12, sellingPrice: 1680, active: true },
   { productId: 'PRD-000155', name: 'HOBSON XR BRANDY', category: 'Brandy', sizeML: 60, casePack: 150, sellingPrice: 138, active: true },
@@ -541,6 +557,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000121', name: 'DEWARS BLE SCO WHY', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 1634, active: true },
   { productId: 'PRD-000149', name: 'GRAYSONS MAXX ROYALE WKY', category: 'Whisky', sizeML: 90, casePack: 96, sellingPrice: 74, active: true },
   { productId: 'PRD-000156', name: 'JACK DANIELS', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 4200, active: true },
+  { productId: 'PRD-000329', name: 'JACK DANIELS ORG HONEY', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 4200, active: true },
   { productId: 'PRD-000160', name: 'JAMESON IRISH EDITION WHY', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 3280, active: true },
   { productId: 'PRD-000161', name: 'JAMESON TRI DIS IRISH WHY', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 2670, active: true },
   { productId: 'PRD-000170', name: 'JIM BEAM KENT BOURBON WHY', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 1960, active: true },
@@ -557,13 +574,16 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000269', name: 'ROYAL CHALLENGE WHISKY', category: 'Whisky', sizeML: 2000, casePack: 6, sellingPrice: 1961, active: true },
   { productId: 'PRD-000270', name: 'ROYAL CHALLENGE WHISKY', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 807, active: true },
   { productId: 'PRD-000271', name: 'ROYAL CHALLENGE WHISKY', category: 'Whisky', sizeML: 90, casePack: 96, sellingPrice: 105, active: true },
-  { productId: 'PRD-000017', name: 'ROYAL STAG DOUBLE DARK', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 750, active: true },
+  { productId: 'PRD-000017', name: 'ROYAL STAG DOUBLE DARK', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 778, active: true },
   { productId: 'PRD-000273', name: 'SEAGRAM ROYAL STAG BARREL', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 800, active: true },
+  { productId: 'PRD-000323', name: 'SEAGRAM ROYAL STAG BARREL', category: 'Whisky', sizeML: 90, casePack: 96, sellingPrice: 0, active: true },
   { productId: 'PRD-000274', name: 'SEAGRAMS IMERIAL BLUE', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 544, active: true },
   { productId: 'PRD-000275', name: 'SEAGRAMS IMERIAL BLUE', category: 'Whisky', sizeML: 90, casePack: 96, sellingPrice: 74, active: true },
   { productId: 'PRD-000276', name: 'SEAGRAMS ROYAL STAG', category: 'Whisky', sizeML: 2000, casePack: 6, sellingPrice: 1869, active: true },
   { productId: 'PRD-000277', name: 'SEAGRAMS ROYAL STAG', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 735, active: true },
+  { productId: 'PRD-000324', name: 'SEAGRAMS ROYAL STAG', category: 'Whisky', sizeML: 90, casePack: 96, sellingPrice: 95, active: true },
   { productId: 'PRD-000278', name: 'SEAGRAMS ROYAL STAG', category: 'Whisky', sizeML: 60, casePack: 150, sellingPrice: 63, active: true },
+  { productId: 'PRD-000325', name: 'SEGRAMS 100 PIPERS SCH WH', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 1700, active: true },
   { productId: 'PRD-000279', name: 'SEGRAMS 100 PIPERS SCH WH', category: 'Whisky', sizeML: 60, casePack: 150, sellingPrice: 63, active: true },
   { productId: 'PRD-000280', name: 'SEGRAMS PRIDE RESERVE WHY', category: 'Whisky', sizeML: 750, casePack: 12, sellingPrice: 1188, active: true },
   { productId: 'PRD-000283', name: 'SIGNATURE RARE AGED WHY', category: 'Whisky', sizeML: 2000, casePack: 6, sellingPrice: 2213, active: true },
@@ -601,6 +621,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000189', name: 'M2 NEWREMIX FLAV.ORANGE', category: 'Vodka', sizeML: 60, casePack: 150, sellingPrice: 60, active: true },
   { productId: 'PRD-000190', name: 'M2 NEWREMIX GREEN APPLE', category: 'Vodka', sizeML: 60, casePack: 150, sellingPrice: 60, active: true },
   { productId: 'PRD-000191', name: 'M2 NEWREMIX WATER+GRAPE', category: 'Vodka', sizeML: 60, casePack: 150, sellingPrice: 60, active: true },
+  { productId: 'PRD-000320', name: 'M2 PREM GRAIN VODKA', category: 'Vodka', sizeML: 750, casePack: 12, sellingPrice: 0, active: true },
   { productId: 'PRD-000192', name: 'MAGIC MOMENTS CHOCO FLAV', category: 'Vodka', sizeML: 750, casePack: 12, sellingPrice: 750, active: true },
   { productId: 'PRD-000193', name: 'MAGIC MOMENTS CHOCO FLAV', category: 'Vodka', sizeML: 60, casePack: 150, sellingPrice: 60, active: true },
   { productId: 'PRD-000029', name: 'MAGIC MOMENTS FLAVOUR', category: 'Vodka', sizeML: 750, casePack: 12, sellingPrice: 750, active: true },
@@ -656,7 +677,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000055', name: 'BACARDI RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 912, active: true },
   { productId: 'PRD-000098', name: 'CABO WHITE RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 846, active: true },
   { productId: 'PRD-000099', name: 'CABO WHITE RUM', category: 'Rum', sizeML: 60, casePack: 150, sellingPrice: 168, active: true },
-  { productId: 'PRD-000137', name: 'GOLD BISCUIT RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 0, active: true },
+  { productId: 'PRD-000137', name: 'GOLD BISCUIT RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 526, active: true },
   { productId: 'PRD-000153', name: 'HERCULES DELUXE 3X RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 760, active: true },
   { productId: 'PRD-000248', name: 'OLD MONK APPLE RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 800, active: true },
   { productId: 'PRD-000249', name: 'OLD MONK COFFEE RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 1250, active: true },
@@ -664,6 +685,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000251', name: 'OLD MONK LEMON RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 800, active: true },
   { productId: 'PRD-000025', name: 'OLD MONK RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 520, active: true },
   { productId: 'PRD-000026', name: 'OLD MONK RUM', category: 'Rum', sizeML: 90, casePack: 100, sellingPrice: 63, active: true },
+  { productId: 'PRD-000321', name: 'OLD MONK WHITE RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 0, active: true },
   { productId: 'PRD-000315', name: 'XCLAMATION RUM', category: 'Rum', sizeML: 750, casePack: 12, sellingPrice: 800, active: true },
   { productId: 'PRD-000034', name: '100 BARRELS PORT WINE', category: 'Wine', sizeML: 750, casePack: 12, sellingPrice: 294, active: true },
   { productId: 'PRD-000035', name: '100 BARRELS PORT WINE', category: 'Wine', sizeML: 180, casePack: 48, sellingPrice: 72, active: true },
@@ -695,8 +717,10 @@ export const INITIAL_PRODUCTS: Product[] = [
   { productId: 'PRD-000090', name: 'BREEZER MANGOPEACH FLAV', category: 'Liqueurs', sizeML: 275, casePack: 24, sellingPrice: 110, active: true },
   { productId: 'PRD-000091', name: 'BREEZER ORANGE', category: 'Liqueurs', sizeML: 275, casePack: 24, sellingPrice: 110, active: true },
   { productId: 'PRD-000092', name: 'BREEZER WATERMELON FLAV', category: 'Liqueurs', sizeML: 275, casePack: 24, sellingPrice: 110, active: true },
+  { productId: 'PRD-000318', name: 'BUZZBALLZ GUAVA AROMATIZD', category: 'Liqueurs', sizeML: 180, casePack: 48, sellingPrice: 119, active: true },
   { productId: 'PRD-000158', name: 'JAGERMEISTER', category: 'Liqueurs', sizeML: 750, casePack: 12, sellingPrice: 4013, active: true },
   { productId: 'PRD-000159', name: 'JAGERMEISTER', category: 'Liqueurs', sizeML: 50, casePack: 120, sellingPrice: 384, active: true },
+  { productId: 'PRD-000322', name: 'PLUNGE FLOVERS', category: 'Liqueurs', sizeML: 330, casePack: 24, sellingPrice: 135, active: true },
   { productId: 'PRD-000305', name: 'THE WEARHOUSE TEQUILA', category: 'Liqueurs', sizeML: 750, casePack: 12, sellingPrice: 1350, active: true },
   { productId: 'PRD-000306', name: 'THE WEARHOUSE TEQUILA', category: 'Liqueurs', sizeML: 60, casePack: 150, sellingPrice: 120, active: true },
   { productId: 'PRD-000087', name: 'BREEZER CLASSIC FLAVOUR', category: 'Others', sizeML: 275, casePack: 24, sellingPrice: 110, active: true },
@@ -710,39 +734,255 @@ export const INITIAL_PRODUCTS: Product[] = [
 ];
 
 export const INITIAL_STOCK: Record<string, { godown: number; normal: number; ac: number }> = {
-  'PRD-000001': { godown: 144, normal: 36, ac: 24 }, // Kingfisher Strong
-  'PRD-000002': { godown: 96, normal: 24, ac: 18 },  // Kingfisher Lager
-  'PRD-000003': { godown: 48, normal: 16, ac: 12 },  // KF Ultra
-  'PRD-000004': { godown: 72, normal: 20, ac: 16 },  // Bud Magnum
-  'PRD-000005': { godown: 60, normal: 18, ac: 12 },  // Bud King
-  'PRD-000006': { godown: 48, normal: 14, ac: 10 },  // Carlsberg
-  'PRD-000007': { godown: 36, normal: 12, ac: 8 },   // Heineken
-  'PRD-000008': { godown: 48, normal: 16, ac: 14 },  // Corona
-  'PRD-000009': { godown: 60, normal: 18, ac: 12 },  // Tuborg
-  'PRD-000010': { godown: 84, normal: 22, ac: 16 },  // Mansion House 750
-  'PRD-000011': { godown: 384, normal: 96, ac: 64 }, // Mansion House 90
-  'PRD-000012': { godown: 48, normal: 14, ac: 10 },  // Morpheus XO 750
-  'PRD-000013': { godown: 300, normal: 75, ac: 50 }, // Morpheus 60
-  'PRD-000014': { godown: 60, normal: 18, ac: 14 },  // McDowell's VSOP 750
-  'PRD-000015': { godown: 72, normal: 24, ac: 16 },  // Old Admiral 750
-  'PRD-000016': { godown: 48, normal: 12, ac: 10 },  // Courrier Napolean
-  'PRD-000017': { godown: 60, normal: 18, ac: 14 },  // Royal Stag
-  'PRD-000018': { godown: 48, normal: 16, ac: 12 },  // Blenders Pride 750
-  'PRD-000019': { godown: 300, normal: 60, ac: 45 }, // BP 60
-  'PRD-000020': { godown: 36, normal: 10, ac: 8 },   // Signature
-  'PRD-000021': { godown: 24, normal: 8, ac: 6 },    // Antiquity Blue
-  'PRD-000022': { godown: 18, normal: 6, ac: 5 },    // Black Dog
-  'PRD-000023': { godown: 24, normal: 8, ac: 6 },    // 100 Pipers
-  'PRD-000024': { godown: 12, normal: 4, ac: 4 },    // JW Red
-  'PRD-000025': { godown: 96, normal: 28, ac: 20 },  // Old Monk 750
-  'PRD-000026': { godown: 400, normal: 100, ac: 60 },// Old Monk 90
-  'PRD-000027': { godown: 36, normal: 10, ac: 8 },   // Bacardi White
-  'PRD-000028': { godown: 36, normal: 10, ac: 8 },   // Bacardi Lemon
-  'PRD-000029': { godown: 48, normal: 14, ac: 12 },  // Magic Moments
-  'PRD-000030': { godown: 24, normal: 8, ac: 6 },    // Smirnoff
-  'PRD-000031': { godown: 24, normal: 6, ac: 6 },    // Sula
-  'PRD-000032': { godown: 96, normal: 24, ac: 18 },  // Breezer Cranberry
-  'PRD-000033': { godown: 72, normal: 20, ac: 16 }   // Breezer Blackberry
+  'PRD-000074': { godown: 468, normal: 100, ac: 43 }, // BLACK PEARL BEER 650ml
+  'PRD-000075': { godown: 192, normal: 20, ac: 0 }, // BLACK PEARL BEER 500ml
+  'PRD-000082': { godown: 0, normal: 0, ac: 19 }, // BOCA BREEZER JAMUN 275ml
+  'PRD-000005': { godown: 228, normal: 6, ac: 0 }, // BUDWEISER KING OF BEER 650ml
+  'PRD-000095': { godown: 72, normal: 0, ac: 7 }, // BUDWEISER KING OF BEER 500ml
+  'PRD-000004': { godown: 0, normal: 33, ac: 27 }, // BUDWEISER MAGNUM BEER 650ml
+  'PRD-000096': { godown: 12, normal: 0, ac: 0 }, // BUDWEISER MAGNUM BEER 500ml
+  'PRD-000008': { godown: 24, normal: 0, ac: 0 }, // CORONA EXTRA PREMIUM BEER 330ml
+  'PRD-000122': { godown: 24, normal: 19, ac: 0 }, // DISCO PANDA LEMON SHANDY 330ml
+  'PRD-000126': { godown: 96, normal: 12, ac: 0 }, // FOSTER GOLD STRONG BEER 650ml
+  'PRD-000319': { godown: 48, normal: 0, ac: 0 }, // FOSTER GOLD STRONG BEER 500ml
+  'PRD-000127': { godown: 61, normal: 14, ac: 0 }, // FOSTERS PUNCH STRONG 650ml
+  'PRD-000132': { godown: 36, normal: 17, ac: 0 }, // GOD FATHER 650ml
+  'PRD-000133': { godown: 48, normal: 41, ac: 0 }, // GOD FATHER 500ml
+  'PRD-000150': { godown: 216, normal: 60, ac: 17 }, // HAYWARDS 5000 STRONG BEER 650ml
+  'PRD-000151': { godown: 480, normal: 60, ac: 33 }, // HAYWARDS 5000 STRONG BEER 500ml
+  'PRD-000007': { godown: 48, normal: 2, ac: 0 }, // HEINEKEN LAGER BEER 650ml
+  'PRD-000328': { godown: 0, normal: 9, ac: 0 }, // HEINEKEN LAGER BEER 330ml
+  'PRD-000002': { godown: 84, normal: 12, ac: 0 }, // KINGFISHER LAGER BEER 650ml
+  'PRD-000179': { godown: 48, normal: 15, ac: 5 }, // KINGFISHER LAGER BEER 500ml
+  'PRD-000001': { godown: 336, normal: 194, ac: 80 }, // KINGFISHER STRONG BEER 650ml
+  'PRD-000180': { godown: 1680, normal: 254, ac: 22 }, // KINGFISHER STRONG BEER 500ml
+  'PRD-000181': { godown: 72, normal: 11, ac: 0 }, // KINGFISHER ULTRAMAX 650ml
+  'PRD-000257': { godown: 36, normal: 12, ac: 0 }, // PEOPLES PONDICHERRY 650ml
+  'PRD-000258': { godown: 24, normal: 0, ac: 0 }, // PEOPLES PONDICHERRY 330ml
+  'PRD-000260': { godown: 72, normal: 28, ac: 0 }, // PURSUE HARD SELTZER 500ml
+  'PRD-000009': { godown: 456, normal: 0, ac: 0 }, // TUBORG STRONG BEER 650ml
+  'PRD-000308': { godown: 96, normal: 0, ac: 0 }, // TUBORG STRONG BEER 500ml
+  'PRD-000037': { godown: 0, normal: 13, ac: 0 }, // 1848 XO BRANDY 750ml
+  'PRD-000044': { godown: 0, normal: 5, ac: 0 }, // ANTIQUITY XO BLENDED BDY 750ml
+  'PRD-000045': { godown: 0, normal: 70, ac: 9 }, // ANTIQUITY XO BLENDED BDY 90ml
+  'PRD-000064': { godown: 6, normal: 2, ac: 0 }, // BLACK & GOLD VSOP BRANDY 2000ml
+  'PRD-000065': { godown: 9, normal: 12, ac: 0 }, // BLACK & GOLD VSOP BRANDY 1000ml
+  'PRD-000066': { godown: 12, normal: 15, ac: 9 }, // BLACK & GOLD VSOP BRANDY 750ml
+  'PRD-000067': { godown: 384, normal: 70, ac: 0 }, // BLACK & GOLD VSOP BRANDY 90ml
+  'PRD-000078': { godown: 0, normal: 10, ac: 0 }, // BLUE GRAP 750ml
+  'PRD-000080': { godown: 0, normal: 10, ac: 0 }, // BLUE GRAPE FRENCH BDY 750ml
+  'PRD-000081': { godown: 384, normal: 43, ac: 16 }, // BLUE GRAPE FRENCH BDY 90ml
+  'PRD-000115': { godown: 0, normal: 4, ac: 0 }, // CLOVIS XO BRANDY 750ml
+  'PRD-000116': { godown: 0, normal: 50, ac: 0 }, // CLOVIS XO BRANDY 60ml
+  'PRD-000326': { godown: 0, normal: 3, ac: 0 }, // COLONIAL PREMIUM VSOP BDY 750ml
+  'PRD-000117': { godown: 27, normal: 11, ac: 0 }, // COURRIER NAPOLEAN 1000ml
+  'PRD-000016': { godown: 48, normal: 30, ac: 8 }, // COURRIER NAPOLEAN 750ml
+  'PRD-000118': { godown: 288, normal: 188, ac: 78 }, // COURRIER NAPOLEAN 90ml
+  'PRD-000119': { godown: 24, normal: 1, ac: 2 }, // COURRIER NAPOLEAN GREEN 750ml
+  'PRD-000120': { godown: 480, normal: 128, ac: 88 }, // COURRIER NAPOLEAN GREEN 90ml
+  'PRD-000327': { godown: 0, normal: 4, ac: 0 }, // DAVID LOUIS XO BDY 750ml
+  'PRD-000128': { godown: 0, normal: 3, ac: 0 }, // GEO'S PREMIER LEAGUE XO 750ml
+  'PRD-000130': { godown: 36, normal: 15, ac: 0 }, // GOA XXX VSOP IND 750ml
+  'PRD-000131': { godown: 384, normal: 17, ac: 0 }, // GOA XXX VSOP IND 90ml
+  'PRD-000134': { godown: 27, normal: 3, ac: 0 }, // GOLD BISCUIT BRANDY 1000ml
+  'PRD-000135': { godown: 120, normal: 10, ac: 0 }, // GOLD BISCUIT BRANDY 750ml
+  'PRD-000136': { godown: 1536, normal: 4, ac: 0 }, // GOLD BISCUIT BRANDY 90ml
+  'PRD-000139': { godown: 0, normal: 7, ac: 0 }, // GOLD BISCUIT VSOP 1000ml
+  'PRD-000140': { godown: 12, normal: 7, ac: 0 }, // GOLD BISCUIT VSOP 750ml
+  'PRD-000141': { godown: 384, normal: 81, ac: 0 }, // GOLD BISCUIT VSOP 90ml
+  'PRD-000142': { godown: 0, normal: 8, ac: 0 }, // GOLD BISCUIT XO BDY 750ml
+  'PRD-000144': { godown: 0, normal: 72, ac: 0 }, // GOLDEN BALLET VSOP 90ml
+  'PRD-000145': { godown: 12, normal: 4, ac: 9 }, // GOLDEN TOUCH 24CARAT BDY 750ml
+  'PRD-000146': { godown: 192, normal: 15, ac: 68 }, // GOLDEN TOUCH 24CARAT BDY 90ml
+  'PRD-000147': { godown: 0, normal: 3, ac: 0 }, // GRAYSONS INDIAN BRANDY 750ml
+  'PRD-000154': { godown: 0, normal: 12, ac: 0 }, // HOBSON XR BRANDY 750ml
+  'PRD-000155': { godown: 0, normal: 38, ac: 9 }, // HOBSON XR BRANDY 60ml
+  'PRD-000163': { godown: 0, normal: 13, ac: 0 }, // JEFFERIES BRANDY 1000ml
+  'PRD-000164': { godown: 132, normal: 28, ac: 0 }, // JEFFERIES BRANDY 750ml
+  'PRD-000165': { godown: 960, normal: 768, ac: 0 }, // JEFFERIES BRANDY 90ml
+  'PRD-000166': { godown: 12, normal: 8, ac: 11 }, // JEFFERIES GOLD FIN VSOP 750ml
+  'PRD-000168': { godown: 0, normal: 11, ac: 0 }, // JEFFERIES RESERVE XO BDY 750ml
+  'PRD-000169': { godown: 0, normal: 31, ac: 0 }, // JEFFERIES RESERVE XO BDY 90ml
+  'PRD-000174': { godown: 0, normal: 4, ac: 0 }, // JOHNS MONT CASTLE BRANDY 750ml
+  'PRD-000175': { godown: 0, normal: 26, ac: 0 }, // JOHNS MONT CASTLE BRANDY 90ml
+  'PRD-000177': { godown: 12, normal: 11, ac: 0 }, // KING LOUIS XO BRANDY 750ml
+  'PRD-000178': { godown: 308, normal: 29, ac: 3 }, // KING LOUIS XO BRANDY 90ml
+  'PRD-000184': { godown: 0, normal: 1, ac: 0 }, // LA FRANZ PREMIUM BRANDYC7 750ml
+  'PRD-000185': { godown: 0, normal: 11, ac: 0 }, // LA MARTINE BDY 750ml
+  'PRD-000205': { godown: 0, normal: 11, ac: 0 }, // MANSION HOUSE 2000ml
+  'PRD-000206': { godown: 36, normal: 8, ac: 0 }, // MANSION HOUSE 1000ml
+  'PRD-000207': { godown: 120, normal: 21, ac: 5 }, // MANSION HOUSE 750ml
+  'PRD-000208': { godown: 0, normal: 0, ac: 77 }, // MANSION HOUSE 90ml
+  'PRD-000209': { godown: 18, normal: 0, ac: 0 }, // MANSION HOUSE FRENCH BDY 2000ml
+  'PRD-000011': { godown: 0, normal: 54, ac: 0 }, // MANSION HOUSE FRENCH BDY 90ml
+  'PRD-000212': { godown: 48, normal: 15, ac: 0 }, // MANSION HOUSE LEMON WHITE 750ml
+  'PRD-000213': { godown: 96, normal: 72, ac: 0 }, // MANSION HOUSE LEMON WHITE 90ml
+  'PRD-000214': { godown: 12, normal: 11, ac: 0 }, // MANSION HOUSE ORANGE FLAV 750ml
+  'PRD-000215': { godown: 0, normal: 65, ac: 10 }, // MANSION HOUSE ORANGE FLAV 90ml
+  'PRD-000222': { godown: 27, normal: 13, ac: 0 }, // MCDOWELLS GOLD INDIAN BDY 1000ml
+  'PRD-000223': { godown: 96, normal: 16, ac: 9 }, // MCDOWELLS GOLD INDIAN BDY 750ml
+  'PRD-000224': { godown: 1824, normal: 500, ac: 63 }, // MCDOWELLS GOLD INDIAN BDY 90ml
+  'PRD-000225': { godown: 6, normal: 5, ac: 0 }, // MCDOWELLS VSOP DELUXE BDY 2000ml
+  'PRD-000226': { godown: 27, normal: 6, ac: 0 }, // MCDOWELLS VSOP DELUXE BDY 1000ml
+  'PRD-000014': { godown: 48, normal: 6, ac: 12 }, // MCDOWELLS VSOP DELUXE BDY 750ml
+  'PRD-000227': { godown: 288, normal: 85, ac: 69 }, // MCDOWELLS VSOP DELUXE BDY 90ml
+  'PRD-000228': { godown: 12, normal: 15, ac: 0 }, // MENS BLACK DELUXE BRANDY 750ml
+  'PRD-000012': { godown: 12, normal: 8, ac: 4 }, // MORPHEUS XO BDY 750ml
+  'PRD-000013': { godown: 28, normal: 82, ac: 50 }, // MORPHEUS XO BDY 60ml
+  'PRD-000231': { godown: 12, normal: 12, ac: 6 }, // MORPHEUS XO BLUE BRANDY 750ml
+  'PRD-000232': { godown: 175, normal: 48, ac: 30 }, // MORPHEUS XO BLUE BRANDY 60ml
+  'PRD-000247': { godown: 288, normal: 74, ac: 0 }, // OLD ADMIRAL BRANDY 90ml
+  'PRD-000259': { godown: 0, normal: 3, ac: 0 }, // PERE DAVID VSOP 1000ml
+  'PRD-000261': { godown: 0, normal: 1, ac: 1 }, // REMY MARTIN VSOP BRANDY 700ml
+  'PRD-000267': { godown: 0, normal: 3, ac: 0 }, // ROYAL CHALLANGE BRANDY 750ml
+  'PRD-000268': { godown: 0, normal: 45, ac: 0 }, // ROYAL CHALLANGE BRANDY 90ml
+  'PRD-000296': { godown: 0, normal: 0, ac: 3 }, // ST REMY VSOP FRENCH BDY 700ml
+  'PRD-000297': { godown: 0, normal: 1, ac: 0 }, // ST REMY XO FRENCH BRANDY 700ml
+  'PRD-000298': { godown: 0, normal: 3, ac: 0 }, // ST.BERNARD NAPOLEAN BDY 1000ml
+  'PRD-000300': { godown: 108, normal: 15, ac: 0 }, // SUPER SELECT BDY 750ml
+  'PRD-000301': { godown: 1344, normal: 288, ac: 0 }, // SUPER SELECT BDY 90ml
+  'PRD-000313': { godown: 0, normal: 3, ac: 0 }, // X'TASY GOLD VSOP BRANDY 750ml
+  'PRD-000314': { godown: 0, normal: 9, ac: 0 }, // XCLAMATION BRANDY 750ml
+  'PRD-000317': { godown: 0, normal: 3, ac: 0 }, // ZIMRA XTRA BDY 750ml
+  'PRD-000021': { godown: 0, normal: 1, ac: 0 }, // ANTIQUITY BLUE WHY 750ml
+  'PRD-000056': { godown: 6, normal: 4, ac: 1 }, // BALLANTINE'S SCOTCH WHY 750ml
+  'PRD-000057': { godown: 0, normal: 0, ac: 13 }, // BALLANTINE'S SCOTCH WHY 50ml
+  'PRD-000068': { godown: 0, normal: 5, ac: 0 }, // BLACK & WHITE SCOTCH WHY 750ml
+  'PRD-000069': { godown: 0, normal: 5, ac: 0 }, // BLACK & WHITE SCOTCH WHY 60ml
+  'PRD-000070': { godown: 0, normal: 3, ac: 0 }, // BLACK DOG SCOTCH WHISKY 2000ml
+  'PRD-000022': { godown: 0, normal: 9, ac: 0 }, // BLACK DOG SCOTCH WHISKY 750ml
+  'PRD-000071': { godown: 25, normal: 24, ac: 0 }, // BLACK DOG SCOTCH WHISKY 60ml
+  'PRD-000072': { godown: 0, normal: 2, ac: 0 }, // BLACK DOG TRI GOLD SCOWHY 750ml
+  'PRD-000073': { godown: 0, normal: 9, ac: 0 }, // BLACK DOG TRI GOLD SCOWHY 60ml
+  'PRD-000019': { godown: 0, normal: 0, ac: 1 }, // BLENDERS PRIDE WHISKY 60ml
+  'PRD-000076': { godown: 0, normal: 7, ac: 0 }, // BLENDERSPRIDE RESERVE WHY 750ml
+  'PRD-000104': { godown: 0, normal: 1, ac: 1 }, // CHIVAS REGAL 12YO SCOTCH 750ml
+  'PRD-000121': { godown: 0, normal: 3, ac: 0 }, // DEWARS BLE SCO WHY 750ml
+  'PRD-000156': { godown: 0, normal: 2, ac: 1 }, // JACK DANIELS 750ml
+  'PRD-000329': { godown: 0, normal: 1, ac: 0 }, // JACK DANIELS ORG HONEY 750ml
+  'PRD-000161': { godown: 0, normal: 2, ac: 0 }, // JAMESON TRI DIS IRISH WHY 750ml
+  'PRD-000170': { godown: 0, normal: 1, ac: 1 }, // JIM BEAM KENT BOURBON WHY 750ml
+  'PRD-000171': { godown: 6, normal: 6, ac: 2 }, // JOHNNIE WALKER BLACK 750ml
+  'PRD-000172': { godown: 0, normal: 36, ac: 19 }, // JOHNNIE WALKER BLACK 50ml
+  'PRD-000024': { godown: 0, normal: 12, ac: 1 }, // JOHNNIE WALKER RED 750ml
+  'PRD-000173': { godown: 0, normal: 16, ac: 0 }, // JOHNNIE WALKER RED 50ml
+  'PRD-000216': { godown: 0, normal: 9, ac: 0 }, // MANSION HOUSE WHISKY 750ml
+  'PRD-000217': { godown: 0, normal: 79, ac: 0 }, // MANSION HOUSE WHISKY 90ml
+  'PRD-000221': { godown: 0, normal: 23, ac: 0 }, // MC DOWELLS RESERVE OG WHY 90ml
+  'PRD-000263': { godown: 0, normal: 12, ac: 0 }, // ROCK WHISKY 750ml
+  'PRD-000266': { godown: 0, normal: 4, ac: 0 }, // ROULETTE UNPEATED PRE WHY 750ml
+  'PRD-000269': { godown: 0, normal: 4, ac: 0 }, // ROYAL CHALLENGE WHISKY 2000ml
+  'PRD-000270': { godown: 1, normal: 9, ac: 2 }, // ROYAL CHALLENGE WHISKY 750ml
+  'PRD-000271': { godown: 0, normal: 34, ac: 14 }, // ROYAL CHALLENGE WHISKY 90ml
+  'PRD-000017': { godown: 0, normal: 1, ac: 0 }, // ROYAL STAG DOUBLE DARK 750ml
+  'PRD-000273': { godown: 0, normal: 1, ac: 0 }, // SEAGRAM ROYAL STAG BARREL 750ml
+  'PRD-000323': { godown: 0, normal: 96, ac: 0 }, // SEAGRAM ROYAL STAG BARREL 90ml
+  'PRD-000274': { godown: 18, normal: 3, ac: 2 }, // SEAGRAMS IMERIAL BLUE 750ml
+  'PRD-000276': { godown: 0, normal: 4, ac: 0 }, // SEAGRAMS ROYAL STAG 2000ml
+  'PRD-000277': { godown: 0, normal: 10, ac: 4 }, // SEAGRAMS ROYAL STAG 750ml
+  'PRD-000324': { godown: 96, normal: 19, ac: 0 }, // SEAGRAMS ROYAL STAG 90ml
+  'PRD-000278': { godown: 25, normal: 0, ac: 0 }, // SEAGRAMS ROYAL STAG 60ml
+  'PRD-000325': { godown: 12, normal: 10, ac: 0 }, // SEGRAMS 100 PIPERS SCH WH 750ml
+  'PRD-000279': { godown: 125, normal: 0, ac: 0 }, // SEGRAMS 100 PIPERS SCH WH 60ml
+  'PRD-000280': { godown: 3, normal: 2, ac: 1 }, // SEGRAMS PRIDE RESERVE WHY 750ml
+  'PRD-000283': { godown: 0, normal: 4, ac: 0 }, // SIGNATURE RARE AGED WHY 2000ml
+  'PRD-000284': { godown: 0, normal: 6, ac: 0 }, // SIGNATURE RARE AGED WHY 1000ml
+  'PRD-000020': { godown: 0, normal: 12, ac: 1 }, // SIGNATURE RARE AGED WHY 750ml
+  'PRD-000302': { godown: 0, normal: 0, ac: 1 }, // TEACHERS 50 BL SCO WHY 750ml
+  'PRD-000310': { godown: 0, normal: 5, ac: 0 }, // VAT 69 BLENDED SCOTCH WHY 750ml
+  'PRD-000311': { godown: 0, normal: 0, ac: 10 }, // VAT 69 BLENDED SCOTCH WHY 60ml
+  'PRD-000312': { godown: 0, normal: 6, ac: 0 }, // WHISTLER BAR AGED WKY 750ml
+  'PRD-000316': { godown: 12, normal: 3, ac: 0 }, // XCLAMATION WHYSKY 750ml
+  'PRD-000040': { godown: 0, normal: 1, ac: 0 }, // ABSOLUT LEMON FLAV 750ml
+  'PRD-000041': { godown: 0, normal: 2, ac: 1 }, // ABSOLUT VODKA 750ml
+  'PRD-000058': { godown: 6, normal: 0, ac: 4 }, // BALLET BLUE VODKA MOJITO 750ml
+  'PRD-000059': { godown: 0, normal: 27, ac: 0 }, // BALLET BLUE VODKA MOJITO 60ml
+  'PRD-000062': { godown: 30, normal: 8, ac: 0 }, // BALLET PINK VODKA 750ml
+  'PRD-000105': { godown: 84, normal: 20, ac: 0 }, // CHRIS GUAVA VODKA 750ml
+  'PRD-000108': { godown: 288, normal: 102, ac: 0 }, // CHRIS LEMON VODKA 90ml
+  'PRD-000112': { godown: 192, normal: 0, ac: 0 }, // CHRIS ORANGE VODKA 90ml
+  'PRD-000114': { godown: 49, normal: 0, ac: 0 }, // CHRIS WATERMELON VODKA 90ml
+  'PRD-000162': { godown: 0, normal: 9, ac: 0 }, // JAZZ BLUE VODKA 750ml
+  'PRD-000187': { godown: 54, normal: 10, ac: 0 }, // M2 JAMUNSPICYMINTFL VODKA 750ml
+  'PRD-000188': { godown: 0, normal: 5, ac: 0 }, // M2 MAGIC CRANBERRY TEASE 750ml
+  'PRD-000189': { godown: 525, normal: 114, ac: 31 }, // M2 NEWREMIX FLAV.ORANGE 60ml
+  'PRD-000320': { godown: 6, normal: 0, ac: 0 }, // M2 PREM GRAIN VODKA 750ml
+  'PRD-000029': { godown: 20, normal: 12, ac: 0 }, // MAGIC MOMENTS FLAVOUR 750ml
+  'PRD-000203': { godown: 0, normal: 0, ac: 2 }, // MAGIC MOMENTS VIVID PINK 750ml
+  'PRD-000235': { godown: 0, normal: 0, ac: 3 }, // NEON VODKA APPLE 750ml
+  'PRD-000236': { godown: 4, normal: 0, ac: 0 }, // NEON VODKA APPLE 90ml
+  'PRD-000237': { godown: 84, normal: 35, ac: 0 }, // NEON VODKA FLAVOUR 750ml
+  'PRD-000238': { godown: 304, normal: 310, ac: 25 }, // NEON VODKA FLAVOUR 90ml
+  'PRD-000240': { godown: 4, normal: 0, ac: 0 }, // NEON VODKA GUAVA 90ml
+  'PRD-000252': { godown: 0, normal: 2, ac: 0 }, // OXYGEN APPLE VODKA 750ml
+  'PRD-000253': { godown: 0, normal: 20, ac: 0 }, // OXYGEN APPLE VODKA 90ml
+  'PRD-000254': { godown: 0, normal: 2, ac: 0 }, // OXYZEN ORANGE VODKA 750ml
+  'PRD-000255': { godown: 0, normal: 3, ac: 0 }, // OXYZEN VANILLA VODKA 750ml
+  'PRD-000256': { godown: 0, normal: 6, ac: 0 }, // OXYZEN VODKA 750ml
+  'PRD-000262': { godown: 0, normal: 7, ac: 2 }, // RESOLUTE PINK VODKA 750ml
+  'PRD-000286': { godown: 0, normal: 22, ac: 0 }, // SMIRNOFF APPLE VODKA 60ml
+  'PRD-000287': { godown: 24, normal: 9, ac: 0 }, // SMIRNOFF MINT JAMUN VODKA 750ml
+  'PRD-000289': { godown: 0, normal: 7, ac: 0 }, // SMIRNOFF ORANGE VODKA 750ml
+  'PRD-000030': { godown: 0, normal: 6, ac: 0 }, // SMIRNOFF TRIPLE DIS VODKA 750ml
+  'PRD-000291': { godown: 0, normal: 11, ac: 0 }, // SMIRNOFF TRIPLE DIS VODKA 60ml
+  'PRD-000292': { godown: 1, normal: 0, ac: 0 }, // SMIRNOFF ZESTY LIME VODKA 750ml
+  'PRD-000047': { godown: 6, normal: 4, ac: 0 }, // BACARDI BLACK RUM 750ml
+  'PRD-000027': { godown: 0, normal: 8, ac: 0 }, // BACARDI CARTA WHITE RUM 750ml
+  'PRD-000048': { godown: 0, normal: 3, ac: 0 }, // BACARDI GINGER RUM 750ml
+  'PRD-000049': { godown: 0, normal: 11, ac: 0 }, // BACARDI GUAVA RUM 750ml
+  'PRD-000028': { godown: 12, normal: 16, ac: 0 }, // BACARDI LEMON RUM 750ml
+  'PRD-000050': { godown: 325, normal: 40, ac: 46 }, // BACARDI LEMON RUM 60ml
+  'PRD-000051': { godown: 0, normal: 12, ac: 0 }, // BACARDI MANGO CHILI RUM 750ml
+  'PRD-000052': { godown: 3, normal: 0, ac: 0 }, // BACARDI ORANGE RUM 750ml
+  'PRD-000053': { godown: 175, normal: 0, ac: 0 }, // BACARDI ORANGE RUM 60ml
+  'PRD-000054': { godown: 0, normal: 2, ac: 0 }, // BACARDI ORO GOLD RUM 750ml
+  'PRD-000098': { godown: 0, normal: 17, ac: 0 }, // CABO WHITE RUM 750ml
+  'PRD-000099': { godown: 50, normal: 29, ac: 0 }, // CABO WHITE RUM 60ml
+  'PRD-000137': { godown: 0, normal: 10, ac: 0 }, // GOLD BISCUIT RUM 750ml
+  'PRD-000153': { godown: 0, normal: 6, ac: 0 }, // HERCULES DELUXE 3X RUM 750ml
+  'PRD-000248': { godown: 0, normal: 9, ac: 0 }, // OLD MONK APPLE RUM 750ml
+  'PRD-000249': { godown: 0, normal: 10, ac: 1 }, // OLD MONK COFFEE RUM 750ml
+  'PRD-000250': { godown: 0, normal: 9, ac: 0 }, // OLD MONK LEGEND RUM 750ml
+  'PRD-000251': { godown: 0, normal: 0, ac: 9 }, // OLD MONK LEMON RUM 750ml
+  'PRD-000025': { godown: 48, normal: 18, ac: 11 }, // OLD MONK RUM 750ml
+  'PRD-000026': { godown: 600, normal: 108, ac: 6 }, // OLD MONK RUM 90ml
+  'PRD-000321': { godown: 12, normal: 0, ac: 0 }, // OLD MONK WHITE RUM 750ml
+  'PRD-000315': { godown: 0, normal: 3, ac: 0 }, // XCLAMATION RUM 750ml
+  'PRD-000034': { godown: 12, normal: 13, ac: 0 }, // 100 BARRELS PORT WINE 750ml
+  'PRD-000035': { godown: 0, normal: 68, ac: 0 }, // 100 BARRELS PORT WINE 180ml
+  'PRD-000077': { godown: 48, normal: 38, ac: 0 }, // BLUE BIRD PORT WINE 180ml
+  'PRD-000084': { godown: 24, normal: 26, ac: 0 }, // BOROKA FORBIDDEN APPLE 330ml
+  'PRD-000094': { godown: 36, normal: 8, ac: 0 }, // BRO CODE KRAFT 250ml
+  'PRD-000124': { godown: 0, normal: 7, ac: 0 }, // ELITE PLANTINUM WINE 750ml
+  'PRD-000125': { godown: 48, normal: 35, ac: 0 }, // ELITE PLANTINUM WINE 180ml
+  'PRD-000157': { godown: 0, normal: 3, ac: 0 }, // JACOBS CREEK SHIRAZ WINE 750ml
+  'PRD-000233': { godown: 0, normal: 13, ac: 0 }, // MUMTAJ GRAPE WINE 750ml
+  'PRD-000234': { godown: 0, normal: 42, ac: 0 }, // MUMTAJ GRAPE WINE 180ml
+  'PRD-000272': { godown: 0, normal: 5, ac: 0 }, // SAMARA RED WINE 750ml
+  'PRD-000281': { godown: 12, normal: 8, ac: 0 }, // SIDUS PREMIUM RED WINE 750ml
+  'PRD-000282': { godown: 48, normal: 13, ac: 0 }, // SIDUS PREMIUM RED WINE 180ml
+  'PRD-000294': { godown: 24, normal: 0, ac: 0 }, // SONIC BLACK 330ml
+  'PRD-000299': { godown: 0, normal: 1, ac: 0 }, // SULA CHENIN WHITE WINE 750ml
+  'PRD-000031': { godown: 0, normal: 3, ac: 2 }, // SULA SHRIAZ CABERNET RED 750ml
+  'PRD-000307': { godown: 0, normal: 2, ac: 0 }, // TINTO CASHEW FENI 750ml
+  'PRD-000309': { godown: 0, normal: 9, ac: 0 }, // VASCODAGAMA WINE 750ml
+  'PRD-000083': { godown: 0, normal: 3, ac: 1 }, // BOMBAY SAP LON DRY GIN 750ml
+  'PRD-000264': { godown: 0, normal: 2, ac: 1 }, // ROULETTE LONDON DRY GIN 750ml
+  'PRD-000086': { godown: 96, normal: 13, ac: 0 }, // BREEZER BOLD GUAVA CHILLI 275ml
+  'PRD-000032': { godown: 192, normal: 56, ac: 22 }, // BREEZER CRANBERRY 275ml
+  'PRD-000318': { godown: 48, normal: 22, ac: 48 }, // BUZZBALLZ GUAVA AROMATIZD 180ml
+  'PRD-000158': { godown: 0, normal: 3, ac: 1 }, // JAGERMEISTER 750ml
+  'PRD-000159': { godown: 0, normal: 34, ac: 0 }, // JAGERMEISTER 50ml
+  'PRD-000322': { godown: 48, normal: 24, ac: 0 }, // PLUNGE FLOVERS 330ml
+  'PRD-000306': { godown: 0, normal: 34, ac: 0 }, // THE WEARHOUSE TEQUILA 60ml
+  'PRD-000087': { godown: 144, normal: 24, ac: 0 }, // BREEZER CLASSIC FLAVOUR 275ml
+  'PRD-000038': { godown: 0, normal: 30, ac: 0 }, // 7UP 600ml
+  'PRD-000039': { godown: 0, normal: 71, ac: 0 }, // 7UP 400ml
+  'PRD-000046': { godown: 0, normal: 12, ac: 0 }, // AQUAFINA 1000ml
+  'PRD-000100': { godown: 0, normal: 264, ac: 0 }, // CAMPA 1000ml
+  'PRD-000101': { godown: 0, normal: 102, ac: 0 }, // CAMPA 500ml
+  'PRD-000102': { godown: 0, normal: 144, ac: 0 }, // CAMPA 300ml
+  'PRD-000293': { godown: 0, normal: 11, ac: 0 }  // SODA 500ml
 };
 
 export const INITIAL_DROPDOWN_OPTIONS: DropdownOption[] = [

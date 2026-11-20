@@ -216,7 +216,7 @@ export interface StockLedgerEntry {
   productName?: string;
   delta: number;
   balanceAfter: number;
-  refType: 'PURCHASE' | 'PURCHASE_CORRECTION' | 'REQUEST' | 'TRANSFER' | 'SALE' | 'SALES_CORRECTION' | 'DAMAGE' | 'OPENING';
+  refType: 'PURCHASE' | 'PURCHASE_CORRECTION' | 'REQUEST' | 'TRANSFER' | 'SALE' | 'SALES_CORRECTION' | 'DAMAGE' | 'OPENING' | 'ADJUSTMENT';
   refId: string;
   approvedBy: string;
   businessDate: string;
