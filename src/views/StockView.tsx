@@ -5,18 +5,19 @@ import { Search, Printer, X, Filter, Edit3, CheckCircle2, AlertCircle } from 'lu
 import { CATEGORY_ORDER, sortProductsCategoryWise } from '../data/initialData';
 
 export const StockView: React.FC = () => {
-  const { stockItems, currentUser, adminAdjustStock } = useStock();
+  const { stockItems, currentUser, adminAdjustStock, saveProduct } = useStock();
   const isAdmin = currentUser?.role === 'ADMIN';
 
   const [search, setSearch] = useState('');
   const [selectedCat, setSelectedCat] = useState('');
   const [showAllStocks, setShowAllStocks] = useState(false);
 
-  // Admin Edit Stock Modal state
+  // Admin Edit Stock & Price Modal state
   const [editingItem, setEditingItem] = useState<StockItem | null>(null);
   const [editGodown, setEditGodown] = useState('0');
   const [editNormal, setEditNormal] = useState('0');
   const [editAc, setEditAc] = useState('0');
+  const [editPrice, setEditPrice] = useState('0');
   const [editReason, setEditReason] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
@@ -105,6 +106,7 @@ export const StockView: React.FC = () => {
     setEditGodown(String(item.godown));
     setEditNormal(String(item.normal));
     setEditAc(String(item.ac));
+    setEditPrice(String(item.price));
     setEditReason('');
     setStatusMsg(null);
   };
@@ -116,28 +118,56 @@ export const StockView: React.FC = () => {
     const g = Math.floor(Number(editGodown));
     const n = Math.floor(Number(editNormal));
     const a = Math.floor(Number(editAc));
+    const p = Math.round((Number(editPrice) + Number.EPSILON) * 100) / 100;
 
     if (Number.isNaN(g) || Number.isNaN(n) || Number.isNaN(a) || g < 0 || n < 0 || a < 0) {
       setStatusMsg({ type: 'err', text: 'Stock quantities must be 0 or positive whole bottle counts.' });
       return;
     }
+    if (Number.isNaN(p) || p < 0) {
+      setStatusMsg({ type: 'err', text: 'Selling price must be 0 or a positive amount.' });
+      return;
+    }
+
+    const stockChanged = g !== editingItem.godown || n !== editingItem.normal || a !== editingItem.ac;
+    const priceChanged = Math.abs(p - editingItem.price) > 0.001;
 
     try {
       setSavingEdit(true);
-      await adminAdjustStock({
-        productId: editingItem.productId,
-        godown: g,
-        normal: n,
-        ac: a,
-        reason: editReason
-      });
+      if (stockChanged) {
+        await adminAdjustStock({
+          productId: editingItem.productId,
+          godown: g,
+          normal: n,
+          ac: a,
+          reason: editReason
+        });
+      }
+      if (priceChanged) {
+        await saveProduct({
+          productId: editingItem.productId,
+          name: editingItem.name,
+          category: editingItem.category,
+          sizeML: editingItem.sizeML,
+          casePack: editingItem.casePack,
+          sellingPrice: p,
+          active: editingItem.active
+        });
+      }
+
+      const changes: string[] = [];
+      if (stockChanged) changes.push(`Stock → Godown: ${g}, Normal: ${n}, AC: ${a}`);
+      if (priceChanged) changes.push(`Selling Price → ${formatCurrency(p)}`);
+
       setStatusMsg({
         type: 'ok',
-        text: `Updated stock for ${editingItem.name} ${editingItem.sizeML}ml (Godown: ${g}, Normal: ${n}, AC: ${a}).`
+        text: changes.length > 0
+          ? `Updated ${editingItem.name} ${editingItem.sizeML}ml (${changes.join(' · ')}).`
+          : `No changes made for ${editingItem.name} ${editingItem.sizeML}ml.`
       });
       setEditingItem(null);
     } catch (err: any) {
-      setStatusMsg({ type: 'err', text: err?.message || 'Failed to update stock.' });
+      setStatusMsg({ type: 'err', text: err?.message || 'Failed to update stock or price.' });
     } finally {
       setSavingEdit(false);
     }
@@ -381,7 +411,13 @@ export const StockView: React.FC = () => {
                           <td className="py-3 px-4 font-mono text-slate-400 text-[11px]">{runningIdx}</td>
                           <td className="py-3 px-4">
                             <div className="font-bold text-slate-900 dark:text-white">{item.name}</div>
-                            <span className="text-[11px] text-slate-500 font-mono">{item.sizeML} ml</span>
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 font-mono">
+                              <span>{item.sizeML} ml</span>
+                              <span>·</span>
+                              <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                                MRP: {formatCurrency(item.price)}
+                              </span>
+                            </div>
                           </td>
                           <td className="py-3 px-4">
                             <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
@@ -400,8 +436,20 @@ export const StockView: React.FC = () => {
                           <td className="py-3 px-4 bg-purple-50/30 dark:bg-purple-950/10">
                             {formatQty(item.ac, item.casePack)}
                           </td>
-                          <td className="py-3 px-4 font-mono font-bold text-slate-900 text-right dark:text-white">
-                            {formatCurrency(item.price)}
+                          <td className="py-3 px-4 font-mono font-bold text-right text-emerald-700 dark:text-emerald-400">
+                            {isAdmin ? (
+                              <button
+                                type="button"
+                                onClick={() => openEditModal(item)}
+                                title="Click to change selling price or stock"
+                                className="inline-flex items-center gap-1 rounded-md px-2 py-1 hover:bg-amber-50 hover:text-amber-800 dark:hover:bg-amber-950/40 dark:hover:text-amber-300 transition-colors cursor-pointer"
+                              >
+                                <span>{formatCurrency(item.price)}</span>
+                                <Edit3 className="no-print h-3 w-3 opacity-60" />
+                              </button>
+                            ) : (
+                              formatCurrency(item.price)
+                            )}
                           </td>
                           {isAdmin && (
                             <td className="no-print py-3 px-4 text-right">
@@ -411,7 +459,7 @@ export const StockView: React.FC = () => {
                                 className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-bold text-amber-800 hover:bg-amber-100 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
                               >
                                 <Edit3 className="h-3 w-3" />
-                                <span>Edit Stock</span>
+                                <span>Edit Stock &amp; Price</span>
                               </button>
                             </td>
                           )}
@@ -454,20 +502,20 @@ export const StockView: React.FC = () => {
         </div>
       </div>
 
-      {/* Admin Edit Stock Modal */}
+      {/* Admin Edit Stock & Price Modal */}
       {isAdmin && editingItem && (
         <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3 dark:border-slate-800">
               <div>
                 <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-600 dark:text-amber-400">
-                  Admin Stock Override
+                  Admin Stock &amp; Price Override
                 </span>
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
                   {editingItem.name} ({editingItem.sizeML} ml)
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {editingItem.category} · {editingItem.casePack} btls/case · Selling Price: {formatCurrency(editingItem.price)}
+                  {editingItem.category} · {editingItem.casePack} btls/case · Current MRP: {formatCurrency(editingItem.price)}
                 </p>
               </div>
               <button
@@ -493,6 +541,24 @@ export const StockView: React.FC = () => {
             )}
 
             <form onSubmit={handleSaveEdit} className="mt-4 space-y-3.5">
+              <div>
+                <label className="mb-1 flex items-center justify-between text-xs font-bold text-amber-900 dark:text-amber-300">
+                  <span>Selling Price / MRP (₹ per bottle)</span>
+                  <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                    Current: {formatCurrency(editingItem.price)}
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={editPrice}
+                  onChange={e => setEditPrice(e.target.value)}
+                  className="w-full rounded-lg border border-amber-300 bg-amber-50/40 px-3 py-2 font-mono text-sm font-bold text-slate-900 focus:border-amber-500 focus:outline-none dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-white"
+                  required
+                />
+              </div>
+
               <div>
                 <label className="mb-1 flex items-center justify-between text-xs font-bold text-blue-900 dark:text-blue-300">
                   <span>Godown Central (Total Bottles)</span>
@@ -553,7 +619,7 @@ export const StockView: React.FC = () => {
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Opening physical count verification"
+                  placeholder="e.g. Opening physical count or MRP revision"
                   value={editReason}
                   onChange={e => setEditReason(e.target.value)}
                   className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-amber-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
@@ -573,7 +639,7 @@ export const StockView: React.FC = () => {
                   disabled={savingEdit}
                   className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 shadow-xs hover:bg-amber-400 disabled:opacity-50 transition-colors cursor-pointer"
                 >
-                  {savingEdit ? 'Saving...' : 'Save Stock Changes'}
+                  {savingEdit ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>
