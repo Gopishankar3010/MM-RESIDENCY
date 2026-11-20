@@ -1,13 +1,75 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
+  User as FirebaseUser,
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+} from 'firebase/auth';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from 'firebase/firestore';
+import {
+  auth,
+  BOOTSTRAPPED_ADMIN_EMAIL,
+  db,
+  googleProvider,
+  handleFirestoreError,
+  OperationType,
+} from '../firebase';
+import {
   User, Product, StockItem, PurchaseBatch, StockRequestItem, StockTransfer,
   DailySalesReport, DailyOperation, StockLedgerEntry, AuditLogEntry, DropdownOption,
-  CounterLocation, StockLocation, Role, RequestGroup
+  CounterLocation, StockLocation, Role
 } from '../types';
 import {
   INITIAL_USERS, INITIAL_PRODUCTS, INITIAL_STOCK, INITIAL_SUPPLIERS,
   INITIAL_DROPDOWN_OPTIONS, bottlesPerCase_, sortProductsCategoryWise
 } from '../data/initialData';
+import {
+  BatchOp,
+  buildStockIncrementOp,
+  clampStr,
+  CloudMemberRecord,
+  commitFirestoreOps,
+  fromFirestoreAuditEntry,
+  fromFirestoreDailyOperation,
+  fromFirestoreDailySalesReport,
+  fromFirestoreDropdownOption,
+  fromFirestoreLedgerEntry,
+  fromFirestoreProduct,
+  fromFirestorePurchaseBatch,
+  fromFirestoreStaffUser,
+  fromFirestoreStockRequest,
+  fromFirestoreStockTransfer,
+  makeSafeMemberId,
+  sanitizeEmailList,
+  toFirestoreAuditEntry,
+  toFirestoreDailyOperation,
+  toFirestoreDailySalesReport,
+  toFirestoreDropdownOption,
+  toFirestoreLedgerEntry,
+  toFirestoreProduct,
+  toFirestorePurchaseBatch,
+  toFirestoreStaffUser,
+  toFirestoreStockLevel,
+  toFirestoreStockRequest,
+  toFirestoreStockTransfer,
+} from '../utils/firestoreSync';
+
+export type CloudAccessStatus =
+  | 'loading'
+  | 'signed_out'
+  | 'unauthorized'
+  | 'connected'
+  | 'offline';
 
 interface StockContextType {
   currentUser: User | null;
@@ -27,7 +89,18 @@ interface StockContextType {
   dropdownOptions: DropdownOption[];
   pendingCount: number;
 
-  // Cloud & Multi-Device Sync & Admin Request Notifications
+  // Cloud & Multi-Device Firebase Sync & Admin Request Notifications
+  firebaseUser: FirebaseUser | null;
+  isFirebaseAuthReady: boolean;
+  cloudAccessStatus: CloudAccessStatus;
+  cloudError: string | null;
+  cloudMembers: CloudMemberRecord[];
+  signInWithGoogle: () => Promise<void>;
+  signOutGoogle: () => Promise<void>;
+  retryCloudConnection: () => Promise<void>;
+  authorizeCloudEmail: (email: string, label: string, role: 'ADMIN' | 'STAFF') => Promise<void>;
+  revokeCloudEmail: (memberId: string, email: string) => Promise<void>;
+
   syncStatus: 'synced' | 'syncing' | 'offline';
   lastSyncTime: string;
   triggerManualSync: () => Promise<void>;
@@ -114,8 +187,8 @@ interface StockContextType {
   resetUserPassword: (userId: string, newPw: string) => Promise<void>;
   toggleUserActive: (userId: string, active: boolean) => Promise<void>;
   reconcileStock: () => { checked: number; issues: any[] };
-  syncLedger: () => number;
-  resetToSampleData: () => void;
+  syncLedger: () => Promise<number>;
+  resetToSampleData: () => Promise<void>;
 }
 
 const STORAGE_KEY = 'mm_residency_stock_v2_store';
@@ -233,36 +306,15 @@ function getNowTimestamp(): string {
 function nextPrefixedId(prefix: string, existingIds: (string | undefined)[], pad = 6, offset = 0): string {
   const maxNum = existingIds.reduce((max, id) => {
     if (!id) return max;
-    const m = String(id).match(/(\d+)$/);
+    const m = String(id).match(/^[\w]+-(\d+)/);
     const num = m ? Number(m[1]) : 0;
     return num > max ? num : max;
   }, 0);
   return `${prefix}-${String(maxNum + 1 + offset).padStart(pad, '0')}`;
 }
 
-function mergeUsersSafe(primary: User[], secondary: User[]): User[] {
-  const byKey = new Map<string, User>();
-  const keyOf = (u: User) => String(u.userId || u.username || '').toLowerCase();
-
-  [...INITIAL_USERS, ...(Array.isArray(secondary) ? secondary : [])].forEach(u => {
-    if (!u || !u.username) return;
-    byKey.set(keyOf(u), u);
-  });
-
-  (Array.isArray(primary) ? primary : []).forEach(u => {
-    if (!u || !u.username) return;
-    const k = keyOf(u);
-    const existing = byKey.get(k);
-    if (!existing) {
-      byKey.set(k, u);
-    } else {
-      const existingTs = String(existing.updatedAt || existing.createdAt || '');
-      const nextTs = String(u.updatedAt || u.createdAt || '');
-      byKey.set(k, !existingTs || nextTs >= existingTs ? u : existing);
-    }
-  });
-
-  return Array.from(byKey.values());
+function uniqueSuffix(): string {
+  return Math.random().toString(36).slice(2, 6).toUpperCase();
 }
 
 const StockContext = createContext<StockContextType | undefined>(undefined);
@@ -295,7 +347,16 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   });
 
-  // Database tables
+  // Firebase Auth & Cloud Sync State
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [isFirebaseAuthReady, setIsFirebaseAuthReady] = useState<boolean>(false);
+  const [cloudAccessStatus, setCloudAccessStatus] = useState<CloudAccessStatus>('loading');
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [cloudMembers, setCloudMembers] = useState<CloudMemberRecord[]>([]);
+  const memberEmailsRef = React.useRef<string[]>([BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase()]);
+  const [reconnectSeq, setReconnectSeq] = useState(0);
+
+  // Database tables (initialized from localStorage cache, synced live from Firestore)
   const [users, setUsers] = useState<User[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_users');
     return raw ? JSON.parse(raw) : INITIAL_USERS;
@@ -347,7 +408,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (raw) {
       try {
         const parsed = JSON.parse(raw);
-        return parsed.map((r: any) => r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r);
+        return parsed.map((r: any) =>
+          r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r
+        );
       } catch {
         // Fallback
       }
@@ -380,20 +443,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return raw ? JSON.parse(raw) : INITIAL_DROPDOWN_OPTIONS;
   });
 
-  // Cloud Multi-Device Sync Engine + Dirty-Safe Immediate Persistence + Admin Notifications
+  // Cloud Sync UI Status & Notifications
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('synced');
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
-  const isServerHydrated = React.useRef(false);
-  const isSyncingRef = React.useRef(false);
-  const isPullingRef = React.useRef(false);
-  const pendingPullRef = React.useRef(false);
-  const serverVersionRef = React.useRef(0);
-  const serverUpdatedAtRef = React.useRef<string>('');
-  const localDirtySeqRef = React.useRef(0);
-  const pushedSeqRef = React.useRef(0);
-  const dirtySlicesRef = React.useRef<Set<string>>(new Set());
-  const clientIdRef = React.useRef<string>(`tab-${Math.random().toString(36).slice(2, 9)}-${Date.now()}`);
-  const pushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isCloudHydratedRef = React.useRef(false);
   const seenPendingIdsRef = React.useRef<Set<string> | null>(null);
   const currentUserRef = React.useRef(currentUser);
   currentUserRef.current = currentUser;
@@ -436,7 +489,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Keep localStorage synced on render as backup as well
   useEffect(() => { persistSliceToLocalStorage('_users', users); }, [users]);
   useEffect(() => { persistSliceToLocalStorage('_products', products); }, [products]);
   useEffect(() => { persistSliceToLocalStorage('_stock', stock); }, [stock]);
@@ -450,76 +502,27 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { persistSliceToLocalStorage('_suppliers', suppliers); }, [suppliers]);
   useEffect(() => { persistSliceToLocalStorage('_dropdowns', dropdownOptions); }, [dropdownOptions]);
 
-  const buildPayloadFromRef = (extra?: Record<string, any>) => ({
-    _catalogVersion: CATALOG_VERSION,
-    _openingEpoch: OPENING_EPOCH,
-    ...latestRef.current,
-    ...(extra || {})
-  });
-
-  // Synchronously updates latestRef, React states, localStorage, and tracks dirty slices
   const commitLocalState = (partial: Partial<typeof latestRef.current>, auditEntries?: AuditLogEntry[]) => {
     const next = { ...latestRef.current, ...partial };
-    Object.keys(partial).forEach(k => dirtySlicesRef.current.add(k));
     if (auditEntries && auditEntries.length > 0) {
       next.auditLog = [...auditEntries, ...next.auditLog];
-      dirtySlicesRef.current.add('auditLog');
     }
     latestRef.current = next;
-    localDirtySeqRef.current += 1;
-
-    if (partial.users !== undefined) {
-      setUsers(next.users);
-      persistSliceToLocalStorage('_users', next.users);
-    }
-    if (partial.products !== undefined) {
-      setProducts(next.products);
-      persistSliceToLocalStorage('_products', next.products);
-    }
-    if (partial.stock !== undefined) {
-      setStock(next.stock);
-      persistSliceToLocalStorage('_stock', next.stock);
-    }
-    if (partial.purchases !== undefined) {
-      setPurchases(next.purchases);
-      persistSliceToLocalStorage('_purchases', next.purchases);
-    }
-    if (partial.requests !== undefined) {
-      setRequests(next.requests);
-      persistSliceToLocalStorage('_requests', next.requests);
-    }
-    if (partial.transfers !== undefined) {
-      setTransfers(next.transfers);
-      persistSliceToLocalStorage('_transfers', next.transfers);
-    }
-    if (partial.dailySales !== undefined) {
-      setDailySales(next.dailySales);
-      persistSliceToLocalStorage('_daily_sales', next.dailySales);
-    }
-    if (partial.operations !== undefined) {
-      setOperations(next.operations);
-      persistSliceToLocalStorage('_operations', next.operations);
-    }
-    if (partial.ledger !== undefined) {
-      setLedger(next.ledger);
-      persistSliceToLocalStorage('_ledger', next.ledger);
-    }
-    if (partial.auditLog !== undefined || (auditEntries && auditEntries.length > 0)) {
-      setAuditLog(next.auditLog);
-      persistSliceToLocalStorage('_audit', next.auditLog);
-    }
-    if (partial.suppliers !== undefined) {
-      setSuppliers(next.suppliers);
-      persistSliceToLocalStorage('_suppliers', next.suppliers);
-    }
-    if (partial.dropdownOptions !== undefined) {
-      setDropdownOptions(next.dropdownOptions);
-      persistSliceToLocalStorage('_dropdowns', next.dropdownOptions);
-    }
-
-    schedulePush(40);
+    if (partial.users !== undefined) setUsers(next.users);
+    if (partial.products !== undefined) setProducts(next.products);
+    if (partial.stock !== undefined) setStock(next.stock);
+    if (partial.purchases !== undefined) setPurchases(next.purchases);
+    if (partial.requests !== undefined) setRequests(next.requests);
+    if (partial.transfers !== undefined) setTransfers(next.transfers);
+    if (partial.dailySales !== undefined) setDailySales(next.dailySales);
+    if (partial.operations !== undefined) setOperations(next.operations);
+    if (partial.ledger !== undefined) setLedger(next.ledger);
+    if (partial.auditLog !== undefined || (auditEntries && auditEntries.length > 0)) setAuditLog(next.auditLog);
+    if (partial.suppliers !== undefined) setSuppliers(next.suppliers);
+    if (partial.dropdownOptions !== undefined) setDropdownOptions(next.dropdownOptions);
   };
 
+  // Notifications state & sound alerts
   const [latestRequestAlert, setLatestRequestAlert] = useState<StockContextType['latestRequestAlert']>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     try {
@@ -554,7 +557,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         osc.stop(now + i * 0.14 + 0.24);
       });
     } catch {
-      // Ignore audio errors if blocked by browser autoplay policy
+      // Ignore audio errors
     }
   };
 
@@ -583,12 +586,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const dismissRequestAlert = () => setLatestRequestAlert(null);
 
-  // Detect newly arrived pending requests and alert Admin immediately
   useEffect(() => {
     const currentPending = requests.filter(r => r.status === 'Pending');
     const currentPendingIds = new Set(currentPending.map(r => r.requestId));
 
-    if (!isServerHydrated.current) return;
+    if (!isCloudHydratedRef.current) return;
 
     if (seenPendingIdsRef.current === null) {
       seenPendingIdsRef.current = currentPendingIds;
@@ -614,9 +616,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         productNames
       });
 
-      if (soundEnabled) {
-        playNotificationChime();
-      }
+      if (soundEnabled) playNotificationChime();
 
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
         try {
@@ -629,411 +629,650 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             n.close();
           };
         } catch {
-          // Notification constructor may be restricted in some embedded WebViews
+          // Ignore Notification errors
         }
       }
     }
   }, [requests, currentUser?.role, soundEnabled]);
 
-  // Apply an authoritative server snapshot locally without marking it dirty
-  const applyServerSnapshot = (s: any, version: number, updatedAt: string, isInitial: boolean): boolean => {
-    serverVersionRef.current = version || 1;
-    if (updatedAt) serverUpdatedAtRef.current = updatedAt;
-    const nextState = { ...latestRef.current };
-    let needsPushBack = false;
+  // Seed initial shop state into Firestore on very first connection if workspace_meta/main does not exist
+  const seedWorkspaceToFirestore = async (ownerEmail: string) => {
+    let seedUsers: User[] = INITIAL_USERS;
+    let seedProducts: Product[] = INITIAL_PRODUCTS;
+    let seedStock: Record<string, { godown: number; normal: number; ac: number }> = buildInitialStockMap();
+    let seedPurchases: PurchaseBatch[] = [];
+    let seedRequests: StockRequestItem[] = [];
+    let seedTransfers: StockTransfer[] = [];
+    let seedSales: DailySalesReport[] = [];
+    let seedOps: DailyOperation[] = [];
+    let seedLedger: StockLedgerEntry[] = [];
+    let seedAudit: AuditLogEntry[] = [];
+    let seedSuppliers: string[] = INITIAL_SUPPLIERS;
+    let seedDropdowns: DropdownOption[] = INITIAL_DROPDOWN_OPTIONS;
 
-    if (Array.isArray(s.users)) {
-      const mergedUsers = mergeUsersSafe(s.users, latestRef.current.users);
-      nextState.users = mergedUsers;
-      setUsers(mergedUsers);
-      persistSliceToLocalStorage('_users', mergedUsers);
-      if (mergedUsers.length !== s.users.length) {
-        needsPushBack = true;
-      }
-      const activeUser = currentUserRef.current;
-      if (activeUser) {
-        const refreshed = mergedUsers.find(u => u.userId === activeUser.userId || u.username.toLowerCase() === activeUser.username.toLowerCase());
-        if (refreshed) {
-          if (!refreshed.active) {
-            setCurrentUser(null);
-            localStorage.removeItem('mm_user');
-          } else if (
-            refreshed.fullName !== activeUser.fullName ||
-            refreshed.password !== activeUser.password ||
-            refreshed.role !== activeUser.role ||
-            refreshed.updatedAt !== activeUser.updatedAt
-          ) {
-            setCurrentUser(refreshed);
-            localStorage.setItem('mm_user', JSON.stringify(refreshed));
-          }
-        }
-      }
-    }
-    if (Array.isArray(s.products)) {
-      const mergedProds =
-        s._catalogVersion === CATALOG_VERSION
-          ? sortProductsCategoryWise(s.products as Product[])
-          : mergeCatalogueWithDefaults(s.products as Product[]);
-      nextState.products = mergedProds;
-      setProducts(mergedProds);
-      persistSliceToLocalStorage('_products', mergedProds);
-      localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
-    }
-    if (s.stock && typeof s.stock === 'object' && !Array.isArray(s.stock)) {
-      nextState.stock = s.stock;
-      setStock(s.stock);
-      persistSliceToLocalStorage('_stock', s.stock);
-    }
-    if (Array.isArray(s.purchases)) {
-      nextState.purchases = s.purchases;
-      setPurchases(s.purchases);
-      persistSliceToLocalStorage('_purchases', s.purchases);
-    }
-    if (Array.isArray(s.requests)) {
-      if (isInitial && seenPendingIdsRef.current === null) {
-        seenPendingIdsRef.current = new Set(
-          s.requests.filter((r: any) => r.status === 'Pending').map((r: any) => r.requestId)
-        );
-      }
-      nextState.requests = s.requests;
-      setRequests(s.requests);
-      persistSliceToLocalStorage('_requests', s.requests);
-    }
-    if (Array.isArray(s.transfers)) {
-      nextState.transfers = s.transfers;
-      setTransfers(s.transfers);
-      persistSliceToLocalStorage('_transfers', s.transfers);
-    }
-    if (Array.isArray(s.dailySales)) {
-      const normalizedSales = s.dailySales.map((r: any) =>
-        r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r
-      );
-      nextState.dailySales = normalizedSales;
-      setDailySales(normalizedSales);
-      persistSliceToLocalStorage('_daily_sales', normalizedSales);
-    }
-    if (Array.isArray(s.operations)) {
-      nextState.operations = s.operations;
-      setOperations(s.operations);
-      persistSliceToLocalStorage('_operations', s.operations);
-    }
-    if (Array.isArray(s.ledger)) {
-      nextState.ledger = s.ledger;
-      setLedger(s.ledger);
-      persistSliceToLocalStorage('_ledger', s.ledger);
-    }
-    if (Array.isArray(s.auditLog)) {
-      nextState.auditLog = s.auditLog;
-      setAuditLog(s.auditLog);
-      persistSliceToLocalStorage('_audit', s.auditLog);
-    }
-    if (Array.isArray(s.suppliers)) {
-      nextState.suppliers = s.suppliers;
-      setSuppliers(s.suppliers);
-      persistSliceToLocalStorage('_suppliers', s.suppliers);
-    }
-    if (Array.isArray(s.dropdownOptions)) {
-      nextState.dropdownOptions = s.dropdownOptions;
-      setDropdownOptions(s.dropdownOptions);
-      persistSliceToLocalStorage('_dropdowns', s.dropdownOptions);
-    }
-
-    latestRef.current = nextState;
-    return needsPushBack;
-  };
-
-  // Push state to /api/state
-  const pushServerState = async (payloadOverride?: any): Promise<boolean> => {
-    const targetSeq = localDirtySeqRef.current;
-    const dirtyList = Array.from(dirtySlicesRef.current);
-    const payload = payloadOverride || buildPayloadFromRef({
-      _baseVersion: serverVersionRef.current,
-      _dirtySlices: dirtyList,
-      _clientId: clientIdRef.current
-    });
+    // Preserve any opening data already stored on the server if present
     try {
-      setSyncStatus('syncing');
-      isSyncingRef.current = true;
-      const res = await fetch('/api/state', {
-        method: 'POST',
-        cache: 'no-store',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const res = await fetch(`/api/state?t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok) {
         const json = await res.json();
-        if (json.merged && json.data && localDirtySeqRef.current === targetSeq) {
-          applyServerSnapshot(json.data, json.version, json.updatedAt || '', false);
-        } else {
-          if (json.version) serverVersionRef.current = json.version;
-          if (json.updatedAt) serverUpdatedAtRef.current = json.updatedAt;
+        const s = json?.data;
+        if (s && s._openingEpoch === OPENING_EPOCH) {
+          if (Array.isArray(s.users) && s.users.length) seedUsers = s.users;
+          if (Array.isArray(s.products) && s.products.length) seedProducts = mergeCatalogueWithDefaults(s.products);
+          if (s.stock && typeof s.stock === 'object') seedStock = { ...seedStock, ...s.stock };
+          if (Array.isArray(s.purchases)) seedPurchases = s.purchases;
+          if (Array.isArray(s.requests)) seedRequests = s.requests;
+          if (Array.isArray(s.transfers)) seedTransfers = s.transfers;
+          if (Array.isArray(s.dailySales)) seedSales = s.dailySales;
+          if (Array.isArray(s.operations)) seedOps = s.operations;
+          if (Array.isArray(s.ledger)) seedLedger = s.ledger;
+          if (Array.isArray(s.auditLog)) seedAudit = s.auditLog;
+          if (Array.isArray(s.suppliers) && s.suppliers.length) seedSuppliers = s.suppliers;
+          if (Array.isArray(s.dropdownOptions) && s.dropdownOptions.length) seedDropdowns = s.dropdownOptions;
         }
-        if (targetSeq > pushedSeqRef.current) {
-          pushedSeqRef.current = targetSeq;
-        }
-        if (localDirtySeqRef.current === targetSeq) {
-          dirtySlicesRef.current.clear();
-        }
-        setSyncStatus('synced');
-        setLastSyncTime(new Date().toLocaleTimeString());
-        return true;
-      } else {
-        setSyncStatus('offline');
-        return false;
       }
     } catch {
-      setSyncStatus('offline');
-      return false;
-    } finally {
-      isSyncingRef.current = false;
-      if (!payloadOverride && localDirtySeqRef.current > pushedSeqRef.current) {
-        schedulePush(20);
-      } else if (pendingPullRef.current) {
-        pendingPullRef.current = false;
-        pullServerState(false);
-      }
+      // Fall back to INITIAL_* opening state
     }
-  };
 
-  function schedulePush(delayMs = 40) {
-    if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
-    pushTimerRef.current = setTimeout(() => {
-      pushTimerRef.current = null;
-      if (isServerHydrated.current && !isSyncingRef.current) {
-        pushServerState();
-      }
-    }, delayMs);
-  }
+    const memberList = sanitizeEmailList([ownerEmail]);
+    memberEmailsRef.current = memberList;
 
-  const flushServerPush = async () => {
-    if (pushTimerRef.current) {
-      clearTimeout(pushTimerRef.current);
-      pushTimerRef.current = null;
-    }
-    if (localDirtySeqRef.current > pushedSeqRef.current) {
-      await pushServerState();
-    }
-  };
-
-  // Pull state from /api/state (never clobbers dirty local edits)
-  const pullServerState = async (isInitial = false) => {
-    if (isSyncingRef.current) {
-      pendingPullRef.current = true;
-      return;
-    }
-    if (isPullingRef.current) return;
-    // If there are unsaved local edits, push them instead of overwriting local state
-    if (!isInitial && localDirtySeqRef.current > pushedSeqRef.current) {
-      await flushServerPush();
-      return;
-    }
-    const seqBeforeFetch = localDirtySeqRef.current;
-    isPullingRef.current = true;
     try {
-      const res = await fetch(`/api/state?t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
+      await setDoc(doc(db, 'workspace_meta', 'main'), {
+        metaId: 'main',
+        bootstrapped: true,
+        openingEpoch: OPENING_EPOCH,
+        catalogVersion: CATALOG_VERSION,
+        ownerEmail: BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase(),
+        memberEmails: memberList,
+        suppliers: seedSuppliers.slice(0, 100),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const json = await res.json();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'workspace_meta/main');
+    }
 
-      // Abort remote apply if a local edit occurred while fetch was in flight
-      if (localDirtySeqRef.current !== seqBeforeFetch || localDirtySeqRef.current > pushedSeqRef.current) {
-        await pushServerState();
-        return;
-      }
+    const ops: BatchOp[] = [];
+    const ownerMemberId = makeSafeMemberId(BOOTSTRAPPED_ADMIN_EMAIL);
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'cloud_members', ownerMemberId),
+      data: {
+        memberId: ownerMemberId,
+        email: BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase(),
+        label: 'Primary Owner Admin',
+        role: 'ADMIN',
+        addedBy: ownerEmail,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+    });
 
-      if (json.success && json.data) {
-        const s = json.data;
-        if (s._openingEpoch !== OPENING_EPOCH) {
-          // Stale pre-opening server state detected: preserve existing users and overwrite opening dataset
-          const cleanStock = buildInitialStockMap();
-          const preservedUsers = mergeUsersSafe(
-            Array.isArray(s.users) ? s.users : [],
-            latestRef.current.users
-          );
-          commitLocalState({
-            users: preservedUsers,
-            products: INITIAL_PRODUCTS,
-            stock: cleanStock,
-            purchases: [],
-            requests: [],
-            transfers: [],
-            dailySales: [],
-            operations: [],
-            ledger: [],
-            auditLog: []
-          });
-          await pushServerState(buildPayloadFromRef());
+    seedUsers.forEach(u => {
+      ops.push({ type: 'set', ref: doc(db, 'staff_users', u.userId), data: toFirestoreStaffUser(u, memberList, true) });
+    });
+    seedProducts.forEach(p => {
+      ops.push({ type: 'set', ref: doc(db, 'products', p.productId), data: toFirestoreProduct(p, memberList, true) });
+      const s = seedStock[p.productId] || { godown: 0, normal: 0, ac: 0 };
+      ops.push({ type: 'set', ref: doc(db, 'stock', p.productId), data: toFirestoreStockLevel(p.productId, s, memberList, true) });
+    });
+    seedDropdowns.forEach(d => {
+      ops.push({ type: 'set', ref: doc(db, 'dropdown_options', d.optionId), data: toFirestoreDropdownOption(d, memberList, true) });
+    });
+    seedPurchases.forEach(b => {
+      ops.push({ type: 'set', ref: doc(db, 'purchases', b.batchId), data: toFirestorePurchaseBatch(b, memberList, true) });
+    });
+    seedRequests.forEach(r => {
+      ops.push({ type: 'set', ref: doc(db, 'requests', r.requestId), data: toFirestoreStockRequest(r, memberList, true) });
+    });
+    seedTransfers.forEach(t => {
+      ops.push({ type: 'set', ref: doc(db, 'transfers', t.transferId), data: toFirestoreStockTransfer(t, memberList, true) });
+    });
+    seedSales.forEach(r => {
+      ops.push({ type: 'set', ref: doc(db, 'daily_sales', r.reportId), data: toFirestoreDailySalesReport(r, memberList, true) });
+    });
+    seedOps.forEach(o => {
+      ops.push({ type: 'set', ref: doc(db, 'operations', o.operationId), data: toFirestoreDailyOperation(o, memberList, true) });
+    });
+    seedLedger.forEach(l => {
+      ops.push({ type: 'set', ref: doc(db, 'ledger', l.ledgerId), data: toFirestoreLedgerEntry(l, memberList, true) });
+    });
+    seedAudit.forEach(a => {
+      ops.push({ type: 'set', ref: doc(db, 'audit_log', a.auditId), data: toFirestoreAuditEntry(a, memberList, true) });
+    });
+
+    await commitFirestoreOps(ops, 'bootstrap_seed');
+  };
+
+  // Real-time Firebase Auth & Firestore Subscription Engine
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
+      setFirebaseUser(fbUser);
+      setIsFirebaseAuthReady(true);
+    });
+    return () => unsubAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!isFirebaseAuthReady) return;
+
+    if (!firebaseUser) {
+      isCloudHydratedRef.current = false;
+      setCloudAccessStatus('signed_out');
+      setCloudError(null);
+      setSyncStatus('offline');
+      return;
+    }
+
+    const email = (firebaseUser.email || '').trim().toLowerCase();
+    const isOwner = email === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    let cancelled = false;
+    const unsubs: (() => void)[] = [];
+
+    const setupRealtimeSync = async () => {
+      setCloudAccessStatus('loading');
+      setCloudError(null);
+      setSyncStatus('syncing');
+
+      try {
+        if (isOwner) {
+          // Ensure owner UID exists in /admins
+          const adminDocRef = doc(db, 'admins', firebaseUser.uid);
+          const adminSnap = await getDoc(adminDocRef);
+          if (!adminSnap.exists()) {
+            await setDoc(adminDocRef, {
+              uid: firebaseUser.uid,
+              email,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+
+          // Check whether workspace_meta/main has already been seeded
+          const metaSnap = await getDoc(doc(db, 'workspace_meta', 'main'));
+          if (!metaSnap.exists()) {
+            await seedWorkspaceToFirestore(email);
+          }
         } else {
-          const remoteVer = Number(json.version || 0);
-          const remoteUpdatedAt = String(json.updatedAt || '');
-          const hasChanged =
-            isInitial ||
-            (remoteVer > 0 && remoteVer !== serverVersionRef.current) ||
-            (remoteUpdatedAt && remoteUpdatedAt !== serverUpdatedAtRef.current);
-
-          if (hasChanged) {
-            const needsPushBack = applyServerSnapshot(s, remoteVer, remoteUpdatedAt, isInitial);
-            if (needsPushBack) {
-              localDirtySeqRef.current += 1;
-              dirtySlicesRef.current.add('users');
-              await pushServerState(buildPayloadFromRef({ _baseVersion: remoteVer, _dirtySlices: ['users'], _clientId: clientIdRef.current }));
+          // Verify team member email exists in workspace_meta/main
+          try {
+            const metaSnap = await getDoc(doc(db, 'workspace_meta', 'main'));
+            if (!metaSnap.exists()) {
+              if (!cancelled) {
+                setCloudAccessStatus('unauthorized');
+                setCloudError(
+                  `Shop cloud database has not been initialized by the owner (${BOOTSTRAPPED_ADMIN_EMAIL}) yet. Please have the Shop Admin sign in once first.`
+                );
+                setSyncStatus('offline');
+              }
+              return;
             }
+            const metaData = metaSnap.data();
+            const list: string[] = Array.isArray(metaData?.memberEmails) ? metaData.memberEmails : [];
+            if (!list.includes(email)) {
+              if (!cancelled) {
+                setCloudAccessStatus('unauthorized');
+                setCloudError(
+                  `Google account "${email}" is not authorized yet. Ask Shop Admin (${BOOTSTRAPPED_ADMIN_EMAIL}) to add "${email}" in User Management → Cloud Sync Devices.`
+                );
+                setSyncStatus('offline');
+              }
+              return;
+            }
+          } catch (permErr: any) {
+            if (!cancelled) {
+              setCloudAccessStatus('unauthorized');
+              setCloudError(
+                `Google account "${email}" does not have cloud workspace access yet. Ask Shop Admin (${BOOTSTRAPPED_ADMIN_EMAIL}) to authorize "${email}" in User Management → Cloud Sync Devices.`
+              );
+              setSyncStatus('offline');
+            }
+            return;
           }
         }
-      } else {
-        // Server store empty: push fresh dataset immediately so all devices sync cleanly
-        await pushServerState(buildPayloadFromRef());
+
+        if (cancelled) return;
+
+        // Helper for queries respecting Pillar 8 (allow list validates resource.data.memberEmails)
+        const scopedQuery = (colName: string) =>
+          isOwner
+            ? collection(db, colName)
+            : query(collection(db, colName), where('memberEmails', 'array-contains', email));
+
+        // 1. workspace_meta/main
+        unsubs.push(
+          onSnapshot(
+            doc(db, 'workspace_meta', 'main'),
+            (snap) => {
+              if (!snap.exists()) return;
+              const data = snap.data();
+              if (Array.isArray(data.memberEmails)) {
+                memberEmailsRef.current = sanitizeEmailList(data.memberEmails);
+              }
+              if (Array.isArray(data.suppliers)) {
+                latestRef.current.suppliers = data.suppliers;
+                setSuppliers(data.suppliers);
+              }
+              setSyncStatus('synced');
+              setLastSyncTime(new Date().toLocaleTimeString());
+            },
+            (err) => handleFirestoreError(err, OperationType.GET, 'workspace_meta/main')
+          )
+        );
+
+        // 2. cloud_members (admins see all, team sees own)
+        unsubs.push(
+          onSnapshot(
+            isOwner
+              ? collection(db, 'cloud_members')
+              : query(collection(db, 'cloud_members'), where('email', '==', email)),
+            (snap) => {
+              const list = snap.docs
+                .map(d => d.data() as CloudMemberRecord)
+                .sort((a, b) => a.email.localeCompare(b.email));
+              setCloudMembers(list);
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'cloud_members')
+          )
+        );
+
+        // 3. staff_users
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('staff_users'),
+            (snap) => {
+              const list = snap.docs
+                .map(d => fromFirestoreStaffUser(d.data()))
+                .sort((a, b) => a.userId.localeCompare(b.userId));
+              if (list.length > 0) {
+                latestRef.current.users = list;
+                setUsers(list);
+                const active = currentUserRef.current;
+                if (active) {
+                  const refreshed = list.find(
+                    u => u.userId === active.userId || u.username.toLowerCase() === active.username.toLowerCase()
+                  );
+                  if (refreshed) {
+                    if (!refreshed.active) {
+                      setCurrentUser(null);
+                      localStorage.removeItem('mm_user');
+                    } else if (
+                      refreshed.fullName !== active.fullName ||
+                      refreshed.password !== active.password ||
+                      refreshed.role !== active.role ||
+                      refreshed.updatedAt !== active.updatedAt
+                    ) {
+                      setCurrentUser(refreshed);
+                      localStorage.setItem('mm_user', JSON.stringify(refreshed));
+                    }
+                  }
+                }
+              }
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'staff_users')
+          )
+        );
+
+        // 4. products
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('products'),
+            (snap) => {
+              const list = sortProductsCategoryWise(snap.docs.map(d => fromFirestoreProduct(d.data())));
+              if (list.length > 0) {
+                latestRef.current.products = list;
+                setProducts(list);
+              }
+              setSyncStatus('synced');
+              setLastSyncTime(new Date().toLocaleTimeString());
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'products')
+          )
+        );
+
+        // 5. stock
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('stock'),
+            (snap) => {
+              const map: Record<string, { godown: number; normal: number; ac: number }> = {};
+              snap.docs.forEach(d => {
+                const data = d.data();
+                map[d.id] = {
+                  godown: Math.max(0, Number(data.godown) || 0),
+                  normal: Math.max(0, Number(data.normal) || 0),
+                  ac: Math.max(0, Number(data.ac) || 0),
+                };
+              });
+              if (Object.keys(map).length > 0) {
+                latestRef.current.stock = map;
+                setStock(map);
+              }
+              setSyncStatus('synced');
+              setLastSyncTime(new Date().toLocaleTimeString());
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'stock')
+          )
+        );
+
+        // 6. purchases
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('purchases'),
+            (snap) => {
+              const list = snap.docs
+                .map(d => fromFirestorePurchaseBatch(d.data()))
+                .sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date) || b.batchId.localeCompare(a.batchId));
+              latestRef.current.purchases = list;
+              setPurchases(list);
+              setSyncStatus('synced');
+              setLastSyncTime(new Date().toLocaleTimeString());
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'purchases')
+          )
+        );
+
+        // 7. requests
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('requests'),
+            (snap) => {
+              const list = snap.docs
+                .map(d => fromFirestoreStockRequest(d.data()))
+                .sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date) || b.requestId.localeCompare(a.requestId));
+              if (!isCloudHydratedRef.current && seenPendingIdsRef.current === null) {
+                seenPendingIdsRef.current = new Set(
+                  list.filter(r => r.status === 'Pending').map(r => r.requestId)
+                );
+              }
+              isCloudHydratedRef.current = true;
+              latestRef.current.requests = list;
+              setRequests(list);
+              setSyncStatus('synced');
+              setLastSyncTime(new Date().toLocaleTimeString());
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'requests')
+          )
+        );
+
+        // 8. transfers
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('transfers'),
+            (snap) => {
+              const list = snap.docs
+                .map(d => fromFirestoreStockTransfer(d.data()))
+                .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || b.transferId.localeCompare(a.transferId));
+              latestRef.current.transfers = list;
+              setTransfers(list);
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'transfers')
+          )
+        );
+
+        // 9. daily_sales
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('daily_sales'),
+            (snap) => {
+              const list = snap.docs
+                .map(d => fromFirestoreDailySalesReport(d.data()))
+                .sort((a, b) => b.date.localeCompare(a.date) || b.reportId.localeCompare(a.reportId));
+              latestRef.current.dailySales = list;
+              setDailySales(list);
+              setSyncStatus('synced');
+              setLastSyncTime(new Date().toLocaleTimeString());
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'daily_sales')
+          )
+        );
+
+        // 10. operations
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('operations'),
+            (snap) => {
+              const list = snap.docs
+                .map(d => fromFirestoreDailyOperation(d.data()))
+                .sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date) || b.operationId.localeCompare(a.operationId));
+              latestRef.current.operations = list;
+              setOperations(list);
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'operations')
+          )
+        );
+
+        // 11. ledger
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('ledger'),
+            (snap) => {
+              const list = snap.docs
+                .map(d => fromFirestoreLedgerEntry(d.data()))
+                .sort((a, b) => (b.seq || 0) - (a.seq || 0) || b.ledgerId.localeCompare(a.ledgerId));
+              latestRef.current.ledger = list;
+              setLedger(list);
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'ledger')
+          )
+        );
+
+        // 12. audit_log
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('audit_log'),
+            (snap) => {
+              const list = snap.docs
+                .map(d => fromFirestoreAuditEntry(d.data()))
+                .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '') || b.auditId.localeCompare(a.auditId));
+              latestRef.current.auditLog = list;
+              setAuditLog(list);
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'audit_log')
+          )
+        );
+
+        // 13. dropdown_options
+        unsubs.push(
+          onSnapshot(
+            scopedQuery('dropdown_options'),
+            (snap) => {
+              const list = snap.docs
+                .map(d => fromFirestoreDropdownOption(d.data()))
+                .sort((a, b) => a.optionId.localeCompare(b.optionId));
+              if (list.length > 0) {
+                latestRef.current.dropdownOptions = list;
+                setDropdownOptions(list);
+              }
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'dropdown_options')
+          )
+        );
+
+        if (!cancelled) {
+          setCloudAccessStatus('connected');
+          setSyncStatus('synced');
+          setLastSyncTime(new Date().toLocaleTimeString());
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setCloudAccessStatus('offline');
+          setCloudError(err?.message || 'Unable to connect to cloud sync database.');
+          setSyncStatus('offline');
+        }
       }
-      setSyncStatus('synced');
-      setLastSyncTime(new Date().toLocaleTimeString());
-    } catch {
-      setSyncStatus('offline');
-    } finally {
-      isPullingRef.current = false;
-      isServerHydrated.current = true;
-    }
+    };
+
+    setupRealtimeSync();
+
+    return () => {
+      cancelled = true;
+      unsubs.forEach(fn => fn());
+    };
+  }, [firebaseUser, isFirebaseAuthReady, reconnectSeq]);
+
+  const signInWithGoogle = async () => {
+    setCloudError(null);
+    await signInWithPopup(auth, googleProvider);
   };
 
-  // Lightweight version check every 2 seconds so cross-device updates arrive promptly even without SSE
-  const checkServerVersionAndSync = async () => {
-    if (localDirtySeqRef.current > pushedSeqRef.current) {
-      await flushServerPush();
-      return;
-    }
-    if (isSyncingRef.current || isPullingRef.current) return;
-    try {
-      const res = await fetch(`/api/version?t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
-      });
-      if (!res.ok) return;
-      const json = await res.json();
-      const remoteVer = Number(json.version || 0);
-      const remoteUpdatedAt = String(json.updatedAt || '');
-      if (
-        (remoteVer > 0 && remoteVer !== serverVersionRef.current) ||
-        (remoteUpdatedAt && remoteUpdatedAt !== serverUpdatedAtRef.current)
-      ) {
-        await pullServerState(false);
-      } else {
-        setSyncStatus(prev => (prev === 'offline' ? 'synced' : prev));
-      }
-    } catch {
-      setSyncStatus('offline');
-    }
+  const signOutGoogle = async () => {
+    await signOut(auth);
+    setCurrentUser(null);
+    localStorage.removeItem('mm_user');
+  };
+
+  const retryCloudConnection = async () => {
+    setReconnectSeq(n => n + 1);
   };
 
   const triggerManualSync = async () => {
-    if (localDirtySeqRef.current > pushedSeqRef.current) {
-      await flushServerPush();
-    } else {
-      await pullServerState(true);
-    }
+    if (!firebaseUser) return;
+    setSyncStatus('syncing');
+    setReconnectSeq(n => n + 1);
   };
 
-  // Hydrate from server on mount, subscribe to live SSE events, keepalive flush on unload
-  useEffect(() => {
-    pullServerState(true);
-    const interval = setInterval(() => {
-      checkServerVersionAndSync();
-    }, 2000);
+  // Authorize another Google email (e.g. friend's or staff's Gmail) for multi-device sync
+  const authorizeCloudEmail = async (rawEmail: string, label: string, role: 'ADMIN' | 'STAFF') => {
+    if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
+    if (!firebaseUser?.email) throw new Error('Connect Google Cloud Sync first.');
+    const fbEmail = firebaseUser.email.trim().toLowerCase();
+    const isOwner = fbEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    if (!isOwner) {
+      throw new Error(`Only the Primary Shop Owner (${BOOTSTRAPPED_ADMIN_EMAIL}) can add or remove Cloud Sync Google accounts.`);
+    }
 
-    let es: EventSource | null = null;
-    if (typeof EventSource !== 'undefined') {
+    const cleanEmail = rawEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@') || cleanEmail.length < 5 || cleanEmail.length > 160) {
+      throw new Error('Enter a valid Google email address.');
+    }
+    const nextMembers = sanitizeEmailList([...memberEmailsRef.current, cleanEmail]);
+    memberEmailsRef.current = nextMembers;
+
+    const memberId = makeSafeMemberId(cleanEmail);
+    const ops: BatchOp[] = [
+      {
+        type: 'set',
+        ref: doc(db, 'cloud_members', memberId),
+        data: {
+          memberId,
+          email: cleanEmail,
+          label: clampStr(label.trim() || cleanEmail, 80),
+          role,
+          addedBy: clampStr(fbEmail || currentUser.username, 160),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      },
+      {
+        type: 'update',
+        ref: doc(db, 'workspace_meta', 'main'),
+        data: {
+          memberEmails: nextMembers,
+          updatedAt: serverTimestamp(),
+        },
+      },
+    ];
+
+    // Stamp memberEmails onto all shared workspace documents so the new user's live queries receive everything
+    const cols = [
+      'staff_users',
+      'products',
+      'stock',
+      'purchases',
+      'requests',
+      'transfers',
+      'daily_sales',
+      'operations',
+      'ledger',
+      'audit_log',
+      'dropdown_options',
+    ];
+    for (const colName of cols) {
       try {
-        es = new EventSource('/api/events');
-        es.addEventListener('connected', (ev: MessageEvent) => {
-          try {
-            const data = JSON.parse(ev.data);
-            if (data?.version && data.version !== serverVersionRef.current) {
-              pullServerState(false);
-            }
-          } catch {
-            pullServerState(false);
-          }
+        const snap = await getDocs(collection(db, colName));
+        snap.docs.forEach(d => {
+          ops.push({
+            type: 'update',
+            ref: doc(db, colName, d.id),
+            data: {
+              memberEmails: nextMembers,
+              updatedAt: serverTimestamp(),
+            },
+          });
         });
-        es.addEventListener('state_updated', (ev: MessageEvent) => {
-          try {
-            const data = JSON.parse(ev.data);
-            if (data?.clientId && data.clientId === clientIdRef.current) return;
-            if (
-              (data?.version && data.version !== serverVersionRef.current) ||
-              (data?.updatedAt && data.updatedAt !== serverUpdatedAtRef.current)
-            ) {
-              pullServerState(false);
-            }
-          } catch {
-            pullServerState(false);
-          }
-        });
-        es.addEventListener('new_request', () => {
-          pullServerState(false);
-        });
-      } catch {
-        // Fallback to 2s version polling if EventSource fails
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, colName);
       }
     }
 
-    const flushOnUnload = () => {
-      if (localDirtySeqRef.current > pushedSeqRef.current) {
-        try {
-          fetch('/api/state', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(
-              buildPayloadFromRef({
-                _baseVersion: serverVersionRef.current,
-                _dirtySlices: Array.from(dirtySlicesRef.current),
-                _clientId: clientIdRef.current
-              })
-            ),
-            keepalive: true
+    const auditEntry = buildAuditEntry('CLOUD_MEMBER_ADDED', memberId, `${cleanEmail} (${role})`);
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, nextMembers, true),
+    });
+
+    await commitFirestoreOps(ops, 'authorize_cloud_email');
+  };
+
+  const revokeCloudEmail = async (memberId: string, rawEmail: string) => {
+    if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
+    if (!firebaseUser?.email) throw new Error('Connect Google Cloud Sync first.');
+    const fbEmail = firebaseUser.email.trim().toLowerCase();
+    const isOwner = fbEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    if (!isOwner) {
+      throw new Error(`Only the Primary Shop Owner (${BOOTSTRAPPED_ADMIN_EMAIL}) can add or remove Cloud Sync Google accounts.`);
+    }
+
+    const cleanEmail = rawEmail.trim().toLowerCase();
+    if (cleanEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase()) {
+      throw new Error('Cannot remove the primary owner account.');
+    }
+    const nextMembers = sanitizeEmailList(memberEmailsRef.current.filter(e => e !== cleanEmail));
+    memberEmailsRef.current = nextMembers;
+
+    const ops: BatchOp[] = [
+      { type: 'delete', ref: doc(db, 'cloud_members', memberId) },
+      {
+        type: 'update',
+        ref: doc(db, 'workspace_meta', 'main'),
+        data: { memberEmails: nextMembers, updatedAt: serverTimestamp() },
+      },
+    ];
+
+    const cols = [
+      'staff_users',
+      'products',
+      'stock',
+      'purchases',
+      'requests',
+      'transfers',
+      'daily_sales',
+      'operations',
+      'ledger',
+      'audit_log',
+      'dropdown_options',
+    ];
+    for (const colName of cols) {
+      try {
+        const snap = await getDocs(collection(db, colName));
+        snap.docs.forEach(d => {
+          ops.push({
+            type: 'update',
+            ref: doc(db, colName, d.id),
+            data: { memberEmails: nextMembers, updatedAt: serverTimestamp() },
           });
-        } catch {
-          // Ignore errors on unload
-        }
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, colName);
       }
-    };
+    }
 
-    const handleFocusOrVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        flushOnUnload();
-      } else if (localDirtySeqRef.current > pushedSeqRef.current) {
-        flushServerPush();
-      } else {
-        checkServerVersionAndSync();
-      }
-    };
-
-    const handleOnlineOrShow = () => {
-      if (localDirtySeqRef.current > pushedSeqRef.current) {
-        flushServerPush();
-      } else {
-        pullServerState(false);
-      }
-    };
-
-    window.addEventListener('focus', handleFocusOrVisibility);
-    window.addEventListener('online', handleOnlineOrShow);
-    window.addEventListener('pageshow', handleOnlineOrShow);
-    window.addEventListener('pagehide', flushOnUnload);
-    window.addEventListener('beforeunload', flushOnUnload);
-    document.addEventListener('visibilitychange', handleFocusOrVisibility);
-
-    return () => {
-      clearInterval(interval);
-      if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
-      if (es) es.close();
-      window.removeEventListener('focus', handleFocusOrVisibility);
-      window.removeEventListener('online', handleOnlineOrShow);
-      window.removeEventListener('pageshow', handleOnlineOrShow);
-      window.removeEventListener('pagehide', flushOnUnload);
-      window.removeEventListener('beforeunload', flushOnUnload);
-      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
-    };
-  }, []);
+    await commitFirestoreOps(ops, 'revoke_cloud_email');
+  };
 
   // Sync theme
   useEffect(() => {
@@ -1054,11 +1293,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem('mm_business_date', date);
   };
 
-  // Audit helper (updates latestRef & localStorage synchronously)
+  // Audit helper
   const buildAuditEntry = (action: string, refId: string, details: string, actorUser?: User, offset = 0): AuditLogEntry => {
     const actor = actorUser || currentUser || { userId: '-', username: 'system', role: 'SYSTEM' as Role };
+    const baseId = nextPrefixedId('AUD', latestRef.current.auditLog.map(a => a.auditId), 6, offset);
     return {
-      auditId: nextPrefixedId('AUD', latestRef.current.auditLog.map(a => a.auditId), 6, offset),
+      auditId: `${baseId}-${uniqueSuffix()}`,
       timestamp: getNowTimestamp(),
       userId: actor.userId,
       username: actor.username,
@@ -1069,19 +1309,24 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   };
 
-  const addAudit = (action: string, refId: string, details: string, actorUser?: User) => {
-    const entry = buildAuditEntry(action, refId, details, actorUser);
+  const writeAuditAsync = async (entry: AuditLogEntry) => {
     commitLocalState({ auditLog: [entry, ...latestRef.current.auditLog] });
+    if (cloudAccessStatus === 'connected') {
+      await commitFirestoreOps(
+        [{ type: 'set', ref: doc(db, 'audit_log', entry.auditId), data: toFirestoreAuditEntry(entry, memberEmailsRef.current, true) }],
+        'audit_log'
+      );
+    }
   };
 
-  // Stock Movement Engine - THE ONLY pathway to change stock levels (pure computation + atomic state commit)
+  // Stock Movement Engine - returns atomic Firestore BatchOps alongside local optimistic state update
   const applyMovements = (
     moves: { loc: StockLocation; productId: string; delta: number }[],
     refType: StockLedgerEntry['refType'],
     refId: string,
     bDate?: string,
     actor?: User
-  ) => {
+  ): BatchOp[] => {
     const now = getNowTimestamp();
     const effectiveBDate = bDate || businessDate || now.slice(0, 10);
     const curState = latestRef.current;
@@ -1092,9 +1337,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const updatedStock = { ...curState.stock };
     const newLedgerEntries: StockLedgerEntry[] = [];
     const newAuditEntries: AuditLogEntry[] = [];
+    const firestoreOps: BatchOp[] = [];
+    const perProductDeltas: Record<string, { godown?: number; normal?: number; ac?: number; existed: boolean; snapshot: { godown: number; normal: number; ac: number } }> = {};
 
     moves.forEach((m) => {
       if (!m.delta) return;
+      const existed = Boolean(updatedStock[m.productId]);
       const currentLocStock = updatedStock[m.productId] || { godown: 0, normal: 0, ac: 0 };
       const key = m.loc.toLowerCase() as 'godown' | 'normal' | 'ac';
       const before = currentLocStock[key] || 0;
@@ -1106,16 +1354,24 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         throw new Error(`Not enough stock of ${pName} at ${m.loc}: it has ${before} but ${-m.delta} is needed.`);
       }
 
-      updatedStock[m.productId] = {
+      const nextProdStock = {
         ...currentLocStock,
         [key]: after
       };
+      updatedStock[m.productId] = nextProdStock;
+
+      if (!perProductDeltas[m.productId]) {
+        perProductDeltas[m.productId] = { existed, snapshot: nextProdStock };
+      }
+      perProductDeltas[m.productId][key] = (perProductDeltas[m.productId][key] || 0) + m.delta;
+      perProductDeltas[m.productId].snapshot = nextProdStock;
 
       const prod = productMap.get(m.productId);
       const offsetIdx = newLedgerEntries.length;
+      const baseLedId = nextPrefixedId('LED', existingLedgerIds, 6, offsetIdx);
       const lEntry: StockLedgerEntry = {
         seq: nextSeq + offsetIdx,
-        ledgerId: nextPrefixedId('LED', existingLedgerIds, 6, offsetIdx),
+        ledgerId: `${baseLedId}-${uniqueSuffix()}`,
         timestamp: now,
         location: m.loc,
         productId: m.productId,
@@ -1128,15 +1384,42 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         businessDate: effectiveBDate
       };
       newLedgerEntries.push(lEntry);
-      newAuditEntries.unshift(
-        buildAuditEntry(
-          'STOCK_CHANGE',
-          refId,
-          `${lEntry.location} | ${lEntry.productName} | ${lEntry.delta > 0 ? '+' : ''}${lEntry.delta} → ${lEntry.balanceAfter} (${refType})`,
-          actor,
-          offsetIdx
-        )
+      firestoreOps.push({
+        type: 'set',
+        ref: doc(db, 'ledger', lEntry.ledgerId),
+        data: toFirestoreLedgerEntry(lEntry, memberEmailsRef.current, true),
+      });
+
+      const aEntry = buildAuditEntry(
+        'STOCK_CHANGE',
+        refId,
+        `${lEntry.location} | ${lEntry.productName} | ${lEntry.delta > 0 ? '+' : ''}${lEntry.delta} → ${lEntry.balanceAfter} (${refType})`,
+        actor,
+        offsetIdx
       );
+      newAuditEntries.unshift(aEntry);
+      firestoreOps.push({
+        type: 'set',
+        ref: doc(db, 'audit_log', aEntry.auditId),
+        data: toFirestoreAuditEntry(aEntry, memberEmailsRef.current, true),
+      });
+    });
+
+    Object.entries(perProductDeltas).forEach(([pid, info]) => {
+      if (info.existed) {
+        const op = buildStockIncrementOp(pid, {
+          godown: info.godown,
+          normal: info.normal,
+          ac: info.ac,
+        });
+        if (op) firestoreOps.push(op);
+      } else {
+        firestoreOps.push({
+          type: 'set',
+          ref: doc(db, 'stock', pid),
+          data: toFirestoreStockLevel(pid, info.snapshot, memberEmailsRef.current, true),
+        });
+      }
     });
 
     if (newLedgerEntries.length > 0) {
@@ -1148,12 +1431,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         newAuditEntries
       );
     }
+
+    return firestoreOps;
   };
 
   // Stock items with computed available quantities
   const stockItems: StockItem[] = products.map(p => {
     const s = stock[p.productId] || { godown: 0, normal: 0, ac: 0 };
-    // Pending godown requests reduce available godown stock
     const pendingGodownQty = requests
       .filter(r => r.status === 'Pending' && r.productId === p.productId)
       .reduce((sum, r) => sum + (r.qty || 0), 0);
@@ -1173,7 +1457,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   });
 
-  // Pending items count for admin badge (Only stock requests from Central Godown require Admin approval)
   const pendingCount =
     currentUser?.role === 'ADMIN'
       ? requests.filter(r => r.status === 'Pending').length
@@ -1185,22 +1468,22 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const curUsers = latestRef.current.users;
     const user = curUsers.find(u => u.username.toLowerCase() === cleanU && u.active);
     if (!user) {
-      addAudit('LOGIN_FAILED', '', `Unknown user or inactive: ${cleanU}`);
+      await writeAuditAsync(buildAuditEntry('LOGIN_FAILED', '', `Unknown user or inactive: ${cleanU}`));
       return { success: false, error: 'Wrong username or password.' };
     }
     if (user.password && user.password !== password) {
-      addAudit('LOGIN_FAILED', '', `Incorrect password for ${cleanU}`, user);
+      await writeAuditAsync(buildAuditEntry('LOGIN_FAILED', '', `Incorrect password for ${cleanU}`, user));
       return { success: false, error: 'Wrong username or password.' };
     }
     setCurrentUser(user);
     localStorage.setItem('mm_user', JSON.stringify(user));
-    addAudit('LOGIN_OK', '', `Logged in as ${user.fullName} (${user.role})`, user);
+    await writeAuditAsync(buildAuditEntry('LOGIN_OK', '', `Logged in as ${user.fullName} (${user.role})`, user));
     return { success: true };
   };
 
   const logout = () => {
     if (currentUser) {
-      addAudit('LOGOUT', '', 'User signed out');
+      writeAuditAsync(buildAuditEntry('LOGOUT', '', 'User signed out'));
     }
     setCurrentUser(null);
     localStorage.removeItem('mm_user');
@@ -1211,7 +1494,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (u) {
       setCurrentUser(u);
       localStorage.setItem('mm_user', JSON.stringify(u));
-      addAudit('USER_SWITCH', '', `Switched active profile to ${u.username}`);
+      writeAuditAsync(buildAuditEntry('USER_SWITCH', '', `Switched active profile to ${u.username}`));
     }
   };
 
@@ -1230,11 +1513,26 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const updatedMe = { ...currentUser, password: newPw, mustChange: false, updatedAt: now };
     setCurrentUser(updatedMe);
     localStorage.setItem('mm_user', JSON.stringify(updatedMe));
-    commitLocalState(
-      { users: nextUsers },
-      [buildAuditEntry('PASSWORD_CHANGED', currentUser.userId, 'User changed own password')]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('PASSWORD_CHANGED', currentUser.userId, 'User changed own password');
+    commitLocalState({ users: nextUsers }, [auditEntry]);
+
+    await commitFirestoreOps([
+      {
+        type: 'update',
+        ref: doc(db, 'staff_users', currentUser.userId),
+        data: {
+          password: clampStr(newPw, 128),
+          mustChange: false,
+          updatedAtStr: now,
+          updatedAt: serverTimestamp(),
+        },
+      },
+      {
+        type: 'set',
+        ref: doc(db, 'audit_log', auditEntry.auditId),
+        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+      },
+    ], 'staff_users');
   };
 
   // Product management
@@ -1242,30 +1540,48 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     const pack = bottlesPerCase_({ name: p.name, sizeML: p.sizeML, casePack: p.casePack });
     const curProducts = latestRef.current.products;
+    const now = getNowTimestamp();
 
     if (p.productId) {
+      const updatedProd: Product = {
+        productId: p.productId,
+        name: p.name.trim(),
+        category: p.category.trim(),
+        sizeML: Number(p.sizeML),
+        casePack: pack,
+        sellingPrice: Number(p.sellingPrice),
+        active: p.active !== undefined ? p.active : (curProducts.find(x => x.productId === p.productId)?.active ?? true),
+        updatedAt: now,
+        updatedBy: currentUser.username
+      };
       const nextProducts = sortProductsCategoryWise(
-        curProducts.map(prod =>
-          prod.productId === p.productId
-            ? {
-                ...prod,
-                name: p.name.trim(),
-                category: p.category.trim(),
-                sizeML: Number(p.sizeML),
-                casePack: pack,
-                sellingPrice: Number(p.sellingPrice),
-                active: p.active !== undefined ? p.active : prod.active,
-                updatedAt: getNowTimestamp(),
-                updatedBy: currentUser.username
-              }
-            : prod
-        )
+        curProducts.map(prod => (prod.productId === p.productId ? updatedProd : prod))
       );
-      commitLocalState(
-        { products: nextProducts },
-        [buildAuditEntry('PRODUCT_UPDATED', p.productId, `${p.name} ${p.sizeML}ml (${pack}/case) ₹${p.sellingPrice}`)]
-      );
-      await flushServerPush();
+      const auditEntry = buildAuditEntry('PRODUCT_UPDATED', p.productId, `${p.name} ${p.sizeML}ml (${pack}/case) ₹${p.sellingPrice}`);
+      commitLocalState({ products: nextProducts }, [auditEntry]);
+
+      await commitFirestoreOps([
+        {
+          type: 'update',
+          ref: doc(db, 'products', p.productId),
+          data: {
+            name: clampStr(updatedProd.name, 140),
+            category: clampStr(updatedProd.category, 80),
+            sizeML: Math.max(0, Number(updatedProd.sizeML) || 0),
+            casePack: Math.max(1, Number(updatedProd.casePack) || 1),
+            sellingPrice: Math.max(0, Number(updatedProd.sellingPrice) || 0),
+            active: Boolean(updatedProd.active),
+            updatedAtStr: now,
+            updatedBy: clampStr(currentUser.username, 80),
+            updatedAt: serverTimestamp(),
+          },
+        },
+        {
+          type: 'set',
+          ref: doc(db, 'audit_log', auditEntry.auditId),
+          data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+        },
+      ], 'products');
       return p.productId;
     } else {
       const newId = nextPrefixedId('PRD', curProducts.map(x => x.productId), 6);
@@ -1277,17 +1593,35 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         casePack: pack,
         sellingPrice: Number(p.sellingPrice),
         active: true,
-        updatedAt: getNowTimestamp(),
+        updatedAt: now,
         updatedBy: currentUser.username
       };
+      const auditEntry = buildAuditEntry('PRODUCT_CREATED', newId, `${p.name} ${p.sizeML}ml`);
       commitLocalState(
         {
           products: sortProductsCategoryWise([...curProducts, newProduct]),
           stock: { ...latestRef.current.stock, [newId]: { godown: 0, normal: 0, ac: 0 } }
         },
-        [buildAuditEntry('PRODUCT_CREATED', newId, `${p.name} ${p.sizeML}ml`)]
+        [auditEntry]
       );
-      await flushServerPush();
+
+      await commitFirestoreOps([
+        {
+          type: 'set',
+          ref: doc(db, 'products', newId),
+          data: toFirestoreProduct(newProduct, memberEmailsRef.current, true),
+        },
+        {
+          type: 'set',
+          ref: doc(db, 'stock', newId),
+          data: toFirestoreStockLevel(newId, { godown: 0, normal: 0, ac: 0 }, memberEmailsRef.current, true),
+        },
+        {
+          type: 'set',
+          ref: doc(db, 'audit_log', auditEntry.auditId),
+          data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+        },
+      ], 'products');
       return newId;
     }
   };
@@ -1312,26 +1646,27 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const cur = latestRef.current.stock[data.productId] || { godown: 0, normal: 0, ac: 0 };
     const moves: { loc: StockLocation; productId: string; delta: number }[] = [];
-    if (nextGodown !== (cur.godown || 0)) {
-      moves.push({ loc: 'GODOWN', productId: data.productId, delta: nextGodown - (cur.godown || 0) });
-    }
-    if (nextNormal !== (cur.normal || 0)) {
-      moves.push({ loc: 'NORMAL', productId: data.productId, delta: nextNormal - (cur.normal || 0) });
-    }
-    if (nextAc !== (cur.ac || 0)) {
-      moves.push({ loc: 'AC', productId: data.productId, delta: nextAc - (cur.ac || 0) });
-    }
+    if (nextGodown !== (cur.godown || 0)) moves.push({ loc: 'GODOWN', productId: data.productId, delta: nextGodown - (cur.godown || 0) });
+    if (nextNormal !== (cur.normal || 0)) moves.push({ loc: 'NORMAL', productId: data.productId, delta: nextNormal - (cur.normal || 0) });
+    if (nextAc !== (cur.ac || 0)) moves.push({ loc: 'AC', productId: data.productId, delta: nextAc - (cur.ac || 0) });
 
     if (moves.length === 0) return;
 
     const refId = `ADJ-${Date.now().toString().slice(-6)}`;
-    applyMovements(moves, 'ADJUSTMENT', refId, businessDate);
-    addAudit(
+    const ops = applyMovements(moves, 'ADJUSTMENT', refId, businessDate);
+    const auditEntry = buildAuditEntry(
       'ADMIN_STOCK_EDITED',
       refId,
       `${prod.name} ${prod.sizeML}ml | Godown: ${cur.godown || 0}→${nextGodown}, Normal: ${cur.normal || 0}→${nextNormal}, AC: ${cur.ac || 0}→${nextAc}${data.reason?.trim() ? ` | Reason: ${data.reason.trim()}` : ''}`
     );
-    await flushServerPush();
+    commitLocalState({}, [auditEntry]);
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'stock');
   };
 
   // Purchases
@@ -1345,7 +1680,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const curProducts = latestRef.current.products;
     const curPurchases = latestRef.current.purchases;
     const productMap = new Map(curProducts.map(p => [p.productId, p]));
-    const batchId = nextPrefixedId('PBT', curPurchases.map(p => p.batchId), 6);
+    const baseBatchId = nextPrefixedId('PBT', curPurchases.map(p => p.batchId), 6);
+    const batchId = curPurchases.some(p => p.batchId === baseBatchId) ? `${baseBatchId}-${uniqueSuffix()}` : baseBatchId;
 
     let totalQty = 0;
     let grossTotal = 0;
@@ -1414,11 +1750,27 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: getNowTimestamp()
     };
 
-    commitLocalState(
-      { purchases: [newBatch, ...curPurchases] },
-      [buildAuditEntry('PURCHASE_SUBMITTED', batchId, `${data.supplier} | ${parsedLines.length} item(s), ${totalQty} btls | net ₹${newBatch.netTotal}`)]
+    const auditEntry = buildAuditEntry(
+      'PURCHASE_SUBMITTED',
+      batchId,
+      `${data.supplier} | ${parsedLines.length} item(s), ${totalQty} btls | net ₹${newBatch.netTotal}`
     );
-    await flushServerPush();
+
+    commitLocalState({ purchases: [newBatch, ...curPurchases] }, [auditEntry]);
+
+    await commitFirestoreOps([
+      {
+        type: 'set',
+        ref: doc(db, 'purchases', batchId),
+        data: toFirestorePurchaseBatch(newBatch, memberEmailsRef.current, true),
+      },
+      {
+        type: 'set',
+        ref: doc(db, 'audit_log', auditEntry.auditId),
+        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+      },
+    ], 'purchases');
+
     return batchId;
   };
 
@@ -1429,38 +1781,55 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!batch) throw new Error('Purchase entry not found.');
     if (batch.status !== 'Pending') throw new Error('This purchase entry was already reviewed.');
 
+    const ops: BatchOp[] = [];
     if (decision === 'APPROVE') {
       const moves = batch.lines.map(l => ({
         loc: 'GODOWN' as StockLocation,
         productId: l.productId,
         delta: l.qty
       }));
-      applyMovements(moves, 'PURCHASE', batchId, batch.date);
+      ops.push(...applyMovements(moves, 'PURCHASE', batchId, batch.date));
     }
 
+    const now = getNowTimestamp();
+    const nextStatus = (decision === 'APPROVE' ? 'Approved' : 'Rejected') as PurchaseBatch['status'];
     const nextPurchases = latestRef.current.purchases.map(p =>
       p.batchId === batchId
         ? {
             ...p,
-            status: (decision === 'APPROVE' ? 'Approved' : 'Rejected') as PurchaseBatch['status'],
+            status: nextStatus,
             reviewedBy: currentUser.username,
-            reviewedAt: getNowTimestamp(),
+            reviewedAt: now,
             remark: remark || ''
           }
         : p
     );
 
-    commitLocalState(
-      { purchases: nextPurchases },
-      [
-        buildAuditEntry(
-          decision === 'APPROVE' ? 'APPROVED_PURCHASE' : 'REJECTED_PURCHASE',
-          batchId,
-          `${batch.supplier} | ${batch.lines.length} items | net ₹${batch.netTotal} ${remark ? `(${remark})` : ''}`
-        )
-      ]
+    const auditEntry = buildAuditEntry(
+      decision === 'APPROVE' ? 'APPROVED_PURCHASE' : 'REJECTED_PURCHASE',
+      batchId,
+      `${batch.supplier} | ${batch.lines.length} items | net ₹${batch.netTotal} ${remark ? `(${remark})` : ''}`
     );
-    await flushServerPush();
+    commitLocalState({ purchases: nextPurchases }, [auditEntry]);
+
+    ops.push({
+      type: 'update',
+      ref: doc(db, 'purchases', batchId),
+      data: {
+        status: nextStatus,
+        reviewedBy: clampStr(currentUser.username, 80),
+        reviewedAtStr: now,
+        remark: clampStr(remark || '', 300),
+        updatedAt: serverTimestamp(),
+      },
+    });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'purchases');
   };
 
   const editPurchaseRecord = async (id: string, updates: {
@@ -1470,6 +1839,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     let foundLine: any = null;
     let targetBatch: PurchaseBatch | null = null;
+    let updatedBatchObj: PurchaseBatch | null = null;
 
     const nextPurchases = latestRef.current.purchases.map(batch => {
       const line = batch.lines.find(l => l.id === id);
@@ -1496,7 +1866,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             : l
         );
 
-        return {
+        updatedBatchObj = {
           ...batch,
           date: updates.date,
           billDate: updates.billDate,
@@ -1507,27 +1877,52 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           netTotal: Math.round(updatedLines.reduce((s, l) => s + l.netAmount, 0)),
           remark: `${batch.remark ? batch.remark + ' | ' : ''}Admin correction: ${updates.reason}`
         };
+        return updatedBatchObj;
       }
       return batch;
     });
 
+    const ops: BatchOp[] = [];
     if (foundLine && targetBatch && (targetBatch as PurchaseBatch).status === 'Approved') {
       const delta = updates.qty - foundLine.qty;
       if (delta !== 0) {
-        applyMovements(
+        ops.push(...applyMovements(
           [{ loc: 'GODOWN', productId: foundLine.productId, delta }],
           'PURCHASE_CORRECTION',
           id,
           updates.date
-        );
+        ));
       }
     }
 
-    commitLocalState(
-      { purchases: nextPurchases },
-      [buildAuditEntry('ADMIN_HISTORICAL_PURCHASE_EDIT', id, `Updated purchase row | reason: ${updates.reason}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('ADMIN_HISTORICAL_PURCHASE_EDIT', id, `Updated purchase row | reason: ${updates.reason}`);
+    commitLocalState({ purchases: nextPurchases }, [auditEntry]);
+
+    if (updatedBatchObj) {
+      const b = updatedBatchObj as PurchaseBatch;
+      ops.push({
+        type: 'update',
+        ref: doc(db, 'purchases', b.batchId),
+        data: {
+          date: clampStr(b.date, 20),
+          billDate: clampStr(b.billDate, 20),
+          supplier: clampStr(b.supplier, 160),
+          invoiceNo: clampStr(b.invoiceNo, 80),
+          lines: toFirestorePurchaseBatch(b, memberEmailsRef.current, false).lines,
+          totalQty: b.totalQty,
+          netTotal: b.netTotal,
+          remark: clampStr(b.remark || '', 300),
+          updatedAt: serverTimestamp(),
+        },
+      });
+    }
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'purchases');
   };
 
   const deletePurchaseBatch = async (batchId: string) => {
@@ -1536,6 +1931,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const batch = curPurchases.find(p => p.batchId === batchId);
     if (!batch) throw new Error('Purchase entry not found.');
 
+    const ops: BatchOp[] = [];
     if (batch.status === 'Approved') {
       const reverseMoves = batch.lines
         .filter(l => l.qty > 0)
@@ -1545,15 +1941,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           delta: -l.qty
         }));
       if (reverseMoves.length > 0) {
-        applyMovements(reverseMoves, 'PURCHASE_CORRECTION', batchId, batch.date);
+        ops.push(...applyMovements(reverseMoves, 'PURCHASE_CORRECTION', batchId, batch.date));
       }
     }
 
-    commitLocalState(
-      { purchases: latestRef.current.purchases.filter(p => p.batchId !== batchId) },
-      [buildAuditEntry('PURCHASE_DELETED', batchId, `${batch.supplier} | Invoice #${batch.invoiceNo} | ${batch.totalQty} btls | ₹${batch.netTotal}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('PURCHASE_DELETED', batchId, `${batch.supplier} | Invoice #${batch.invoiceNo} | ${batch.totalQty} btls | ₹${batch.netTotal}`);
+    commitLocalState({ purchases: latestRef.current.purchases.filter(p => p.batchId !== batchId) }, [auditEntry]);
+
+    ops.push({ type: 'delete', ref: doc(db, 'purchases', batchId) });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'purchases');
   };
 
   // Requests
@@ -1568,12 +1970,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const productMap = new Map(curProducts.map(p => [p.productId, p]));
     const now = getNowTimestamp();
     const existingReqIds = curRequests.map(r => r.requestId);
+    const suffix = uniqueSuffix();
 
     const newRequests: StockRequestItem[] = data.items.map((it, idx) => {
       const p = productMap.get(it.productId);
       const pack = p ? bottlesPerCase_(p) : 1;
       const totalBottles = it.qty * (it.unit === 'CASE' ? pack : 1);
-      const reqId = nextPrefixedId('REQ', existingReqIds, 6, idx);
+      const reqId = `${nextPrefixedId('REQ', existingReqIds, 6, idx)}-${suffix}`;
 
       return {
         requestId: reqId,
@@ -1595,11 +1998,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     const totalBottles = newRequests.reduce((s, r) => s + r.qty, 0);
-    commitLocalState(
-      { requests: [...newRequests, ...curRequests] },
-      [buildAuditEntry('REQUEST_SUBMITTED', newRequests[0].requestId, `${counter} requested ${newRequests.length} item(s), ${totalBottles} bottles | ${data.reason}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('REQUEST_SUBMITTED', newRequests[0].requestId, `${counter} requested ${newRequests.length} item(s), ${totalBottles} bottles | ${data.reason}`);
+    commitLocalState({ requests: [...newRequests, ...curRequests] }, [auditEntry]);
+
+    const ops: BatchOp[] = newRequests.map(r => ({
+      type: 'set' as const,
+      ref: doc(db, 'requests', r.requestId),
+      data: toFirestoreStockRequest(r, memberEmailsRef.current, true),
+    }));
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'requests');
   };
 
   const reviewRequestGroup = async (ids: string[], decision: 'APPROVE' | 'REJECT', remark?: string, skipShort = false) => {
@@ -1632,8 +2045,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     });
 
+    const ops: BatchOp[] = [];
     if (moves.length > 0) {
-      applyMovements(moves, 'REQUEST', ids[0], targetRequests[0].date);
+      ops.push(...applyMovements(moves, 'REQUEST', ids[0], targetRequests[0].date));
     }
 
     const now = getNowTimestamp();
@@ -1653,17 +2067,46 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return r;
     });
 
-    commitLocalState(
-      { requests: nextRequests },
-      [
-        buildAuditEntry(
-          decision === 'APPROVE' ? 'APPROVED_REQUEST' : 'REJECTED_REQUEST',
-          ids.join(','),
-          `Reviewed ${ids.length} requests: ${approvedIds.length} approved, ${rejectedIds.length} rejected`
-        )
-      ]
+    const auditEntry = buildAuditEntry(
+      decision === 'APPROVE' ? 'APPROVED_REQUEST' : 'REJECTED_REQUEST',
+      ids.join(','),
+      `Reviewed ${ids.length} requests: ${approvedIds.length} approved, ${rejectedIds.length} rejected`
     );
-    await flushServerPush();
+    commitLocalState({ requests: nextRequests }, [auditEntry]);
+
+    approvedIds.forEach(reqId => {
+      ops.push({
+        type: 'update',
+        ref: doc(db, 'requests', reqId),
+        data: {
+          status: 'Approved',
+          reviewedBy: clampStr(currentUser.username, 80),
+          reviewedAtStr: now,
+          remark: clampStr(remark || '', 300),
+          updatedAt: serverTimestamp(),
+        },
+      });
+    });
+    rejectedIds.forEach(reqId => {
+      ops.push({
+        type: 'update',
+        ref: doc(db, 'requests', reqId),
+        data: {
+          status: 'Rejected',
+          reviewedBy: clampStr(currentUser.username, 80),
+          reviewedAtStr: now,
+          remark: clampStr(remark || (decision === 'APPROVE' ? 'Not enough godown stock' : 'Rejected by admin'), 300),
+          updatedAt: serverTimestamp(),
+        },
+      });
+    });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'requests');
 
     return { approved: approvedIds.length, rejected: rejectedIds.length };
   };
@@ -1690,15 +2133,16 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       throw new Error(`Not enough stock. ${fromLoc} has ${avail} bottles, requested ${totalBottles}.`);
     }
 
-    const transferId = nextPrefixedId('TRF', curState.transfers.map(t => t.transferId), 6);
-    const autoApproved = !isAdmin; // Counter-to-counter transfers auto-approve immediately
+    const transferId = `${nextPrefixedId('TRF', curState.transfers.map(t => t.transferId), 6)}-${uniqueSuffix()}`;
+    const autoApproved = !isAdmin;
     const now = getNowTimestamp();
 
+    const ops: BatchOp[] = [];
     if (autoApproved) {
-      applyMovements([
+      ops.push(...applyMovements([
         { loc: fromLoc, productId: data.productId, delta: -totalBottles },
         { loc: toLoc, productId: data.productId, delta: totalBottles }
-      ], 'TRANSFER', transferId);
+      ], 'TRANSFER', transferId));
     }
 
     const newTransfer: StockTransfer = {
@@ -1721,30 +2165,36 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       remark: autoApproved ? 'Auto-approved (counter to counter)' : undefined
     };
 
-    commitLocalState(
-      { transfers: [newTransfer, ...latestRef.current.transfers] },
-      [
-        buildAuditEntry(
-          autoApproved ? 'TRANSFER_COMPLETED' : 'TRANSFER_SUBMITTED',
-          transferId,
-          `${fromLoc} → ${toLoc} | ${prod.name} x ${totalBottles} btls ${data.note ? `(${data.note})` : ''}`
-        )
-      ]
+    const auditEntry = buildAuditEntry(
+      autoApproved ? 'TRANSFER_COMPLETED' : 'TRANSFER_SUBMITTED',
+      transferId,
+      `${fromLoc} → ${toLoc} | ${prod.name} x ${totalBottles} btls ${data.note ? `(${data.note})` : ''}`
     );
-    await flushServerPush();
+    commitLocalState({ transfers: [newTransfer, ...latestRef.current.transfers] }, [auditEntry]);
+
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'transfers', transferId),
+      data: toFirestoreStockTransfer(newTransfer, memberEmailsRef.current, true),
+    });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'transfers');
 
     return { autoApproved };
   };
 
   // Daily Sales Computations
   const getReportFormLines = (counter: CounterLocation, date: string) => {
-    // Check if duplicate or blocked
     const existing = dailySales.find(r => r.counter === counter && r.date === date && r.status !== 'Rejected');
     if (existing) {
       return { lines: [], blockedMessage: `A report for ${date} has already been submitted (${existing.reportId}, ${existing.status}).`, pendingGodownCount: 0 };
     }
 
-    // Check pending godown requests for this counter and date
     const pendingGodown = requests.filter(r => r.counter === counter && r.date === date && r.status === 'Pending');
     if (pendingGodown.length > 0) {
       return {
@@ -1754,7 +2204,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     }
 
-    // Opening stock comes from last approved report strictly prior to this date
     const lastApproved = dailySales
       .filter(r => r.counter === counter && r.status === 'Approved' && r.date < date)
       .sort((a, b) => b.date.localeCompare(a.date))[0];
@@ -1764,7 +2213,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lastApproved.lines.forEach(l => openingMap.set(l.productId, l.closing));
     }
 
-    // Movements for this date (only physical stock movements: REQUEST, TRANSFER, DAMAGE)
     const godownInMap = new Map<string, number>();
     const transferInMap = new Map<string, number>();
     const transferOutMap = new Map<string, number>();
@@ -1772,17 +2220,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     ledger.filter(l => l.location === counter && l.businessDate === date).forEach(l => {
       if (l.delta > 0) {
-        if (l.refType === 'REQUEST') {
-          godownInMap.set(l.productId, (godownInMap.get(l.productId) || 0) + l.delta);
-        } else if (l.refType === 'TRANSFER') {
-          transferInMap.set(l.productId, (transferInMap.get(l.productId) || 0) + l.delta);
-        }
+        if (l.refType === 'REQUEST') godownInMap.set(l.productId, (godownInMap.get(l.productId) || 0) + l.delta);
+        else if (l.refType === 'TRANSFER') transferInMap.set(l.productId, (transferInMap.get(l.productId) || 0) + l.delta);
       } else if (l.delta < 0) {
-        if (l.refType === 'DAMAGE') {
-          damageOutMap.set(l.productId, (damageOutMap.get(l.productId) || 0) - l.delta);
-        } else if (l.refType === 'TRANSFER') {
-          transferOutMap.set(l.productId, (transferOutMap.get(l.productId) || 0) - l.delta);
-        }
+        if (l.refType === 'DAMAGE') damageOutMap.set(l.productId, (damageOutMap.get(l.productId) || 0) - l.delta);
+        else if (l.refType === 'TRANSFER') transferOutMap.set(l.productId, (transferOutMap.get(l.productId) || 0) - l.delta);
       }
     });
 
@@ -1834,9 +2276,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     paymentExplanation?: string; lines: { productId: string; closing: number }[];
     counter?: CounterLocation;
   }) => {
-    if (!currentUser) {
-      throw new Error('Authentication required to submit daily sales.');
-    }
+    if (!currentUser) throw new Error('Authentication required to submit daily sales.');
     const counter: CounterLocation = (currentUser.role === 'ADMIN' ? (data.counter || 'NORMAL') : (currentUser.counter || currentUser.role)) as CounterLocation;
     const form = getReportFormLines(counter, data.date);
     if (form.blockedMessage) throw new Error(form.blockedMessage);
@@ -1849,7 +2289,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let totalSold = 0;
     let totalVal = 0;
 
-    const reportId = nextPrefixedId('RPT', curSales.map(r => r.reportId), 6);
+    const reportId = `${nextPrefixedId('RPT', curSales.map(r => r.reportId), 6)}-${uniqueSuffix()}`;
 
     const reportLines = form.lines.map((l, i) => {
       const p = productMap.get(l.productId);
@@ -1863,7 +2303,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       totalVal += val;
 
       return {
-        lineId: `SLN-${reportId.slice(4)}-${String(i + 1).padStart(3, '0')}`,
+        lineId: `SLN-${reportId.slice(4, 10)}-${String(i + 1).padStart(3, '0')}`,
         reportId,
         productId: l.productId,
         name: `${l.name} ${l.sizeML}ml`,
@@ -1890,14 +2330,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const expected = totalVal + acCharges;
     const diff = Math.round((totalCollected - expected) * 100) / 100;
 
-    // Apply stock deduction movements immediately since Daily Sales is auto-approved
+    const ops: BatchOp[] = [];
     const moves = reportLines.filter(l => l.sold > 0).map(l => ({
       loc: counter as StockLocation,
       productId: l.productId,
       delta: -l.sold
     }));
     if (moves.length > 0) {
-      applyMovements(moves, 'SALE', reportId, data.date);
+      ops.push(...applyMovements(moves, 'SALE', reportId, data.date));
     }
 
     const now = getNowTimestamp();
@@ -1905,7 +2345,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       reportId,
       date: data.date,
       counter,
-      status: 'Approved', // Auto-approved per requirement
+      status: 'Approved',
       totalSoldQty: totalSold,
       totalSalesValue: Math.round(totalVal * 100) / 100,
       recordedAmount: data.recordedAmount,
@@ -1926,17 +2366,25 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lines: reportLines
     };
 
-    commitLocalState(
-      { dailySales: [newReport, ...latestRef.current.dailySales] },
-      [
-        buildAuditEntry(
-          'SALES_SUBMITTED_AND_APPROVED',
-          reportId,
-          `${data.date} | ${counter} | sold ${totalSold} btls | ₹${newReport.totalSalesValue}${acCharges > 0 ? ` + ₹${acCharges} AC` : ''} (Auto-Approved)`
-        )
-      ]
+    const auditEntry = buildAuditEntry(
+      'SALES_SUBMITTED_AND_APPROVED',
+      reportId,
+      `${data.date} | ${counter} | sold ${totalSold} btls | ₹${newReport.totalSalesValue}${acCharges > 0 ? ` + ₹${acCharges} AC` : ''} (Auto-Approved)`
     );
-    await flushServerPush();
+    commitLocalState({ dailySales: [newReport, ...latestRef.current.dailySales] }, [auditEntry]);
+
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'daily_sales', reportId),
+      data: toFirestoreDailySalesReport(newReport, memberEmailsRef.current, true),
+    });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'daily_sales');
     return reportId;
   };
 
@@ -1947,7 +2395,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     const curState = latestRef.current;
     const productMap = new Map(curState.products.map(p => [p.productId, p]));
-    const reportId = nextPrefixedId('RPT', curState.dailySales.map(r => r.reportId), 6);
+    const reportId = `${nextPrefixedId('RPT', curState.dailySales.map(r => r.reportId), 6)}-${uniqueSuffix()}`;
 
     let totalSold = 0;
     let totalVal = 0;
@@ -1960,7 +2408,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       totalVal += val;
 
       return {
-        lineId: `SLN-${reportId.slice(4)}-${String(i + 1).padStart(3, '0')}`,
+        lineId: `SLN-${reportId.slice(4, 10)}-${String(i + 1).padStart(3, '0')}`,
         reportId,
         productId: l.productId,
         name: p ? `${p.name} ${p.sizeML}ml` : l.productId,
@@ -2007,11 +2455,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lines: reportLines
     };
 
-    commitLocalState(
-      { dailySales: [newReport, ...latestRef.current.dailySales] },
-      [buildAuditEntry('ADMIN_HISTORICAL_SALES_CREATED', reportId, `${data.date} | ${data.counter} | sold ${totalSold} | ₹${totalVal} | stock unchanged | ${data.reason}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('ADMIN_HISTORICAL_SALES_CREATED', reportId, `${data.date} | ${data.counter} | sold ${totalSold} | ₹${totalVal} | stock unchanged | ${data.reason}`);
+    commitLocalState({ dailySales: [newReport, ...latestRef.current.dailySales] }, [auditEntry]);
+
+    await commitFirestoreOps([
+      {
+        type: 'set',
+        ref: doc(db, 'daily_sales', reportId),
+        data: toFirestoreDailySalesReport(newReport, memberEmailsRef.current, true),
+      },
+      {
+        type: 'set',
+        ref: doc(db, 'audit_log', auditEntry.auditId),
+        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+      },
+    ], 'daily_sales');
 
     return reportId;
   };
@@ -2056,38 +2514,57 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
 
-      return {
-        ...l,
-        closing: newClosing,
-        sold: newSold,
-        value: newVal
-      };
+      return { ...l, closing: newClosing, sold: newSold, value: newVal };
     });
 
+    const ops: BatchOp[] = [];
     if (stockMoves.length > 0) {
-      applyMovements(stockMoves, 'SALES_CORRECTION', reportId, report.date);
+      ops.push(...applyMovements(stockMoves, 'SALES_CORRECTION', reportId, report.date));
     }
 
+    const now = getNowTimestamp();
+    const nextSalesVal = Math.round(totalVal * 100) / 100;
+    const nextRemark = `${report.remark ? report.remark + ' | ' : ''}Correction: ${data.reason}`;
     const nextSales = latestRef.current.dailySales.map(r =>
       r.reportId === reportId
         ? {
             ...r,
             totalSoldQty: totalSold,
-            totalSalesValue: Math.round(totalVal * 100) / 100,
+            totalSalesValue: nextSalesVal,
             recordedAmount: data.recordedAmount,
             lines: updatedLines,
             editedBy: currentUser?.username,
-            editedAt: getNowTimestamp(),
-            remark: `${r.remark ? r.remark + ' | ' : ''}Correction: ${data.reason}`
+            editedAt: now,
+            remark: nextRemark
           }
         : r
     );
 
-    commitLocalState(
-      { dailySales: nextSales },
-      [buildAuditEntry('SALES_EDITED', reportId, `Sold ${report.totalSoldQty} → ${totalSold} | ${data.reason}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('SALES_EDITED', reportId, `Sold ${report.totalSoldQty} → ${totalSold} | ${data.reason}`);
+    commitLocalState({ dailySales: nextSales }, [auditEntry]);
+
+    const updatedReport = nextSales.find(r => r.reportId === reportId)!;
+    ops.push({
+      type: 'update',
+      ref: doc(db, 'daily_sales', reportId),
+      data: {
+        totalSoldQty: totalSold,
+        totalSalesValue: nextSalesVal,
+        recordedAmount: data.recordedAmount,
+        lines: toFirestoreDailySalesReport(updatedReport, memberEmailsRef.current, false).lines,
+        editedBy: clampStr(currentUser?.username || 'admin', 80),
+        editedAtStr: now,
+        remark: clampStr(nextRemark, 300),
+        updatedAt: serverTimestamp(),
+      },
+    });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'daily_sales');
   };
 
   const reviewDailySales = async (reportId: string, decision: 'APPROVE' | 'REJECT', remark?: string) => {
@@ -2096,32 +2573,49 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!report) throw new Error('Report not found');
     if (report.status !== 'Pending') throw new Error('Report already reviewed.');
 
+    const ops: BatchOp[] = [];
     if (decision === 'APPROVE') {
       const moves = report.lines.filter(l => l.sold > 0).map(l => ({
         loc: report.counter as StockLocation,
         productId: l.productId,
         delta: -l.sold
       }));
-      applyMovements(moves, 'SALE', reportId, report.date);
+      ops.push(...applyMovements(moves, 'SALE', reportId, report.date));
     }
 
+    const now = getNowTimestamp();
+    const nextStatus = (decision === 'APPROVE' ? 'Approved' : 'Rejected') as DailySalesReport['status'];
     const nextSales = latestRef.current.dailySales.map(r =>
       r.reportId === reportId
-        ? {
-            ...r,
-            status: (decision === 'APPROVE' ? 'Approved' : 'Rejected') as DailySalesReport['status'],
-            reviewedBy: currentUser.username,
-            reviewedAt: getNowTimestamp(),
-            remark: remark || ''
-          }
+        ? { ...r, status: nextStatus, reviewedBy: currentUser.username, reviewedAt: now, remark: remark || '' }
         : r
     );
 
-    commitLocalState(
-      { dailySales: nextSales },
-      [buildAuditEntry(decision === 'APPROVE' ? 'APPROVED_SALES' : 'REJECTED_SALES', reportId, `${report.counter} | ${report.date} | sold ${report.totalSoldQty} btls ${remark ? `(${remark})` : ''}`)]
+    const auditEntry = buildAuditEntry(
+      decision === 'APPROVE' ? 'APPROVED_SALES' : 'REJECTED_SALES',
+      reportId,
+      `${report.counter} | ${report.date} | sold ${report.totalSoldQty} btls ${remark ? `(${remark})` : ''}`
     );
-    await flushServerPush();
+    commitLocalState({ dailySales: nextSales }, [auditEntry]);
+
+    ops.push({
+      type: 'update',
+      ref: doc(db, 'daily_sales', reportId),
+      data: {
+        status: nextStatus,
+        reviewedBy: clampStr(currentUser.username, 80),
+        reviewedAtStr: now,
+        remark: clampStr(remark || '', 300),
+        updatedAt: serverTimestamp(),
+      },
+    });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'daily_sales');
   };
 
   const adminDeleteDailySales = async (reportId: string, reason?: string) => {
@@ -2129,11 +2623,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       throw new Error('Admin permission required to delete a daily sales report.');
     }
     const report = latestRef.current.dailySales.find(r => r.reportId === reportId);
-    if (!report) {
-      throw new Error('Daily sales report not found.');
-    }
+    if (!report) throw new Error('Daily sales report not found.');
 
     const isHistoricalOnly = report.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
+    const ops: BatchOp[] = [];
 
     if (report.status === 'Approved' && !isHistoricalOnly) {
       const reverseMoves = report.lines
@@ -2145,21 +2638,25 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }));
 
       if (reverseMoves.length > 0) {
-        applyMovements(reverseMoves, 'SALES_CORRECTION', reportId, report.date);
+        ops.push(...applyMovements(reverseMoves, 'SALES_CORRECTION', reportId, report.date));
       }
     }
 
-    commitLocalState(
-      { dailySales: latestRef.current.dailySales.filter(r => r.reportId !== reportId) },
-      [
-        buildAuditEntry(
-          'ADMIN_SALES_DELETED',
-          reportId,
-          `${report.date} | ${report.counter} | reversed ${report.totalSoldQty} btls (₹${report.totalSalesValue})${reason?.trim() ? ` | Reason: ${reason.trim()}` : ''}`
-        )
-      ]
+    const auditEntry = buildAuditEntry(
+      'ADMIN_SALES_DELETED',
+      reportId,
+      `${report.date} | ${report.counter} | reversed ${report.totalSoldQty} btls (₹${report.totalSalesValue})${reason?.trim() ? ` | Reason: ${reason.trim()}` : ''}`
     );
-    await flushServerPush();
+    commitLocalState({ dailySales: latestRef.current.dailySales.filter(r => r.reportId !== reportId) }, [auditEntry]);
+
+    ops.push({ type: 'delete', ref: doc(db, 'daily_sales', reportId) });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'daily_sales');
   };
 
   // Daily Operations
@@ -2170,9 +2667,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }) => {
     if (!currentUser) throw new Error('Not logged in');
     const curOps = latestRef.current.operations;
-    const opId = nextPrefixedId('OPR', curOps.map(o => o.operationId), 6);
+    const opId = `${nextPrefixedId('OPR', curOps.map(o => o.operationId), 6)}-${uniqueSuffix()}`;
     const now = getNowTimestamp();
     const status = 'Approved';
+    const ops: BatchOp[] = [];
 
     if (data.type === 'DAMAGE') {
       if (!data.productId) throw new Error('Choose a product.');
@@ -2182,7 +2680,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (qty > avail) {
         throw new Error(`Damaged quantity (${qty}) exceeds stock available at ${loc} (${avail}).`);
       }
-      applyMovements([{ loc, productId: data.productId, delta: -qty }], 'DAMAGE', opId, data.date);
+      ops.push(...applyMovements([{ loc, productId: data.productId, delta: -qty }], 'DAMAGE', opId, data.date));
     }
 
     const prod = data.productId ? latestRef.current.products.find(p => p.productId === data.productId) : null;
@@ -2206,11 +2704,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       reviewedAt: now
     };
 
-    commitLocalState(
-      { operations: [newOp, ...latestRef.current.operations] },
-      [buildAuditEntry('DAILY_OPERATION_SAVED', opId, `${data.type} | ${data.date} | ${data.name} | ₹${data.amount || data.qty}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('DAILY_OPERATION_SAVED', opId, `${data.type} | ${data.date} | ${data.name} | ₹${data.amount || data.qty}`);
+    commitLocalState({ operations: [newOp, ...latestRef.current.operations] }, [auditEntry]);
+
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'operations', opId),
+      data: toFirestoreDailyOperation(newOp, memberEmailsRef.current, true),
+    });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'operations');
     return opId;
   };
 
@@ -2223,12 +2731,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const curOps = latestRef.current.operations;
     const existingOpIds = curOps.map(o => o.operationId);
     const now = getNowTimestamp();
+    const suffix = uniqueSuffix();
     let total = 0;
 
     const newOps: DailyOperation[] = data.items.map((it, idx) => {
       total += it.amount;
       return {
-        operationId: nextPrefixedId('OPR', existingOpIds, 6, idx),
+        operationId: `${nextPrefixedId('OPR', existingOpIds, 6, idx)}-${suffix}`,
         type: data.type,
         date: data.date,
         name: it.name,
@@ -2242,11 +2751,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     });
 
-    commitLocalState(
-      { operations: [...newOps, ...latestRef.current.operations] },
-      [buildAuditEntry('DAILY_OPERATIONS_BATCH', newOps[0].operationId, `${data.type} batch: ${newOps.length} items | ₹${total}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('DAILY_OPERATIONS_BATCH', newOps[0].operationId, `${data.type} batch: ${newOps.length} items | ₹${total}`);
+    commitLocalState({ operations: [...newOps, ...latestRef.current.operations] }, [auditEntry]);
+
+    const ops: BatchOp[] = newOps.map(o => ({
+      type: 'set' as const,
+      ref: doc(db, 'operations', o.operationId),
+      data: toFirestoreDailyOperation(o, memberEmailsRef.current, true),
+    }));
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'operations');
     return { count: newOps.length, total: Math.round(total * 100) / 100 };
   };
 
@@ -2255,16 +2774,23 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const op = latestRef.current.operations.find(o => o.operationId === operationId);
     if (!op) throw new Error('Entry not found.');
 
+    const ops: BatchOp[] = [];
     if (op.type === 'DAMAGE' && op.status === 'Approved' && op.productId && op.qty) {
       const loc = op.location || 'GODOWN';
-      applyMovements([{ loc, productId: op.productId, delta: op.qty }], 'ADJUSTMENT', operationId, op.date);
+      ops.push(...applyMovements([{ loc, productId: op.productId, delta: op.qty }], 'ADJUSTMENT', operationId, op.date));
     }
 
-    commitLocalState(
-      { operations: latestRef.current.operations.filter(o => o.operationId !== operationId) },
-      [buildAuditEntry('DAILY_OPERATION_DELETED', operationId, `${op.type} | ${op.date} | ${op.name} | ₹${op.amount || op.qty || 0}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('DAILY_OPERATION_DELETED', operationId, `${op.type} | ${op.date} | ${op.name} | ₹${op.amount || op.qty || 0}`);
+    commitLocalState({ operations: latestRef.current.operations.filter(o => o.operationId !== operationId) }, [auditEntry]);
+
+    ops.push({ type: 'delete', ref: doc(db, 'operations', operationId) });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'operations');
   };
 
   const reviewDailyOperation = async (id: string, decision: 'APPROVE' | 'REJECT', remark?: string) => {
@@ -2272,28 +2798,41 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const op = latestRef.current.operations.find(o => o.operationId === id);
     if (!op) throw new Error('Operation not found.');
 
+    const ops: BatchOp[] = [];
     if (decision === 'APPROVE' && op.type === 'DAMAGE' && op.productId && op.qty) {
       const loc = op.location || 'GODOWN';
-      applyMovements([{ loc, productId: op.productId, delta: -op.qty }], 'DAMAGE', id, op.date);
+      ops.push(...applyMovements([{ loc, productId: op.productId, delta: -op.qty }], 'DAMAGE', id, op.date));
     }
 
+    const now = getNowTimestamp();
+    const nextStatus = (decision === 'APPROVE' ? 'Approved' : 'Rejected') as DailyOperation['status'];
     const nextOps = latestRef.current.operations.map(o =>
       o.operationId === id
-        ? {
-            ...o,
-            status: (decision === 'APPROVE' ? 'Approved' : 'Rejected') as DailyOperation['status'],
-            reviewedBy: currentUser.username,
-            reviewedAt: getNowTimestamp(),
-            reviewRemark: remark || ''
-          }
+        ? { ...o, status: nextStatus, reviewedBy: currentUser.username, reviewedAt: now, reviewRemark: remark || '' }
         : o
     );
 
-    commitLocalState(
-      { operations: nextOps },
-      [buildAuditEntry(`DAILY_OPERATION_${decision}`, id, `${op.type} | ${remark || ''}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry(`DAILY_OPERATION_${decision}`, id, `${op.type} | ${remark || ''}`);
+    commitLocalState({ operations: nextOps }, [auditEntry]);
+
+    ops.push({
+      type: 'update',
+      ref: doc(db, 'operations', id),
+      data: {
+        status: nextStatus,
+        reviewedBy: clampStr(currentUser.username, 80),
+        reviewedAtStr: now,
+        reviewRemark: clampStr(remark || '', 300),
+        updatedAt: serverTimestamp(),
+      },
+    });
+    ops.push({
+      type: 'set',
+      ref: doc(db, 'audit_log', auditEntry.auditId),
+      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+    });
+
+    await commitFirestoreOps(ops, 'operations');
   };
 
   // Administration helpers
@@ -2302,11 +2841,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!trimmed) throw new Error('Supplier name is required.');
     const curSuppliers = latestRef.current.suppliers;
     if (!curSuppliers.some(s => s.toLowerCase() === trimmed.toLowerCase())) {
-      commitLocalState(
-        { suppliers: [...curSuppliers, trimmed] },
-        [buildAuditEntry('SUPPLIER_ADDED', '', trimmed)]
-      );
-      await flushServerPush();
+      const nextSuppliers = [...curSuppliers, trimmed].slice(0, 100);
+      const auditEntry = buildAuditEntry('SUPPLIER_ADDED', '', trimmed);
+      commitLocalState({ suppliers: nextSuppliers }, [auditEntry]);
+      await commitFirestoreOps([
+        {
+          type: 'update',
+          ref: doc(db, 'workspace_meta', 'main'),
+          data: { suppliers: nextSuppliers, updatedAt: serverTimestamp() },
+        },
+        {
+          type: 'set',
+          ref: doc(db, 'audit_log', auditEntry.auditId),
+          data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+        },
+      ], 'workspace_meta/main');
     }
   };
 
@@ -2319,11 +2868,20 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (nextSuppliers.length === curSuppliers.length) {
       throw new Error('Supplier not found.');
     }
-    commitLocalState(
-      { suppliers: nextSuppliers },
-      [buildAuditEntry('SUPPLIER_DELETED', '', trimmed)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('SUPPLIER_DELETED', '', trimmed);
+    commitLocalState({ suppliers: nextSuppliers }, [auditEntry]);
+    await commitFirestoreOps([
+      {
+        type: 'update',
+        ref: doc(db, 'workspace_meta', 'main'),
+        data: { suppliers: nextSuppliers, updatedAt: serverTimestamp() },
+      },
+      {
+        type: 'set',
+        ref: doc(db, 'audit_log', auditEntry.auditId),
+        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+      },
+    ], 'workspace_meta/main');
   };
 
   const addDropdownOption = async (type: 'EXPENSE' | 'WAGE', value: string) => {
@@ -2341,11 +2899,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       active: true,
       createdAt: getTodayISO()
     };
-    commitLocalState(
-      { dropdownOptions: [...curOpts, newOpt] },
-      [buildAuditEntry('DROPDOWN_OPTION_ADDED', optId, `${type} | ${trimmed}`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('DROPDOWN_OPTION_ADDED', optId, `${type} | ${trimmed}`);
+    commitLocalState({ dropdownOptions: [...curOpts, newOpt] }, [auditEntry]);
+
+    await commitFirestoreOps([
+      {
+        type: 'set',
+        ref: doc(db, 'dropdown_options', optId),
+        data: toFirestoreDropdownOption(newOpt, memberEmailsRef.current, true),
+      },
+      {
+        type: 'set',
+        ref: doc(db, 'audit_log', auditEntry.auditId),
+        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+      },
+    ], 'dropdown_options');
   };
 
   const createUser = async (u: { username: string; fullName: string; role: Role; password: string }) => {
@@ -2369,11 +2937,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       updatedAt: now,
       password: u.password
     };
-    commitLocalState(
-      { users: [...curUsers, newUser] },
-      [buildAuditEntry('USER_CREATED', newId, `${cleanU} (${u.role})`)]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('USER_CREATED', newId, `${cleanU} (${u.role})`);
+    commitLocalState({ users: [...curUsers, newUser] }, [auditEntry]);
+
+    await commitFirestoreOps([
+      {
+        type: 'set',
+        ref: doc(db, 'staff_users', newId),
+        data: toFirestoreStaffUser(newUser, memberEmailsRef.current, true),
+      },
+      {
+        type: 'set',
+        ref: doc(db, 'audit_log', auditEntry.auditId),
+        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+      },
+    ], 'staff_users');
   };
 
   const resetUserPassword = async (userId: string, newPw: string) => {
@@ -2382,11 +2960,26 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const nextUsers = latestRef.current.users.map(u =>
       u.userId === userId ? { ...u, password: newPw, mustChange: true, updatedAt: now } : u
     );
-    commitLocalState(
-      { users: nextUsers },
-      [buildAuditEntry('PASSWORD_RESET', userId, 'Admin reset user password')]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry('PASSWORD_RESET', userId, 'Admin reset user password');
+    commitLocalState({ users: nextUsers }, [auditEntry]);
+
+    await commitFirestoreOps([
+      {
+        type: 'update',
+        ref: doc(db, 'staff_users', userId),
+        data: {
+          password: clampStr(newPw, 128),
+          mustChange: true,
+          updatedAtStr: now,
+          updatedAt: serverTimestamp(),
+        },
+      },
+      {
+        type: 'set',
+        ref: doc(db, 'audit_log', auditEntry.auditId),
+        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+      },
+    ], 'staff_users');
   };
 
   const toggleUserActive = async (userId: string, active: boolean) => {
@@ -2398,11 +2991,25 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const nextUsers = latestRef.current.users.map(u =>
       u.userId === userId ? { ...u, active, updatedAt: now } : u
     );
-    commitLocalState(
-      { users: nextUsers },
-      [buildAuditEntry(active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', userId, '')]
-    );
-    await flushServerPush();
+    const auditEntry = buildAuditEntry(active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', userId, '');
+    commitLocalState({ users: nextUsers }, [auditEntry]);
+
+    await commitFirestoreOps([
+      {
+        type: 'update',
+        ref: doc(db, 'staff_users', userId),
+        data: {
+          active: Boolean(active),
+          updatedAtStr: now,
+          updatedAt: serverTimestamp(),
+        },
+      },
+      {
+        type: 'set',
+        ref: doc(db, 'audit_log', auditEntry.auditId),
+        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+      },
+    ], 'staff_users');
   };
 
   const reconcileStock = () => {
@@ -2442,12 +3049,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   };
 
-  const syncLedger = () => {
+  const syncLedger = async () => {
     const today = businessDate || getTodayISO();
     const curState = latestRef.current;
     const nextSeq = curState.ledger.reduce((m, l) => Math.max(m, l.seq || 0), 0) + 1;
     const existingLedgerIds = curState.ledger.map(l => l.ledgerId);
     const newEntries: StockLedgerEntry[] = [];
+    const ops: BatchOp[] = [];
 
     curState.products.forEach((p, idx) => {
       const s = curState.stock[p.productId] || { godown: 0, normal: 0, ac: 0 };
@@ -2460,9 +3068,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const diff = q - led;
 
         if (diff !== 0) {
-          newEntries.push({
+          const entry: StockLedgerEntry = {
             seq: nextSeq + (idx * 3) + lIdx,
-            ledgerId: nextPrefixedId('LED', existingLedgerIds, 6, newEntries.length),
+            ledgerId: `${nextPrefixedId('LED', existingLedgerIds, 6, newEntries.length)}-${uniqueSuffix()}`,
             timestamp: getNowTimestamp(),
             location: loc,
             productId: p.productId,
@@ -2473,31 +3081,44 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             refId: 'OPENING-SYNC',
             approvedBy: currentUser?.username || 'admin',
             businessDate: today
+          };
+          newEntries.push(entry);
+          ops.push({
+            type: 'set',
+            ref: doc(db, 'ledger', entry.ledgerId),
+            data: toFirestoreLedgerEntry(entry, memberEmailsRef.current, true),
           });
         }
       });
     });
 
     if (newEntries.length > 0) {
-      commitLocalState(
-        { ledger: [...newEntries, ...curState.ledger] },
-        [buildAuditEntry('LEDGER_SYNC', 'OPENING-SYNC', `Synced ${newEntries.length} lines from physical stock`)]
-      );
+      const auditEntry = buildAuditEntry('LEDGER_SYNC', 'OPENING-SYNC', `Synced ${newEntries.length} lines from physical stock`);
+      commitLocalState({ ledger: [...newEntries, ...curState.ledger] }, [auditEntry]);
+      ops.push({
+        type: 'set',
+        ref: doc(db, 'audit_log', auditEntry.auditId),
+        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
+      });
+      await commitFirestoreOps(ops, 'ledger');
     }
 
     return newEntries.length;
   };
 
-  const resetToSampleData = () => {
+  const resetToSampleData = async () => {
+    if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     localStorage.clear();
     localStorage.setItem(STORAGE_KEY + '_opening_epoch', OPENING_EPOCH);
     localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
     localStorage.setItem('mm_business_date', getTodayISO());
     setBusinessDateState(getTodayISO());
+
+    const freshStock = buildInitialStockMap();
     commitLocalState({
       users: INITIAL_USERS,
       products: INITIAL_PRODUCTS,
-      stock: buildInitialStockMap(),
+      stock: freshStock,
       suppliers: INITIAL_SUPPLIERS,
       dropdownOptions: INITIAL_DROPDOWN_OPTIONS,
       purchases: [],
@@ -2510,8 +3131,33 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
     setCurrentUser(INITIAL_USERS[0]);
     localStorage.setItem('mm_user', JSON.stringify(INITIAL_USERS[0]));
-    dirtySlicesRef.current.clear();
-    pushServerState(buildPayloadFromRef({ _resetRequested: true, _clientId: clientIdRef.current }));
+
+    const fbEmail = (firebaseUser?.email || '').trim().toLowerCase();
+    const isOwner = fbEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    const ops: BatchOp[] = [];
+    const colsToClear = ['purchases', 'requests', 'transfers', 'daily_sales', 'operations', 'ledger', 'audit_log'];
+    for (const colName of colsToClear) {
+      try {
+        const qRef = isOwner
+          ? collection(db, colName)
+          : query(collection(db, colName), where('memberEmails', 'array-contains', fbEmail));
+        const snap = await getDocs(qRef);
+        snap.docs.forEach(d => ops.push({ type: 'delete', ref: doc(db, colName, d.id) }));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, colName);
+      }
+    }
+    const members = memberEmailsRef.current;
+    INITIAL_PRODUCTS.forEach(p => {
+      const s = freshStock[p.productId] || { godown: 0, normal: 0, ac: 0 };
+      ops.push({ type: 'set', ref: doc(db, 'stock', p.productId), data: toFirestoreStockLevel(p.productId, s, members, true) });
+    });
+    ops.push({
+      type: 'update',
+      ref: doc(db, 'workspace_meta', 'main'),
+      data: { suppliers: INITIAL_SUPPLIERS, updatedAt: serverTimestamp() },
+    });
+    await commitFirestoreOps(ops, 'reset_opening');
   };
 
   return (
@@ -2533,6 +3179,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         suppliers,
         dropdownOptions,
         pendingCount,
+
+        firebaseUser,
+        isFirebaseAuthReady,
+        cloudAccessStatus,
+        cloudError,
+        cloudMembers,
+        signInWithGoogle,
+        signOutGoogle,
+        retryCloudConnection,
+        authorizeCloudEmail,
+        revokeCloudEmail,
 
         login,
         logout,

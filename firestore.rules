@@ -1,0 +1,648 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar 4.1: Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================
+    // GLOBAL HARDENED PRIMITIVES (Phase 3)
+    // =========================================================
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string
+        && request.auth.token.email.size() >= 5
+        && request.auth.token.email.size() <= 160;
+    }
+
+    function isValidId(id) {
+      return id is string
+        && id.size() >= 1
+        && id.size() <= 128
+        && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() && request.auth.token.email == 'gopishankarsegar@ptuniv.edu.in';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin()
+        || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isWorkspaceMemberByMeta() {
+      return isBootstrappedAdmin()
+        || (
+          isVerified()
+          && exists(/databases/$(database)/documents/workspace_meta/main)
+          && request.auth.token.email in get(/databases/$(database)/documents/workspace_meta/main).data.memberEmails
+        );
+    }
+
+    function isValidMemberEmails(listVal) {
+      return listVal is list
+        && listVal.size() >= 1
+        && listVal.size() <= 25
+        && listVal[0] is string
+        && listVal[0].size() >= 5
+        && listVal[0].size() <= 160;
+    }
+
+    function isValidSuppliersList(listVal) {
+      return listVal is list
+        && listVal.size() <= 100
+        && (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() >= 1 && listVal[0].size() <= 160));
+    }
+
+    function isValidLinesList(listVal, maxLen) {
+      return listVal is list
+        && listVal.size() <= maxLen
+        && (listVal.size() == 0 || listVal[0] is map);
+    }
+
+    function hasCreateTimestamps(data) {
+      return data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function hasUpdateTimestamps(data) {
+      return data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.createdAt == existing().createdAt
+        && data.updatedAt == request.time;
+    }
+
+    // =========================================================
+    // ENTITY VALIDATION BLUEPRINTS (Phase 2)
+    // =========================================================
+    function isValidCloudMember(data) {
+      return data.keys().hasAll(['memberId', 'email', 'label', 'role', 'addedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['memberId', 'email', 'label', 'role', 'addedBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.memberId)
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 160
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 80
+        && data.role in ['ADMIN', 'STAFF']
+        && data.addedBy is string && data.addedBy.size() >= 1 && data.addedBy.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceMeta(data) {
+      return data.keys().hasAll(['metaId', 'bootstrapped', 'openingEpoch', 'catalogVersion', 'ownerEmail', 'memberEmails', 'suppliers', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['metaId', 'bootstrapped', 'openingEpoch', 'catalogVersion', 'ownerEmail', 'memberEmails', 'suppliers', 'createdAt', 'updatedAt'])
+        && isValidId(data.metaId)
+        && data.bootstrapped is bool
+        && data.openingEpoch is string && data.openingEpoch.size() >= 1 && data.openingEpoch.size() <= 64
+        && data.catalogVersion is string && data.catalogVersion.size() >= 1 && data.catalogVersion.size() <= 64
+        && data.ownerEmail is string && data.ownerEmail.size() >= 5 && data.ownerEmail.size() <= 160
+        && isValidMemberEmails(data.memberEmails)
+        && isValidSuppliersList(data.suppliers)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStaffUser(data) {
+      return data.keys().hasAll(['userId', 'username', 'fullName', 'role', 'active', 'mustChange', 'password', 'createdAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'username', 'fullName', 'role', 'counter', 'active', 'mustChange', 'password', 'createdAtStr', 'updatedAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.username is string && data.username.size() >= 1 && data.username.size() <= 64
+        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120
+        && data.role in ['ADMIN', 'NORMAL', 'AC']
+        && (!('counter' in data) || data.counter in ['NORMAL', 'AC', ''])
+        && data.active is bool
+        && data.mustChange is bool
+        && data.password is string && data.password.size() >= 1 && data.password.size() <= 128
+        && data.createdAtStr is string && data.createdAtStr.size() <= 40
+        && (!('updatedAtStr' in data) || (data.updatedAtStr is string && data.updatedAtStr.size() <= 40))
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['productId', 'name', 'category', 'sizeML', 'casePack', 'sellingPrice', 'active', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['productId', 'name', 'category', 'sizeML', 'casePack', 'sellingPrice', 'active', 'updatedAtStr', 'updatedBy', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.productId)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 140
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 80
+        && data.sizeML is number && data.sizeML >= 0
+        && data.casePack is number && data.casePack >= 1
+        && data.sellingPrice is number && data.sellingPrice >= 0
+        && data.active is bool
+        && (!('updatedAtStr' in data) || (data.updatedAtStr is string && data.updatedAtStr.size() <= 40))
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 80))
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStockLevel(data) {
+      return data.keys().hasAll(['productId', 'godown', 'normal', 'ac', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['productId', 'godown', 'normal', 'ac', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.productId)
+        && data.godown is number && data.godown >= 0
+        && data.normal is number && data.normal >= 0
+        && data.ac is number && data.ac >= 0
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPurchaseBatch(data) {
+      return data.keys().hasAll(['batchId', 'supplier', 'date', 'billDate', 'invoiceNo', 'status', 'lines', 'totalQty', 'grossTotal', 'sedTotal', 'discountTotal', 'tcsTotal', 'netTotal', 'createdBy', 'createdAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['batchId', 'supplier', 'date', 'billDate', 'invoiceNo', 'permitNumber', 'documentNumber', 'status', 'lines', 'totalQty', 'grossTotal', 'sedTotal', 'discountTotal', 'tcsTotal', 'netTotal', 'createdBy', 'createdAtStr', 'reviewedBy', 'reviewedAtStr', 'remark', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.batchId)
+        && data.supplier is string && data.supplier.size() >= 1 && data.supplier.size() <= 160
+        && data.date is string && data.date.size() >= 4 && data.date.size() <= 20
+        && data.billDate is string && data.billDate.size() >= 4 && data.billDate.size() <= 20
+        && data.invoiceNo is string && data.invoiceNo.size() >= 1 && data.invoiceNo.size() <= 80
+        && (!('permitNumber' in data) || (data.permitNumber is string && data.permitNumber.size() <= 80))
+        && (!('documentNumber' in data) || (data.documentNumber is string && data.documentNumber.size() <= 80))
+        && data.status in ['Pending', 'Approved', 'Rejected']
+        && isValidLinesList(data.lines, 200)
+        && data.totalQty is number && data.totalQty >= 0
+        && data.grossTotal is number && data.grossTotal >= 0
+        && data.sedTotal is number && data.sedTotal >= 0
+        && data.discountTotal is number && data.discountTotal >= 0
+        && data.tcsTotal is number && data.tcsTotal >= 0
+        && data.netTotal is number && data.netTotal >= 0
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 80
+        && data.createdAtStr is string && data.createdAtStr.size() >= 1 && data.createdAtStr.size() <= 40
+        && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 80))
+        && (!('reviewedAtStr' in data) || (data.reviewedAtStr is string && data.reviewedAtStr.size() <= 40))
+        && (!('remark' in data) || (data.remark is string && data.remark.size() <= 300))
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStockRequest(data) {
+      return data.keys().hasAll(['requestId', 'counter', 'productId', 'productName', 'category', 'sizeML', 'casePack', 'qty', 'enteredQty', 'unit', 'reason', 'status', 'date', 'createdBy', 'createdAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['requestId', 'counter', 'productId', 'productName', 'category', 'sizeML', 'casePack', 'qty', 'enteredQty', 'unit', 'reason', 'status', 'date', 'createdBy', 'createdAtStr', 'reviewedBy', 'reviewedAtStr', 'remark', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.requestId)
+        && data.counter in ['NORMAL', 'AC']
+        && data.productId is string && data.productId.size() >= 1 && data.productId.size() <= 64
+        && data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 160
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 80
+        && data.sizeML is number && data.sizeML >= 0
+        && data.casePack is number && data.casePack >= 1
+        && data.qty is number && data.qty >= 0
+        && data.enteredQty is number && data.enteredQty >= 0
+        && data.unit in ['CASE', 'BOTTLE', 'MIXED']
+        && data.reason is string && data.reason.size() <= 240
+        && data.status in ['Pending', 'Approved', 'Rejected']
+        && data.date is string && data.date.size() >= 4 && data.date.size() <= 20
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 80
+        && data.createdAtStr is string && data.createdAtStr.size() >= 1 && data.createdAtStr.size() <= 40
+        && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 80))
+        && (!('reviewedAtStr' in data) || (data.reviewedAtStr is string && data.reviewedAtStr.size() <= 40))
+        && (!('remark' in data) || (data.remark is string && data.remark.size() <= 300))
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStockTransfer(data) {
+      return data.keys().hasAll(['transferId', 'type', 'fromLoc', 'toLoc', 'productId', 'productName', 'casePack', 'qty', 'status', 'createdBy', 'createdAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['transferId', 'type', 'fromLoc', 'toLoc', 'productId', 'productName', 'casePack', 'qty', 'enteredQty', 'unit', 'note', 'status', 'createdBy', 'createdAtStr', 'reviewedBy', 'reviewedAtStr', 'remark', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.transferId)
+        && data.type in ['GODOWN_TO_COUNTER', 'COUNTER_TO_COUNTER']
+        && data.fromLoc in ['GODOWN', 'NORMAL', 'AC']
+        && data.toLoc in ['GODOWN', 'NORMAL', 'AC']
+        && data.productId is string && data.productId.size() >= 1 && data.productId.size() <= 64
+        && data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 160
+        && data.casePack is number && data.casePack >= 1
+        && data.qty is number && data.qty >= 0
+        && (!('enteredQty' in data) || data.enteredQty is number)
+        && (!('unit' in data) || data.unit in ['CASE', 'BOTTLE'])
+        && (!('note' in data) || (data.note is string && data.note.size() <= 240))
+        && data.status in ['Pending', 'Approved', 'Rejected']
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 80
+        && data.createdAtStr is string && data.createdAtStr.size() >= 1 && data.createdAtStr.size() <= 40
+        && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 80))
+        && (!('reviewedAtStr' in data) || (data.reviewedAtStr is string && data.reviewedAtStr.size() <= 40))
+        && (!('remark' in data) || (data.remark is string && data.remark.size() <= 300))
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDailySalesReport(data) {
+      return data.keys().hasAll(['reportId', 'date', 'counter', 'status', 'totalSoldQty', 'totalSalesValue', 'recordedAmount', 'cashAmount', 'upiAmount', 'cardAmount', 'cashierName', 'helperName', 'paymentDifference', 'cutoffSeq', 'submittedBy', 'submittedAtStr', 'lines', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['reportId', 'date', 'counter', 'status', 'totalSoldQty', 'totalSalesValue', 'recordedAmount', 'cashAmount', 'upiAmount', 'cardAmount', 'acCharges', 'cashierName', 'helperName', 'paymentDifference', 'paymentExplanation', 'cutoffSeq', 'submittedBy', 'submittedAtStr', 'reviewedBy', 'reviewedAtStr', 'remark', 'editedBy', 'editedAtStr', 'lines', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.reportId)
+        && data.date is string && data.date.size() >= 4 && data.date.size() <= 20
+        && data.counter in ['NORMAL', 'AC']
+        && data.status in ['Pending', 'Approved', 'Rejected']
+        && data.totalSoldQty is number && data.totalSoldQty >= 0
+        && data.totalSalesValue is number && data.totalSalesValue >= 0
+        && data.recordedAmount is number
+        && data.cashAmount is number && data.cashAmount >= 0
+        && data.upiAmount is number && data.upiAmount >= 0
+        && data.cardAmount is number && data.cardAmount >= 0
+        && (!('acCharges' in data) || data.acCharges is number)
+        && data.cashierName is string && data.cashierName.size() <= 100
+        && data.helperName is string && data.helperName.size() <= 100
+        && data.paymentDifference is number
+        && (!('paymentExplanation' in data) || (data.paymentExplanation is string && data.paymentExplanation.size() <= 300))
+        && data.cutoffSeq is number
+        && data.submittedBy is string && data.submittedBy.size() >= 1 && data.submittedBy.size() <= 80
+        && data.submittedAtStr is string && data.submittedAtStr.size() >= 1 && data.submittedAtStr.size() <= 40
+        && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 80))
+        && (!('reviewedAtStr' in data) || (data.reviewedAtStr is string && data.reviewedAtStr.size() <= 40))
+        && (!('remark' in data) || (data.remark is string && data.remark.size() <= 300))
+        && (!('editedBy' in data) || (data.editedBy is string && data.editedBy.size() <= 80))
+        && (!('editedAtStr' in data) || (data.editedAtStr is string && data.editedAtStr.size() <= 40))
+        && isValidLinesList(data.lines, 300)
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDailyOperation(data) {
+      return data.keys().hasAll(['operationId', 'type', 'date', 'name', 'amount', 'status', 'createdBy', 'createdAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['operationId', 'type', 'date', 'name', 'amount', 'payment', 'roomNo', 'location', 'productId', 'productName', 'qty', 'reason', 'status', 'createdBy', 'createdAtStr', 'reviewedBy', 'reviewedAtStr', 'reviewRemark', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.operationId)
+        && data.type in ['EXPENSE', 'WAGE', 'ROOM', 'DAMAGE']
+        && data.date is string && data.date.size() >= 4 && data.date.size() <= 20
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 160
+        && data.amount is number
+        && (!('payment' in data) || data.payment in ['Cash', 'UPI', 'Card', ''])
+        && (!('roomNo' in data) || data.roomNo is number)
+        && (!('location' in data) || data.location in ['GODOWN', 'NORMAL', 'AC', ''])
+        && (!('productId' in data) || (data.productId is string && data.productId.size() <= 64))
+        && (!('productName' in data) || (data.productName is string && data.productName.size() <= 160))
+        && (!('qty' in data) || data.qty is number)
+        && (!('reason' in data) || (data.reason is string && data.reason.size() <= 240))
+        && data.status in ['Pending', 'Approved', 'Rejected']
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 80
+        && data.createdAtStr is string && data.createdAtStr.size() >= 1 && data.createdAtStr.size() <= 40
+        && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 80))
+        && (!('reviewedAtStr' in data) || (data.reviewedAtStr is string && data.reviewedAtStr.size() <= 40))
+        && (!('reviewRemark' in data) || (data.reviewRemark is string && data.reviewRemark.size() <= 300))
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStockLedgerEntry(data) {
+      return data.keys().hasAll(['seq', 'ledgerId', 'timestampStr', 'location', 'productId', 'delta', 'balanceAfter', 'refType', 'refId', 'approvedBy', 'businessDate', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['seq', 'ledgerId', 'timestampStr', 'location', 'productId', 'productName', 'delta', 'balanceAfter', 'refType', 'refId', 'approvedBy', 'businessDate', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.seq is number
+        && isValidId(data.ledgerId)
+        && data.timestampStr is string && data.timestampStr.size() >= 1 && data.timestampStr.size() <= 40
+        && data.location in ['GODOWN', 'NORMAL', 'AC']
+        && data.productId is string && data.productId.size() >= 1 && data.productId.size() <= 64
+        && (!('productName' in data) || (data.productName is string && data.productName.size() <= 160))
+        && data.delta is number
+        && data.balanceAfter is number && data.balanceAfter >= 0
+        && data.refType in ['PURCHASE', 'PURCHASE_CORRECTION', 'REQUEST', 'TRANSFER', 'SALE', 'SALES_CORRECTION', 'DAMAGE', 'OPENING', 'ADJUSTMENT']
+        && data.refId is string && data.refId.size() >= 1 && data.refId.size() <= 80
+        && data.approvedBy is string && data.approvedBy.size() >= 1 && data.approvedBy.size() <= 80
+        && data.businessDate is string && data.businessDate.size() >= 4 && data.businessDate.size() <= 20
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLogEntry(data) {
+      return data.keys().hasAll(['auditId', 'timestampStr', 'userId', 'username', 'role', 'action', 'refId', 'details', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['auditId', 'timestampStr', 'userId', 'username', 'role', 'action', 'refId', 'details', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.auditId)
+        && data.timestampStr is string && data.timestampStr.size() >= 1 && data.timestampStr.size() <= 40
+        && data.userId is string && data.userId.size() <= 64
+        && data.username is string && data.username.size() >= 1 && data.username.size() <= 80
+        && data.role is string && data.role.size() >= 1 && data.role.size() <= 32
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 80
+        && data.refId is string && data.refId.size() <= 80
+        && data.details is string && data.details.size() <= 500
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDropdownOption(data) {
+      return data.keys().hasAll(['optionId', 'type', 'value', 'active', 'createdAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['optionId', 'type', 'value', 'active', 'createdAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.optionId)
+        && data.type in ['EXPENSE', 'WAGE']
+        && data.value is string && data.value.size() >= 1 && data.value.size() <= 140
+        && data.active is bool
+        && data.createdAtStr is string && data.createdAtStr.size() <= 40
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // =========================================================
+    // COLLECTION SECURITY RULES (Phase 4)
+    // =========================================================
+
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+    }
+
+    match /admins/{uid} {
+      allow get: if isValidId(uid) && (isAdmin() || (isVerified() && request.auth.uid == uid));
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(uid) && isBootstrappedAdmin() && isValidAdminUser(incoming()) && incoming().uid == uid && hasCreateTimestamps(incoming());
+      allow update, delete: if false;
+    }
+
+    match /cloud_members/{memberId} {
+      allow get: if isValidId(memberId) && (isAdmin() || (isVerified() && existing().email == request.auth.token.email));
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().email == request.auth.token.email);
+      allow create: if isValidId(memberId)
+        && isAdmin()
+        && isValidCloudMember(incoming())
+        && incoming().memberId == memberId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(memberId)
+        && isValidCloudMember(incoming())
+        && isAdmin()
+        && incoming().memberId == existing().memberId
+        && incoming().email == existing().email
+        && hasUpdateTimestamps(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['label', 'role', 'updatedAt']);
+      allow delete: if isValidId(memberId) && isAdmin();
+    }
+
+    match /workspace_meta/{metaId} {
+      allow get: if isValidId(metaId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(metaId)
+        && metaId == 'main'
+        && isAdmin()
+        && isValidWorkspaceMeta(incoming())
+        && incoming().metaId == metaId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(metaId)
+        && isValidWorkspaceMeta(incoming())
+        && incoming().metaId == existing().metaId
+        && incoming().ownerEmail == existing().ownerEmail
+        && hasUpdateTimestamps(incoming())
+        && (
+          (isWorkspaceMemberByMeta() && incoming().diff(existing()).affectedKeys().hasOnly(['suppliers', 'updatedAt'])) ||
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])) ||
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['bootstrapped', 'openingEpoch', 'catalogVersion', 'suppliers', 'memberEmails', 'updatedAt']))
+        );
+      allow delete: if false;
+    }
+
+    match /staff_users/{userId} {
+      allow get: if isValidId(userId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(userId)
+        && isWorkspaceMemberByMeta()
+        && isValidStaffUser(incoming())
+        && incoming().userId == userId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(userId)
+        && isValidStaffUser(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().userId == existing().userId
+        && hasUpdateTimestamps(incoming())
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['password', 'mustChange', 'updatedAtStr', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['active', 'password', 'mustChange', 'updatedAtStr', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
+        );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /products/{productId} {
+      allow get: if isValidId(productId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(productId)
+        && isWorkspaceMemberByMeta()
+        && isValidProduct(incoming())
+        && incoming().productId == productId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(productId)
+        && isValidProduct(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().productId == existing().productId
+        && hasUpdateTimestamps(incoming())
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'category', 'sizeML', 'casePack', 'sellingPrice', 'active', 'updatedAtStr', 'updatedBy', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
+        );
+      allow delete: if isValidId(productId) && isAdmin();
+    }
+
+    match /stock/{productId} {
+      allow get: if isValidId(productId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(productId)
+        && isWorkspaceMemberByMeta()
+        && isValidStockLevel(incoming())
+        && incoming().productId == productId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(productId)
+        && isValidStockLevel(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().productId == existing().productId
+        && hasUpdateTimestamps(incoming())
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['godown', 'normal', 'ac', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
+        );
+      allow delete: if isValidId(productId) && isAdmin();
+    }
+
+    match /purchases/{batchId} {
+      allow get: if isValidId(batchId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(batchId)
+        && isWorkspaceMemberByMeta()
+        && isValidPurchaseBatch(incoming())
+        && incoming().batchId == batchId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(batchId)
+        && isValidPurchaseBatch(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().batchId == existing().batchId
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAtStr == existing().createdAtStr
+        && hasUpdateTimestamps(incoming())
+        && (
+          isAdmin() ||
+          (existing().status == 'Pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'remark', 'updatedAt'])) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['date', 'billDate', 'supplier', 'invoiceNo', 'lines', 'totalQty', 'netTotal', 'remark', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
+        );
+      allow delete: if isValidId(batchId) && isWorkspaceMemberByMeta();
+    }
+
+    match /requests/{requestId} {
+      allow get: if isValidId(requestId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(requestId)
+        && isWorkspaceMemberByMeta()
+        && isValidStockRequest(incoming())
+        && incoming().requestId == requestId
+        && incoming().status == 'Pending'
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(requestId)
+        && isValidStockRequest(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().requestId == existing().requestId
+        && incoming().createdBy == existing().createdBy
+        && hasUpdateTimestamps(incoming())
+        && (
+          isAdmin() ||
+          (existing().status == 'Pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'remark', 'updatedAt'])) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
+        );
+      allow delete: if isValidId(requestId) && isAdmin();
+    }
+
+    match /transfers/{transferId} {
+      allow get: if isValidId(transferId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(transferId)
+        && isWorkspaceMemberByMeta()
+        && isValidStockTransfer(incoming())
+        && incoming().transferId == transferId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(transferId)
+        && isValidStockTransfer(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().transferId == existing().transferId
+        && hasUpdateTimestamps(incoming())
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
+        );
+      allow delete: if isValidId(transferId) && isAdmin();
+    }
+
+    match /daily_sales/{reportId} {
+      allow get: if isValidId(reportId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(reportId)
+        && isWorkspaceMemberByMeta()
+        && isValidDailySalesReport(incoming())
+        && incoming().reportId == reportId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(reportId)
+        && isValidDailySalesReport(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().reportId == existing().reportId
+        && hasUpdateTimestamps(incoming())
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['totalSoldQty', 'totalSalesValue', 'recordedAmount', 'cashAmount', 'upiAmount', 'cardAmount', 'acCharges', 'cashierName', 'helperName', 'paymentDifference', 'paymentExplanation', 'remark', 'editedBy', 'editedAtStr', 'lines', 'status', 'reviewedBy', 'reviewedAtStr', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
+        );
+      allow delete: if isValidId(reportId) && isWorkspaceMemberByMeta();
+    }
+
+    match /operations/{operationId} {
+      allow get: if isValidId(operationId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(operationId)
+        && isWorkspaceMemberByMeta()
+        && isValidDailyOperation(incoming())
+        && incoming().operationId == operationId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(operationId)
+        && isValidDailyOperation(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().operationId == existing().operationId
+        && hasUpdateTimestamps(incoming())
+        && (
+          isAdmin() ||
+          (existing().status == 'Pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'reviewRemark', 'updatedAt'])) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
+        );
+      allow delete: if isValidId(operationId) && isWorkspaceMemberByMeta();
+    }
+
+    match /ledger/{ledgerId} {
+      allow get: if isValidId(ledgerId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(ledgerId)
+        && isWorkspaceMemberByMeta()
+        && isValidStockLedgerEntry(incoming())
+        && incoming().ledgerId == ledgerId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(ledgerId)
+        && isValidStockLedgerEntry(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().ledgerId == existing().ledgerId
+        && hasUpdateTimestamps(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']);
+      allow delete: if isValidId(ledgerId) && isAdmin();
+    }
+
+    match /audit_log/{auditId} {
+      allow get: if isValidId(auditId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(auditId)
+        && isWorkspaceMemberByMeta()
+        && isValidAuditLogEntry(incoming())
+        && incoming().auditId == auditId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(auditId)
+        && isValidAuditLogEntry(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().auditId == existing().auditId
+        && hasUpdateTimestamps(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']);
+      allow delete: if isValidId(auditId) && isAdmin();
+    }
+
+    match /dropdown_options/{optionId} {
+      allow get: if isValidId(optionId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
+      allow create: if isValidId(optionId)
+        && isWorkspaceMemberByMeta()
+        && isValidDropdownOption(incoming())
+        && incoming().optionId == optionId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(optionId)
+        && isValidDropdownOption(incoming())
+        && isWorkspaceMemberByMeta()
+        && incoming().optionId == existing().optionId
+        && hasUpdateTimestamps(incoming())
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['active', 'value', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
+        );
+      allow delete: if isValidId(optionId) && isAdmin();
+    }
+  }
+}

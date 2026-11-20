@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { StockProvider, useStock } from './context/StockContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Header } from './components/Header';
 import { BellRing, X } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
@@ -26,11 +27,11 @@ import { UsersView } from './views/UsersView';
 import { AuditView } from './views/AuditView';
 
 const MainLayout: React.FC = () => {
-  const { currentUser, latestRequestAlert, dismissRequestAlert } = useStock();
+  const { currentUser, cloudAccessStatus, latestRequestAlert, dismissRequestAlert } = useStock();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState<boolean>(false);
 
-  if (!currentUser) {
+  if (!currentUser || cloudAccessStatus !== 'connected') {
     return <LoginView />;
   }
 
@@ -160,8 +161,10 @@ const MainLayout: React.FC = () => {
 
 export default function App() {
   return (
-    <StockProvider>
-      <MainLayout />
-    </StockProvider>
+    <ErrorBoundary>
+      <StockProvider>
+        <MainLayout />
+      </StockProvider>
+    </ErrorBoundary>
   );
 }

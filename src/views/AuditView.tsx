@@ -64,8 +64,8 @@ export const AuditView: React.FC = () => {
     setReconcileResult(res);
   };
 
-  const handleSyncLedger = () => {
-    const cnt = syncLedger();
+  const handleSyncLedger = async () => {
+    const cnt = await syncLedger();
     setSyncCount(cnt);
     setTimeout(() => setSyncCount(null), 3000);
   };

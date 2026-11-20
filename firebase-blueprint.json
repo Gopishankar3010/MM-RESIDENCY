@@ -1,0 +1,384 @@
+{
+  "entities": {
+    "CloudMember": {
+      "title": "CloudMember",
+      "description": "Authorized Google accounts allowed to sync and operate this shop workspace.",
+      "type": "object",
+      "properties": {
+        "memberId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "role": { "type": "string", "enum": ["ADMIN", "STAFF"] },
+        "addedBy": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["memberId", "email", "label", "role", "addedBy", "createdAt", "updatedAt"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Firestore admin role marker keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "WorkspaceMeta": {
+      "title": "WorkspaceMeta",
+      "description": "Global shop metadata, opening bootstrap flag, suppliers, and team member emails.",
+      "type": "object",
+      "properties": {
+        "metaId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "bootstrapped": { "type": "boolean" },
+        "openingEpoch": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "catalogVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "ownerEmail": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "memberEmails": { "type": "array", "description": "Authorized team emails (max 25)." },
+        "suppliers": { "type": "array", "description": "Supplier names list (max 100)." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["metaId", "bootstrapped", "openingEpoch", "catalogVersion", "ownerEmail", "memberEmails", "suppliers", "createdAt", "updatedAt"]
+    },
+    "StaffUser": {
+      "title": "StaffUser",
+      "description": "Shop operator profile for Admin, Normal Counter, and AC Counter.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "fullName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "role": { "type": "string", "enum": ["ADMIN", "NORMAL", "AC"] },
+        "counter": { "type": "string", "enum": ["NORMAL", "AC", ""] },
+        "active": { "type": "boolean" },
+        "mustChange": { "type": "boolean" },
+        "password": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAtStr": { "type": "string", "maxLength": 40 },
+        "updatedAtStr": { "type": "string", "maxLength": 40 },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "username", "fullName", "role", "active", "mustChange", "password", "createdAtStr", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Liquor/beverage catalogue item.",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "sizeML": { "type": "number" },
+        "casePack": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "active": { "type": "boolean" },
+        "updatedAtStr": { "type": "string", "maxLength": 40 },
+        "updatedBy": { "type": "string", "maxLength": 80 },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "name", "category", "sizeML", "casePack", "sellingPrice", "active", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "StockLevel": {
+      "title": "StockLevel",
+      "description": "Current physical stock in bottles across Godown, Normal Counter, and AC Counter.",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "godown": { "type": "number" },
+        "normal": { "type": "number" },
+        "ac": { "type": "number" },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "godown", "normal", "ac", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "PurchaseBatch": {
+      "title": "PurchaseBatch",
+      "description": "Supplier purchase invoice batch.",
+      "type": "object",
+      "properties": {
+        "batchId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "supplier": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "date": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "billDate": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "invoiceNo": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "permitNumber": { "type": "string", "maxLength": 80 },
+        "documentNumber": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "lines": { "type": "array", "description": "Purchase line items (max 200)." },
+        "totalQty": { "type": "number" },
+        "grossTotal": { "type": "number" },
+        "sedTotal": { "type": "number" },
+        "discountTotal": { "type": "number" },
+        "tcsTotal": { "type": "number" },
+        "netTotal": { "type": "number" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAtStr": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "reviewedBy": { "type": "string", "maxLength": 80 },
+        "reviewedAtStr": { "type": "string", "maxLength": 40 },
+        "remark": { "type": "string", "maxLength": 300 },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["batchId", "supplier", "date", "billDate", "invoiceNo", "status", "lines", "totalQty", "grossTotal", "sedTotal", "discountTotal", "tcsTotal", "netTotal", "createdBy", "createdAtStr", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "StockRequest": {
+      "title": "StockRequest",
+      "description": "Counter replenishment request from Central Godown.",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "counter": { "type": "string", "enum": ["NORMAL", "AC"] },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "productName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "sizeML": { "type": "number" },
+        "casePack": { "type": "number" },
+        "qty": { "type": "number" },
+        "enteredQty": { "type": "number" },
+        "unit": { "type": "string", "enum": ["CASE", "BOTTLE", "MIXED"] },
+        "reason": { "type": "string", "maxLength": 240 },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "date": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAtStr": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "reviewedBy": { "type": "string", "maxLength": 80 },
+        "reviewedAtStr": { "type": "string", "maxLength": 40 },
+        "remark": { "type": "string", "maxLength": 300 },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["requestId", "counter", "productId", "productName", "category", "sizeML", "casePack", "qty", "enteredQty", "unit", "reason", "status", "date", "createdBy", "createdAtStr", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "StockTransfer": {
+      "title": "StockTransfer",
+      "description": "Direct stock transfer between Godown and Counters.",
+      "type": "object",
+      "properties": {
+        "transferId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["GODOWN_TO_COUNTER", "COUNTER_TO_COUNTER"] },
+        "fromLoc": { "type": "string", "enum": ["GODOWN", "NORMAL", "AC"] },
+        "toLoc": { "type": "string", "enum": ["GODOWN", "NORMAL", "AC"] },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "productName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "casePack": { "type": "number" },
+        "qty": { "type": "number" },
+        "enteredQty": { "type": "number" },
+        "unit": { "type": "string", "enum": ["CASE", "BOTTLE"] },
+        "note": { "type": "string", "maxLength": 240 },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAtStr": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "reviewedBy": { "type": "string", "maxLength": 80 },
+        "reviewedAtStr": { "type": "string", "maxLength": 40 },
+        "remark": { "type": "string", "maxLength": 300 },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["transferId", "type", "fromLoc", "toLoc", "productId", "productName", "casePack", "qty", "status", "createdBy", "createdAtStr", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "DailySalesReport": {
+      "title": "DailySalesReport",
+      "description": "End-of-day counter sales and payment collection report.",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "counter": { "type": "string", "enum": ["NORMAL", "AC"] },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "totalSoldQty": { "type": "number" },
+        "totalSalesValue": { "type": "number" },
+        "recordedAmount": { "type": "number" },
+        "cashAmount": { "type": "number" },
+        "upiAmount": { "type": "number" },
+        "cardAmount": { "type": "number" },
+        "acCharges": { "type": "number" },
+        "cashierName": { "type": "string", "maxLength": 100 },
+        "helperName": { "type": "string", "maxLength": 100 },
+        "paymentDifference": { "type": "number" },
+        "paymentExplanation": { "type": "string", "maxLength": 300 },
+        "cutoffSeq": { "type": "number" },
+        "submittedBy": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "submittedAtStr": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "reviewedBy": { "type": "string", "maxLength": 80 },
+        "reviewedAtStr": { "type": "string", "maxLength": 40 },
+        "remark": { "type": "string", "maxLength": 300 },
+        "editedBy": { "type": "string", "maxLength": 80 },
+        "editedAtStr": { "type": "string", "maxLength": 40 },
+        "lines": { "type": "array", "description": "Sold product line breakdown (max 300)." },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reportId", "date", "counter", "status", "totalSoldQty", "totalSalesValue", "recordedAmount", "cashAmount", "upiAmount", "cardAmount", "cashierName", "helperName", "paymentDifference", "cutoffSeq", "submittedBy", "submittedAtStr", "lines", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "DailyOperation": {
+      "title": "DailyOperation",
+      "description": "Daily expense, wage, room income, or damage record.",
+      "type": "object",
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["EXPENSE", "WAGE", "ROOM", "DAMAGE"] },
+        "date": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "amount": { "type": "number" },
+        "payment": { "type": "string", "enum": ["Cash", "UPI", "Card", ""] },
+        "roomNo": { "type": "number" },
+        "location": { "type": "string", "enum": ["GODOWN", "NORMAL", "AC", ""] },
+        "productId": { "type": "string", "maxLength": 64 },
+        "productName": { "type": "string", "maxLength": 160 },
+        "qty": { "type": "number" },
+        "reason": { "type": "string", "maxLength": 240 },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAtStr": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "reviewedBy": { "type": "string", "maxLength": 80 },
+        "reviewedAtStr": { "type": "string", "maxLength": 40 },
+        "reviewRemark": { "type": "string", "maxLength": 300 },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["operationId", "type", "date", "name", "amount", "status", "createdBy", "createdAtStr", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "StockLedgerEntry": {
+      "title": "StockLedgerEntry",
+      "description": "Immutable stock movement ledger record.",
+      "type": "object",
+      "properties": {
+        "seq": { "type": "number" },
+        "ledgerId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "timestampStr": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "location": { "type": "string", "enum": ["GODOWN", "NORMAL", "AC"] },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "productName": { "type": "string", "maxLength": 160 },
+        "delta": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "refType": { "type": "string", "enum": ["PURCHASE", "PURCHASE_CORRECTION", "REQUEST", "TRANSFER", "SALE", "SALES_CORRECTION", "DAMAGE", "OPENING", "ADJUSTMENT"] },
+        "refId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "approvedBy": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "businessDate": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seq", "ledgerId", "timestampStr", "location", "productId", "delta", "balanceAfter", "refType", "refId", "approvedBy", "businessDate", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "AuditLogEntry": {
+      "title": "AuditLogEntry",
+      "description": "System audit log entry.",
+      "type": "object",
+      "properties": {
+        "auditId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "timestampStr": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "userId": { "type": "string", "maxLength": 64 },
+        "username": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "role": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "action": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "refId": { "type": "string", "maxLength": 80 },
+        "details": { "type": "string", "maxLength": 500 },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["auditId", "timestampStr", "userId", "username", "role", "action", "refId", "details", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "DropdownOption": {
+      "title": "DropdownOption",
+      "description": "Expense or wage category option.",
+      "type": "object",
+      "properties": {
+        "optionId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["EXPENSE", "WAGE"] },
+        "value": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "active": { "type": "boolean" },
+        "createdAtStr": { "type": "string", "maxLength": 40 },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["optionId", "type", "value", "active", "createdAtStr", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "TestConnection": {
+      "title": "TestConnection",
+      "description": "Connectivity probe document.",
+      "type": "object",
+      "properties": {
+        "ok": { "type": "boolean" }
+      }
+    }
+  },
+  "firestore": {
+    "/cloud_members/{memberId}": {
+      "schema": { "$ref": "#/entities/CloudMember" },
+      "description": "Authorized team Google email accounts."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Firestore admins keyed by Firebase UID."
+    },
+    "/workspace_meta/{metaId}": {
+      "schema": { "$ref": "#/entities/WorkspaceMeta" },
+      "description": "Singleton shop bootstrap state, suppliers, and team member emails."
+    },
+    "/staff_users/{userId}": {
+      "schema": { "$ref": "#/entities/StaffUser" },
+      "description": "Shop staff profile records."
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Product catalogue documents."
+    },
+    "/stock/{productId}": {
+      "schema": { "$ref": "#/entities/StockLevel" },
+      "description": "Live stock balances per product across Godown, Normal Counter, and AC Counter."
+    },
+    "/purchases/{batchId}": {
+      "schema": { "$ref": "#/entities/PurchaseBatch" },
+      "description": "Supplier purchase batches and approval status."
+    },
+    "/requests/{requestId}": {
+      "schema": { "$ref": "#/entities/StockRequest" },
+      "description": "Counter stock replenishment requests."
+    },
+    "/transfers/{transferId}": {
+      "schema": { "$ref": "#/entities/StockTransfer" },
+      "description": "Stock transfer records."
+    },
+    "/daily_sales/{reportId}": {
+      "schema": { "$ref": "#/entities/DailySalesReport" },
+      "description": "Daily closing sales reports."
+    },
+    "/operations/{operationId}": {
+      "schema": { "$ref": "#/entities/DailyOperation" },
+      "description": "Expenses, wages, rooms, and damage records."
+    },
+    "/ledger/{ledgerId}": {
+      "schema": { "$ref": "#/entities/StockLedgerEntry" },
+      "description": "Stock movement ledger."
+    },
+    "/audit_log/{auditId}": {
+      "schema": { "$ref": "#/entities/AuditLogEntry" },
+      "description": "Audit trail entries."
+    },
+    "/dropdown_options/{optionId}": {
+      "schema": { "$ref": "#/entities/DropdownOption" },
+      "description": "Expense and wage dropdown options."
+    },
+    "/test/{docId}": {
+      "schema": { "$ref": "#/entities/TestConnection" },
+      "description": "Connection probe document at /test/connection."
+    }
+  }
+}
