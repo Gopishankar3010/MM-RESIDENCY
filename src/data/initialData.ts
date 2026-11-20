@@ -1000,3 +1000,12 @@ export const INITIAL_DROPDOWN_OPTIONS: DropdownOption[] = [
   { optionId: 'OPT-012', type: 'WAGE', value: 'Prakash (Godown Supervisor)', active: true, createdAt: '2026-01-01' },
   { optionId: 'OPT-013', type: 'WAGE', value: 'Sundar (Night Security)', active: true, createdAt: '2026-01-01' }
 ];
+
+export function matchesSearchQuery(query: string, ...fields: (string | number | undefined | null)[]): boolean {
+  const q = String(query || '').trim().toLocaleLowerCase();
+  if (!q) return true;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const haystack = fields.map(f => String(f ?? '')).join(' ').toLocaleLowerCase();
+  return tokens.every(tok => haystack.includes(tok));
+}
+

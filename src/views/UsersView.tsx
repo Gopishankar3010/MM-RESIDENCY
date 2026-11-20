@@ -5,11 +5,13 @@ import {
   Users, UserPlus, KeyRound, Shield, CheckCircle2, 
   XCircle, Search, Power, Printer
 } from 'lucide-react';
+import { matchesSearchQuery } from '../data/initialData';
 
 export const UsersView: React.FC = () => {
   const { users, currentUser, createUser, resetUserPassword, toggleUserActive } = useStock();
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
   
   // Form State
   const [username, setUsername] = useState('');
@@ -35,10 +37,8 @@ export const UsersView: React.FC = () => {
     );
   }
 
-  const filteredUsers = (users || []).filter((u: User) => 
-    u.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.role.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredUsers = (users || []).filter((u: User) =>
+    matchesSearchQuery(searchTerm, u.username, u.fullName, u.role, u.userId)
   );
 
   const handleOpenAdd = () => {
@@ -70,17 +70,20 @@ export const UsersView: React.FC = () => {
     }
 
     try {
+      setIsCreatingUser(true);
       await createUser({
         username: username.trim(),
         fullName: fullName.trim(),
         role,
         password: password.trim(),
       });
-      setSuccess(`User ${username} created successfully!`);
+      setSuccess(`User ${username.trim()} created and saved successfully!`);
       setIsModalOpen(false);
       setTimeout(() => setSuccess(''), 4000);
     } catch (err: any) {
       setError(err?.message || 'Failed to create user account.');
+    } finally {
+      setIsCreatingUser(false);
     }
   };
 
@@ -359,9 +362,10 @@ export const UsersView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-bold shadow-xs transition-colors cursor-pointer"
+                  disabled={isCreatingUser}
+                  className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-sm font-bold shadow-xs transition-colors cursor-pointer"
                 >
-                  Create User
+                  {isCreatingUser ? 'Creating...' : 'Create User'}
                 </button>
               </div>
             </form>

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { Package, Search, Plus, Edit2, Check, X, Filter, Printer } from 'lucide-react';
 import { Product } from '../types';
-import { bottlesPerCase_, CATEGORY_ORDER, sortProductsCategoryWise } from '../data/initialData';
+import { bottlesPerCase_, CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
 
 export const ProductsView: React.FC = () => {
   const { currentUser, products, saveProduct } = useStock();
@@ -32,8 +32,7 @@ export const ProductsView: React.FC = () => {
           : statusFilter === 'active'
           ? p.active
           : !p.active;
-      const q = search.trim().toLowerCase();
-      const matchesSearch = !q || (p.name + ' ' + p.category + ' ' + p.sizeML).toLowerCase().includes(q);
+      const matchesSearch = matchesSearchQuery(search, p.name, p.category, p.sizeML, p.productId);
       return matchesCat && matchesStatus && matchesSearch;
     })
   );

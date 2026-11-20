@@ -67,6 +67,7 @@ interface StockContextType {
   }) => Promise<string>;
   reviewPurchaseBill: (batchId: string, decision: 'APPROVE' | 'REJECT', remark?: string) => Promise<void>;
   editPurchaseRecord: (id: string, updates: { date: string; billDate: string; supplier: string; invoiceNo: string; qty: number; rate: number; sedAmt: number; discountAmt: number; tcsPct: number; reason: string }) => Promise<void>;
+  deletePurchaseBatch: (batchId: string) => Promise<void>;
 
   // Requests
   submitRequestBatch: (data: { date: string; reason: string; items: { productId: string; qty: number; unit: 'CASE' | 'BOTTLE' }[] }) => Promise<void>;
@@ -102,10 +103,12 @@ interface StockContextType {
     type: 'EXPENSE' | 'WAGE'; date: string;
     items: { name: string; amount: number; note?: string }[];
   }) => Promise<{ count: number; total: number }>;
+  deleteDailyOperation: (operationId: string) => Promise<void>;
   reviewDailyOperation: (id: string, decision: 'APPROVE' | 'REJECT', remark?: string) => Promise<void>;
 
   // Administration
   addSupplier: (name: string) => Promise<void>;
+  deleteSupplier: (name: string) => Promise<void>;
   addDropdownOption: (type: 'EXPENSE' | 'WAGE', value: string) => Promise<void>;
   createUser: (user: { username: string; fullName: string; role: Role; password: string }) => Promise<void>;
   resetUserPassword: (userId: string, newPw: string) => Promise<void>;
@@ -227,6 +230,41 @@ function getNowTimestamp(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+function nextPrefixedId(prefix: string, existingIds: (string | undefined)[], pad = 6, offset = 0): string {
+  const maxNum = existingIds.reduce((max, id) => {
+    if (!id) return max;
+    const m = String(id).match(/(\d+)$/);
+    const num = m ? Number(m[1]) : 0;
+    return num > max ? num : max;
+  }, 0);
+  return `${prefix}-${String(maxNum + 1 + offset).padStart(pad, '0')}`;
+}
+
+function mergeUsersSafe(primary: User[], secondary: User[]): User[] {
+  const byKey = new Map<string, User>();
+  const keyOf = (u: User) => String(u.userId || u.username || '').toLowerCase();
+
+  [...INITIAL_USERS, ...(Array.isArray(secondary) ? secondary : [])].forEach(u => {
+    if (!u || !u.username) return;
+    byKey.set(keyOf(u), u);
+  });
+
+  (Array.isArray(primary) ? primary : []).forEach(u => {
+    if (!u || !u.username) return;
+    const k = keyOf(u);
+    const existing = byKey.get(k);
+    if (!existing) {
+      byKey.set(k, u);
+    } else {
+      const existingTs = String(existing.updatedAt || existing.createdAt || '');
+      const nextTs = String(u.updatedAt || u.createdAt || '');
+      byKey.set(k, !existingTs || nextTs >= existingTs ? u : existing);
+    }
+  });
+
+  return Array.from(byKey.values());
+}
+
 const StockContext = createContext<StockContextType | undefined>(undefined);
 
 export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -342,52 +380,136 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return raw ? JSON.parse(raw) : INITIAL_DROPDOWN_OPTIONS;
   });
 
-  // Sync to localStorage
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_users', JSON.stringify(users));
-  }, [users]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_products', JSON.stringify(products));
-  }, [products]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_stock', JSON.stringify(stock));
-  }, [stock]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_purchases', JSON.stringify(purchases));
-  }, [purchases]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_requests', JSON.stringify(requests));
-  }, [requests]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_transfers', JSON.stringify(transfers));
-  }, [transfers]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_daily_sales', JSON.stringify(dailySales));
-  }, [dailySales]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_operations', JSON.stringify(operations));
-  }, [operations]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_ledger', JSON.stringify(ledger));
-  }, [ledger]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_audit', JSON.stringify(auditLog));
-  }, [auditLog]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_suppliers', JSON.stringify(suppliers));
-  }, [suppliers]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_dropdowns', JSON.stringify(dropdownOptions));
-  }, [dropdownOptions]);
-
-  // Cloud Multi-Device Sync Engine + Real-Time Admin Notifications
+  // Cloud Multi-Device Sync Engine + Dirty-Safe Immediate Persistence + Admin Notifications
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('synced');
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
   const isServerHydrated = React.useRef(false);
   const isSyncingRef = React.useRef(false);
-  const isApplyingRemoteRef = React.useRef(false);
   const serverVersionRef = React.useRef(0);
+  const localDirtySeqRef = React.useRef(0);
+  const pushedSeqRef = React.useRef(0);
+  const pushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenPendingIdsRef = React.useRef<Set<string> | null>(null);
+
+  const latestRef = React.useRef({
+    users,
+    products,
+    stock,
+    purchases,
+    requests,
+    transfers,
+    dailySales,
+    operations,
+    ledger,
+    auditLog,
+    suppliers,
+    dropdownOptions
+  });
+
+  latestRef.current = {
+    users,
+    products,
+    stock,
+    purchases,
+    requests,
+    transfers,
+    dailySales,
+    operations,
+    ledger,
+    auditLog,
+    suppliers,
+    dropdownOptions
+  };
+
+  const persistSliceToLocalStorage = (key: string, val: any) => {
+    try {
+      localStorage.setItem(STORAGE_KEY + key, JSON.stringify(val));
+    } catch {
+      // Ignore quota errors
+    }
+  };
+
+  // Keep localStorage synced on render as backup as well
+  useEffect(() => { persistSliceToLocalStorage('_users', users); }, [users]);
+  useEffect(() => { persistSliceToLocalStorage('_products', products); }, [products]);
+  useEffect(() => { persistSliceToLocalStorage('_stock', stock); }, [stock]);
+  useEffect(() => { persistSliceToLocalStorage('_purchases', purchases); }, [purchases]);
+  useEffect(() => { persistSliceToLocalStorage('_requests', requests); }, [requests]);
+  useEffect(() => { persistSliceToLocalStorage('_transfers', transfers); }, [transfers]);
+  useEffect(() => { persistSliceToLocalStorage('_daily_sales', dailySales); }, [dailySales]);
+  useEffect(() => { persistSliceToLocalStorage('_operations', operations); }, [operations]);
+  useEffect(() => { persistSliceToLocalStorage('_ledger', ledger); }, [ledger]);
+  useEffect(() => { persistSliceToLocalStorage('_audit', auditLog); }, [auditLog]);
+  useEffect(() => { persistSliceToLocalStorage('_suppliers', suppliers); }, [suppliers]);
+  useEffect(() => { persistSliceToLocalStorage('_dropdowns', dropdownOptions); }, [dropdownOptions]);
+
+  const buildPayloadFromRef = (extra?: Record<string, any>) => ({
+    _catalogVersion: CATALOG_VERSION,
+    _openingEpoch: OPENING_EPOCH,
+    ...latestRef.current,
+    ...(extra || {})
+  });
+
+  // Synchronously updates latestRef, React states, localStorage, and increments dirty counter
+  const commitLocalState = (partial: Partial<typeof latestRef.current>, auditEntries?: AuditLogEntry[]) => {
+    const next = { ...latestRef.current, ...partial };
+    if (auditEntries && auditEntries.length > 0) {
+      next.auditLog = [...auditEntries, ...next.auditLog];
+    }
+    latestRef.current = next;
+    localDirtySeqRef.current += 1;
+
+    if (partial.users !== undefined) {
+      setUsers(next.users);
+      persistSliceToLocalStorage('_users', next.users);
+    }
+    if (partial.products !== undefined) {
+      setProducts(next.products);
+      persistSliceToLocalStorage('_products', next.products);
+    }
+    if (partial.stock !== undefined) {
+      setStock(next.stock);
+      persistSliceToLocalStorage('_stock', next.stock);
+    }
+    if (partial.purchases !== undefined) {
+      setPurchases(next.purchases);
+      persistSliceToLocalStorage('_purchases', next.purchases);
+    }
+    if (partial.requests !== undefined) {
+      setRequests(next.requests);
+      persistSliceToLocalStorage('_requests', next.requests);
+    }
+    if (partial.transfers !== undefined) {
+      setTransfers(next.transfers);
+      persistSliceToLocalStorage('_transfers', next.transfers);
+    }
+    if (partial.dailySales !== undefined) {
+      setDailySales(next.dailySales);
+      persistSliceToLocalStorage('_daily_sales', next.dailySales);
+    }
+    if (partial.operations !== undefined) {
+      setOperations(next.operations);
+      persistSliceToLocalStorage('_operations', next.operations);
+    }
+    if (partial.ledger !== undefined) {
+      setLedger(next.ledger);
+      persistSliceToLocalStorage('_ledger', next.ledger);
+    }
+    if (partial.auditLog !== undefined || (auditEntries && auditEntries.length > 0)) {
+      setAuditLog(next.auditLog);
+      persistSliceToLocalStorage('_audit', next.auditLog);
+    }
+    if (partial.suppliers !== undefined) {
+      setSuppliers(next.suppliers);
+      persistSliceToLocalStorage('_suppliers', next.suppliers);
+    }
+    if (partial.dropdownOptions !== undefined) {
+      setDropdownOptions(next.dropdownOptions);
+      persistSliceToLocalStorage('_dropdowns', next.dropdownOptions);
+    }
+
+    schedulePush(40);
+  };
 
   const [latestRequestAlert, setLatestRequestAlert] = useState<StockContextType['latestRequestAlert']>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
@@ -504,98 +626,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [requests, currentUser?.role, soundEnabled]);
 
-  // Pull state from /api/state
-  const pullServerState = async (isInitial = false) => {
-    if (isSyncingRef.current) return;
-    try {
-      const res = await fetch('/api/state');
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const json = await res.json();
-      if (json.success && json.data) {
-        const s = json.data;
-        if (s._openingEpoch !== OPENING_EPOCH) {
-          // Stale pre-opening server state detected: keep clean 2026-11-20 opening dataset and overwrite server store
-          const cleanStock = buildInitialStockMap();
-          await pushServerState({
-            _catalogVersion: CATALOG_VERSION,
-            _openingEpoch: OPENING_EPOCH,
-            users: INITIAL_USERS,
-            products: INITIAL_PRODUCTS,
-            stock: cleanStock,
-            purchases: [],
-            requests: [],
-            transfers: [],
-            dailySales: [],
-            operations: [],
-            ledger: [],
-            auditLog: [],
-            suppliers,
-            dropdownOptions
-          });
-        } else if (isInitial || (json.version && json.version > serverVersionRef.current)) {
-          isApplyingRemoteRef.current = true;
-          serverVersionRef.current = json.version || 1;
-          if (Array.isArray(s.users)) setUsers(s.users);
-          if (Array.isArray(s.products)) {
-            const mergedProds =
-              s._catalogVersion === CATALOG_VERSION
-                ? sortProductsCategoryWise(s.products as Product[])
-                : mergeCatalogueWithDefaults(s.products as Product[]);
-            setProducts(mergedProds);
-            localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
-          }
-          if (s.stock && typeof s.stock === 'object' && !Array.isArray(s.stock)) {
-            setStock(s.stock);
-          }
-          if (Array.isArray(s.purchases)) setPurchases(s.purchases);
-          if (Array.isArray(s.requests)) {
-            if (isInitial && seenPendingIdsRef.current === null) {
-              seenPendingIdsRef.current = new Set(
-                s.requests.filter((r: any) => r.status === 'Pending').map((r: any) => r.requestId)
-              );
-            }
-            setRequests(s.requests);
-          }
-          if (Array.isArray(s.transfers)) setTransfers(s.transfers);
-          if (Array.isArray(s.dailySales)) {
-            setDailySales(s.dailySales.map((r: any) => r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r));
-          }
-          if (Array.isArray(s.operations)) setOperations(s.operations);
-          if (Array.isArray(s.ledger)) setLedger(s.ledger);
-          if (Array.isArray(s.auditLog)) setAuditLog(s.auditLog);
-          if (Array.isArray(s.suppliers)) setSuppliers(s.suppliers);
-          if (Array.isArray(s.dropdownOptions)) setDropdownOptions(s.dropdownOptions);
-        }
-      } else {
-        // Server store empty: push fresh 2026-11-20 opening dataset immediately so all devices sync cleanly
-        await pushServerState({
-          _catalogVersion: CATALOG_VERSION,
-          _openingEpoch: OPENING_EPOCH,
-          users,
-          products,
-          stock,
-          purchases,
-          requests,
-          transfers,
-          dailySales,
-          operations,
-          ledger,
-          auditLog,
-          suppliers,
-          dropdownOptions
-        });
-      }
-      setSyncStatus('synced');
-      setLastSyncTime(new Date().toLocaleTimeString());
-    } catch {
-      setSyncStatus('offline');
-    } finally {
-      isServerHydrated.current = true;
-    }
-  };
-
   // Push state to /api/state
-  const pushServerState = async (payload: any) => {
+  const pushServerState = async (payloadOverride?: any): Promise<boolean> => {
+    const targetSeq = localDirtySeqRef.current;
+    const payload = payloadOverride || buildPayloadFromRef();
     try {
       setSyncStatus('syncing');
       isSyncingRef.current = true;
@@ -609,27 +643,210 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (json.version) {
           serverVersionRef.current = json.version;
         }
+        if (targetSeq > pushedSeqRef.current) {
+          pushedSeqRef.current = targetSeq;
+        }
         setSyncStatus('synced');
         setLastSyncTime(new Date().toLocaleTimeString());
+        return true;
       } else {
         setSyncStatus('offline');
+        return false;
       }
     } catch {
       setSyncStatus('offline');
+      return false;
     } finally {
       isSyncingRef.current = false;
+      // If more local edits happened while this push was in-flight, push again immediately
+      if (!payloadOverride && localDirtySeqRef.current > pushedSeqRef.current) {
+        schedulePush(20);
+      }
+    }
+  };
+
+  function schedulePush(delayMs = 40) {
+    if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+    pushTimerRef.current = setTimeout(() => {
+      pushTimerRef.current = null;
+      if (isServerHydrated.current && !isSyncingRef.current) {
+        pushServerState();
+      }
+    }, delayMs);
+  }
+
+  const flushServerPush = async () => {
+    if (pushTimerRef.current) {
+      clearTimeout(pushTimerRef.current);
+      pushTimerRef.current = null;
+    }
+    if (localDirtySeqRef.current > pushedSeqRef.current) {
+      await pushServerState();
+    }
+  };
+
+  // Pull state from /api/state (never clobbers dirty local edits)
+  const pullServerState = async (isInitial = false) => {
+    if (isSyncingRef.current) return;
+    // If there are unsaved local edits, push them instead of overwriting local state
+    if (!isInitial && localDirtySeqRef.current > pushedSeqRef.current) {
+      await flushServerPush();
+      return;
+    }
+    const seqBeforeFetch = localDirtySeqRef.current;
+    try {
+      const res = await fetch('/api/state');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const json = await res.json();
+
+      // Abort remote apply if a local edit occurred while fetch was in flight
+      if (localDirtySeqRef.current !== seqBeforeFetch || localDirtySeqRef.current > pushedSeqRef.current) {
+        await pushServerState();
+        return;
+      }
+
+      if (json.success && json.data) {
+        const s = json.data;
+        if (s._openingEpoch !== OPENING_EPOCH) {
+          // Stale pre-opening server state detected: preserve existing users and overwrite opening dataset
+          const cleanStock = buildInitialStockMap();
+          const preservedUsers = mergeUsersSafe(
+            Array.isArray(s.users) ? s.users : [],
+            latestRef.current.users
+          );
+          commitLocalState({
+            users: preservedUsers,
+            products: INITIAL_PRODUCTS,
+            stock: cleanStock,
+            purchases: [],
+            requests: [],
+            transfers: [],
+            dailySales: [],
+            operations: [],
+            ledger: [],
+            auditLog: []
+          });
+          await pushServerState(buildPayloadFromRef());
+        } else if (isInitial || (json.version && json.version > serverVersionRef.current)) {
+          serverVersionRef.current = json.version || 1;
+          const nextState = { ...latestRef.current };
+          let needsPushBack = false;
+
+          if (Array.isArray(s.users)) {
+            const mergedUsers = mergeUsersSafe(s.users, latestRef.current.users);
+            nextState.users = mergedUsers;
+            setUsers(mergedUsers);
+            persistSliceToLocalStorage('_users', mergedUsers);
+            if (mergedUsers.length !== s.users.length) {
+              needsPushBack = true;
+            }
+          }
+          if (Array.isArray(s.products)) {
+            const mergedProds =
+              s._catalogVersion === CATALOG_VERSION
+                ? sortProductsCategoryWise(s.products as Product[])
+                : mergeCatalogueWithDefaults(s.products as Product[]);
+            nextState.products = mergedProds;
+            setProducts(mergedProds);
+            persistSliceToLocalStorage('_products', mergedProds);
+            localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
+          }
+          if (s.stock && typeof s.stock === 'object' && !Array.isArray(s.stock)) {
+            nextState.stock = s.stock;
+            setStock(s.stock);
+            persistSliceToLocalStorage('_stock', s.stock);
+          }
+          if (Array.isArray(s.purchases)) {
+            nextState.purchases = s.purchases;
+            setPurchases(s.purchases);
+            persistSliceToLocalStorage('_purchases', s.purchases);
+          }
+          if (Array.isArray(s.requests)) {
+            if (isInitial && seenPendingIdsRef.current === null) {
+              seenPendingIdsRef.current = new Set(
+                s.requests.filter((r: any) => r.status === 'Pending').map((r: any) => r.requestId)
+              );
+            }
+            nextState.requests = s.requests;
+            setRequests(s.requests);
+            persistSliceToLocalStorage('_requests', s.requests);
+          }
+          if (Array.isArray(s.transfers)) {
+            nextState.transfers = s.transfers;
+            setTransfers(s.transfers);
+            persistSliceToLocalStorage('_transfers', s.transfers);
+          }
+          if (Array.isArray(s.dailySales)) {
+            const normalizedSales = s.dailySales.map((r: any) =>
+              r.status === 'Pending' ? { ...r, status: 'Approved', reviewedBy: 'Auto-Approved' } : r
+            );
+            nextState.dailySales = normalizedSales;
+            setDailySales(normalizedSales);
+            persistSliceToLocalStorage('_daily_sales', normalizedSales);
+          }
+          if (Array.isArray(s.operations)) {
+            nextState.operations = s.operations;
+            setOperations(s.operations);
+            persistSliceToLocalStorage('_operations', s.operations);
+          }
+          if (Array.isArray(s.ledger)) {
+            nextState.ledger = s.ledger;
+            setLedger(s.ledger);
+            persistSliceToLocalStorage('_ledger', s.ledger);
+          }
+          if (Array.isArray(s.auditLog)) {
+            nextState.auditLog = s.auditLog;
+            setAuditLog(s.auditLog);
+            persistSliceToLocalStorage('_audit', s.auditLog);
+          }
+          if (Array.isArray(s.suppliers)) {
+            nextState.suppliers = s.suppliers;
+            setSuppliers(s.suppliers);
+            persistSliceToLocalStorage('_suppliers', s.suppliers);
+          }
+          if (Array.isArray(s.dropdownOptions)) {
+            nextState.dropdownOptions = s.dropdownOptions;
+            setDropdownOptions(s.dropdownOptions);
+            persistSliceToLocalStorage('_dropdowns', s.dropdownOptions);
+          }
+
+          latestRef.current = nextState;
+
+          if (needsPushBack) {
+            localDirtySeqRef.current += 1;
+            await pushServerState(buildPayloadFromRef());
+          }
+        }
+      } else {
+        // Server store empty: push fresh dataset immediately so all devices sync cleanly
+        await pushServerState(buildPayloadFromRef());
+      }
+      setSyncStatus('synced');
+      setLastSyncTime(new Date().toLocaleTimeString());
+    } catch {
+      setSyncStatus('offline');
+    } finally {
+      isServerHydrated.current = true;
     }
   };
 
   const triggerManualSync = async () => {
-    await pullServerState(true);
+    if (localDirtySeqRef.current > pushedSeqRef.current) {
+      await flushServerPush();
+    } else {
+      await pullServerState(true);
+    }
   };
 
-  // Hydrate from server on mount, subscribe to live SSE events, plus 5s polling fallback
+  // Hydrate from server on mount, subscribe to live SSE events, keepalive flush on unload
   useEffect(() => {
     pullServerState(true);
     const interval = setInterval(() => {
-      pullServerState(false);
+      if (localDirtySeqRef.current > pushedSeqRef.current) {
+        flushServerPush();
+      } else {
+        pullServerState(false);
+      }
     }, 5000);
 
     let es: EventSource | null = null;
@@ -654,47 +871,46 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
-    const handleFocus = () => pullServerState(false);
-    window.addEventListener('focus', handleFocus);
-    document.addEventListener('visibilitychange', handleFocus);
+    const flushOnUnload = () => {
+      if (localDirtySeqRef.current > pushedSeqRef.current) {
+        try {
+          fetch('/api/state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildPayloadFromRef()),
+            keepalive: true
+          });
+        } catch {
+          // Ignore errors on unload
+        }
+      }
+    };
+
+    const handleFocusOrVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        flushOnUnload();
+      } else if (localDirtySeqRef.current > pushedSeqRef.current) {
+        flushServerPush();
+      } else {
+        pullServerState(false);
+      }
+    };
+
+    window.addEventListener('focus', handleFocusOrVisibility);
+    window.addEventListener('pagehide', flushOnUnload);
+    window.addEventListener('beforeunload', flushOnUnload);
+    document.addEventListener('visibilitychange', handleFocusOrVisibility);
 
     return () => {
       clearInterval(interval);
+      if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
       if (es) es.close();
-      window.removeEventListener('focus', handleFocus);
-      document.removeEventListener('visibilitychange', handleFocus);
+      window.removeEventListener('focus', handleFocusOrVisibility);
+      window.removeEventListener('pagehide', flushOnUnload);
+      window.removeEventListener('beforeunload', flushOnUnload);
+      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
     };
   }, []);
-
-  // Debounced push to server whenever local state is modified
-  useEffect(() => {
-    if (!isServerHydrated.current) return;
-    if (isApplyingRemoteRef.current) {
-      isApplyingRemoteRef.current = false;
-      return;
-    }
-    const payload = {
-      _catalogVersion: CATALOG_VERSION,
-      _openingEpoch: OPENING_EPOCH,
-      users,
-      products,
-      stock,
-      purchases,
-      requests,
-      transfers,
-      dailySales,
-      operations,
-      ledger,
-      auditLog,
-      suppliers,
-      dropdownOptions
-    };
-    const handler = setTimeout(() => {
-      pushServerState(payload);
-    }, 200);
-
-    return () => clearTimeout(handler);
-  }, [users, products, stock, purchases, requests, transfers, dailySales, operations, ledger, auditLog, suppliers, dropdownOptions]);
 
   // Sync theme
   useEffect(() => {
@@ -715,11 +931,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem('mm_business_date', date);
   };
 
-  // Audit helper
-  const addAudit = (action: string, refId: string, details: string, actorUser?: User) => {
+  // Audit helper (updates latestRef & localStorage synchronously)
+  const buildAuditEntry = (action: string, refId: string, details: string, actorUser?: User, offset = 0): AuditLogEntry => {
     const actor = actorUser || currentUser || { userId: '-', username: 'system', role: 'SYSTEM' as Role };
-    const entry: AuditLogEntry = {
-      auditId: `AUD-${String(auditLog.length + 1).padStart(6, '0')}`,
+    return {
+      auditId: nextPrefixedId('AUD', latestRef.current.auditLog.map(a => a.auditId), 6, offset),
       timestamp: getNowTimestamp(),
       userId: actor.userId,
       username: actor.username,
@@ -728,10 +944,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       refId,
       details
     };
-    setAuditLog(prev => [entry, ...prev]);
   };
 
-  // Stock Movement Engine - THE ONLY pathway to change stock levels
+  const addAudit = (action: string, refId: string, details: string, actorUser?: User) => {
+    const entry = buildAuditEntry(action, refId, details, actorUser);
+    commitLocalState({ auditLog: [entry, ...latestRef.current.auditLog] });
+  };
+
+  // Stock Movement Engine - THE ONLY pathway to change stock levels (pure computation + atomic state commit)
   const applyMovements = (
     moves: { loc: StockLocation; productId: string; delta: number }[],
     refType: StockLedgerEntry['refType'],
@@ -741,62 +961,70 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   ) => {
     const now = getNowTimestamp();
     const effectiveBDate = bDate || businessDate || now.slice(0, 10);
-    const productMap = new Map(products.map(p => [p.productId, p]));
-    const nextSeq = (ledger[0]?.seq || 0) + 1;
+    const curState = latestRef.current;
+    const productMap = new Map(curState.products.map(p => [p.productId, p]));
+    const nextSeq = curState.ledger.reduce((m, l) => Math.max(m, l.seq || 0), 0) + 1;
+    const existingLedgerIds = curState.ledger.map(l => l.ledgerId);
 
-    setStock(prevStock => {
-      const updatedStock = { ...prevStock };
-      const newLedgerEntries: StockLedgerEntry[] = [];
+    const updatedStock = { ...curState.stock };
+    const newLedgerEntries: StockLedgerEntry[] = [];
+    const newAuditEntries: AuditLogEntry[] = [];
 
-      moves.forEach((m, idx) => {
-        if (!m.delta) return;
-        const currentLocStock = updatedStock[m.productId] || { godown: 0, normal: 0, ac: 0 };
-        const key = m.loc.toLowerCase() as 'godown' | 'normal' | 'ac';
-        const before = currentLocStock[key] || 0;
-        const after = before + m.delta;
+    moves.forEach((m) => {
+      if (!m.delta) return;
+      const currentLocStock = updatedStock[m.productId] || { godown: 0, normal: 0, ac: 0 };
+      const key = m.loc.toLowerCase() as 'godown' | 'normal' | 'ac';
+      const before = currentLocStock[key] || 0;
+      const after = before + m.delta;
 
-        if (after < 0) {
-          const p = productMap.get(m.productId);
-          const pName = p ? `${p.name} ${p.sizeML}ml` : m.productId;
-          throw new Error(`Not enough stock of ${pName} at ${m.loc}: it has ${before} but ${-m.delta} is needed.`);
-        }
-
-        updatedStock[m.productId] = {
-          ...currentLocStock,
-          [key]: after
-        };
-
-        const prod = productMap.get(m.productId);
-        newLedgerEntries.push({
-          seq: nextSeq + idx,
-          ledgerId: `LED-${String(ledger.length + idx + 1).padStart(6, '0')}`,
-          timestamp: now,
-          location: m.loc,
-          productId: m.productId,
-          productName: prod ? `${prod.name} ${prod.sizeML}ml` : m.productId,
-          delta: m.delta,
-          balanceAfter: after,
-          refType,
-          refId,
-          approvedBy: (actor || currentUser)?.username || 'system',
-          businessDate: effectiveBDate
-        });
-      });
-
-      if (newLedgerEntries.length > 0) {
-        setLedger(prev => [...newLedgerEntries, ...prev]);
-        newLedgerEntries.forEach(l => {
-          addAudit(
-            'STOCK_CHANGE',
-            refId,
-            `${l.location} | ${l.productName} | ${l.delta > 0 ? '+' : ''}${l.delta} → ${l.balanceAfter} (${refType})`,
-            actor
-          );
-        });
+      if (after < 0) {
+        const p = productMap.get(m.productId);
+        const pName = p ? `${p.name} ${p.sizeML}ml` : m.productId;
+        throw new Error(`Not enough stock of ${pName} at ${m.loc}: it has ${before} but ${-m.delta} is needed.`);
       }
 
-      return updatedStock;
+      updatedStock[m.productId] = {
+        ...currentLocStock,
+        [key]: after
+      };
+
+      const prod = productMap.get(m.productId);
+      const offsetIdx = newLedgerEntries.length;
+      const lEntry: StockLedgerEntry = {
+        seq: nextSeq + offsetIdx,
+        ledgerId: nextPrefixedId('LED', existingLedgerIds, 6, offsetIdx),
+        timestamp: now,
+        location: m.loc,
+        productId: m.productId,
+        productName: prod ? `${prod.name} ${prod.sizeML}ml` : m.productId,
+        delta: m.delta,
+        balanceAfter: after,
+        refType,
+        refId,
+        approvedBy: (actor || currentUser)?.username || 'system',
+        businessDate: effectiveBDate
+      };
+      newLedgerEntries.push(lEntry);
+      newAuditEntries.unshift(
+        buildAuditEntry(
+          'STOCK_CHANGE',
+          refId,
+          `${lEntry.location} | ${lEntry.productName} | ${lEntry.delta > 0 ? '+' : ''}${lEntry.delta} → ${lEntry.balanceAfter} (${refType})`,
+          actor,
+          offsetIdx
+        )
+      );
     });
+
+    if (newLedgerEntries.length > 0) {
+      commitLocalState(
+        {
+          stock: updatedStock,
+          ledger: [...newLedgerEntries.reverse(), ...curState.ledger]
+        },
+        newAuditEntries
+      );
+    }
   };
 
   // Stock items with computed available quantities
@@ -831,7 +1059,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // User Auth Actions
   const login = async (username: string, password: string) => {
     const cleanU = username.trim().toLowerCase();
-    const user = users.find(u => u.username.toLowerCase() === cleanU && u.active);
+    const curUsers = latestRef.current.users;
+    const user = curUsers.find(u => u.username.toLowerCase() === cleanU && u.active);
     if (!user) {
       addAudit('LOGIN_FAILED', '', `Unknown user or inactive: ${cleanU}`);
       return { success: false, error: 'Wrong username or password.' };
@@ -855,7 +1084,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const switchUser = (username: string) => {
-    const u = users.find(x => x.username.toLowerCase() === username.toLowerCase());
+    const u = latestRef.current.users.find(x => x.username.toLowerCase() === username.toLowerCase());
     if (u) {
       setCurrentUser(u);
       localStorage.setItem('mm_user', JSON.stringify(u));
@@ -871,33 +1100,52 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (newPw.length < 8) {
       throw new Error('Password must be at least 8 characters.');
     }
-    setUsers(prev => prev.map(u => u.userId === currentUser.userId ? { ...u, password: newPw, mustChange: false } : u));
-    setCurrentUser(prev => prev ? { ...prev, password: newPw, mustChange: false } : null);
-    addAudit('PASSWORD_CHANGED', currentUser.userId, 'User changed own password');
+    const now = getNowTimestamp();
+    const nextUsers = latestRef.current.users.map(u =>
+      u.userId === currentUser.userId ? { ...u, password: newPw, mustChange: false, updatedAt: now } : u
+    );
+    const updatedMe = { ...currentUser, password: newPw, mustChange: false, updatedAt: now };
+    setCurrentUser(updatedMe);
+    localStorage.setItem('mm_user', JSON.stringify(updatedMe));
+    commitLocalState(
+      { users: nextUsers },
+      [buildAuditEntry('PASSWORD_CHANGED', currentUser.userId, 'User changed own password')]
+    );
+    await flushServerPush();
   };
 
   // Product management
   const saveProduct = async (p: Partial<Product> & { name: string; category: string; sizeML: number; casePack: number; sellingPrice: number; purchaseCost?: number; reorderThreshold?: number }) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     const pack = bottlesPerCase_({ name: p.name, sizeML: p.sizeML, casePack: p.casePack });
+    const curProducts = latestRef.current.products;
 
     if (p.productId) {
-      setProducts(prev => sortProductsCategoryWise(prev.map(prod => prod.productId === p.productId ? {
-        ...prod,
-        name: p.name.trim(),
-        category: p.category.trim(),
-        sizeML: Number(p.sizeML),
-        casePack: pack,
-        sellingPrice: Number(p.sellingPrice),
-        active: p.active !== undefined ? p.active : prod.active,
-        updatedAt: getNowTimestamp(),
-        updatedBy: currentUser.username
-      } : prod)));
-      addAudit('PRODUCT_UPDATED', p.productId, `${p.name} ${p.sizeML}ml (${pack}/case) ₹${p.sellingPrice}`);
+      const nextProducts = sortProductsCategoryWise(
+        curProducts.map(prod =>
+          prod.productId === p.productId
+            ? {
+                ...prod,
+                name: p.name.trim(),
+                category: p.category.trim(),
+                sizeML: Number(p.sizeML),
+                casePack: pack,
+                sellingPrice: Number(p.sellingPrice),
+                active: p.active !== undefined ? p.active : prod.active,
+                updatedAt: getNowTimestamp(),
+                updatedBy: currentUser.username
+              }
+            : prod
+        )
+      );
+      commitLocalState(
+        { products: nextProducts },
+        [buildAuditEntry('PRODUCT_UPDATED', p.productId, `${p.name} ${p.sizeML}ml (${pack}/case) ₹${p.sellingPrice}`)]
+      );
+      await flushServerPush();
       return p.productId;
     } else {
-      const nextNum = products.reduce((m, x) => Math.max(m, Number(String(x.productId).replace(/\D/g, '')) || 0), 0) + 1;
-      const newId = `PRD-${String(nextNum).padStart(6, '0')}`;
+      const newId = nextPrefixedId('PRD', curProducts.map(x => x.productId), 6);
       const newProduct: Product = {
         productId: newId,
         name: p.name.trim(),
@@ -909,9 +1157,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAt: getNowTimestamp(),
         updatedBy: currentUser.username
       };
-      setProducts(prev => sortProductsCategoryWise([...prev, newProduct]));
-      setStock(prev => ({ ...prev, [newId]: { godown: 0, normal: 0, ac: 0 } }));
-      addAudit('PRODUCT_CREATED', newId, `${p.name} ${p.sizeML}ml`);
+      commitLocalState(
+        {
+          products: sortProductsCategoryWise([...curProducts, newProduct]),
+          stock: { ...latestRef.current.stock, [newId]: { godown: 0, normal: 0, ac: 0 } }
+        },
+        [buildAuditEntry('PRODUCT_CREATED', newId, `${p.name} ${p.sizeML}ml`)]
+      );
+      await flushServerPush();
       return newId;
     }
   };
@@ -927,14 +1180,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (currentUser?.role !== 'ADMIN') {
       throw new Error('Admin permission required to edit stock.');
     }
-    const prod = products.find(p => p.productId === data.productId);
+    const prod = latestRef.current.products.find(p => p.productId === data.productId);
     if (!prod) throw new Error('Product not found.');
 
     const nextGodown = Math.max(0, Math.floor(Number(data.godown) || 0));
     const nextNormal = Math.max(0, Math.floor(Number(data.normal) || 0));
     const nextAc = Math.max(0, Math.floor(Number(data.ac) || 0));
 
-    const cur = stock[data.productId] || { godown: 0, normal: 0, ac: 0 };
+    const cur = latestRef.current.stock[data.productId] || { godown: 0, normal: 0, ac: 0 };
     const moves: { loc: StockLocation; productId: string; delta: number }[] = [];
     if (nextGodown !== (cur.godown || 0)) {
       moves.push({ loc: 'GODOWN', productId: data.productId, delta: nextGodown - (cur.godown || 0) });
@@ -955,6 +1208,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       refId,
       `${prod.name} ${prod.sizeML}ml | Godown: ${cur.godown || 0}→${nextGodown}, Normal: ${cur.normal || 0}→${nextNormal}, AC: ${cur.ac || 0}→${nextAc}${data.reason?.trim() ? ` | Reason: ${data.reason.trim()}` : ''}`
     );
+    await flushServerPush();
   };
 
   // Purchases
@@ -965,8 +1219,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     if (!data.lines.length) throw new Error('Add at least one item.');
-    const productMap = new Map(products.map(p => [p.productId, p]));
-    const batchId = `PBT-${String(purchases.length + 1).padStart(6, '0')}`;
+    const curProducts = latestRef.current.products;
+    const curPurchases = latestRef.current.purchases;
+    const productMap = new Map(curProducts.map(p => [p.productId, p]));
+    const batchId = nextPrefixedId('PBT', curPurchases.map(p => p.batchId), 6);
 
     let totalQty = 0;
     let grossTotal = 0;
@@ -1026,14 +1282,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: getNowTimestamp()
     };
 
-    setPurchases(prev => [newBatch, ...prev]);
-    addAudit('PURCHASE_SUBMITTED', batchId, `${data.supplier} | ${parsedLines.length} item(s), ${totalQty} btls | net ₹${newBatch.netTotal}`);
+    commitLocalState(
+      { purchases: [newBatch, ...curPurchases] },
+      [buildAuditEntry('PURCHASE_SUBMITTED', batchId, `${data.supplier} | ${parsedLines.length} item(s), ${totalQty} btls | net ₹${newBatch.netTotal}`)]
+    );
+    await flushServerPush();
     return batchId;
   };
 
   const reviewPurchaseBill = async (batchId: string, decision: 'APPROVE' | 'REJECT', remark?: string) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    const batch = purchases.find(p => p.batchId === batchId);
+    const curPurchases = latestRef.current.purchases;
+    const batch = curPurchases.find(p => p.batchId === batchId);
     if (!batch) throw new Error('Purchase entry not found.');
     if (batch.status !== 'Pending') throw new Error('This purchase entry was already reviewed.');
 
@@ -1046,19 +1306,29 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       applyMovements(moves, 'PURCHASE', batchId, batch.date);
     }
 
-    setPurchases(prev => prev.map(p => p.batchId === batchId ? {
-      ...p,
-      status: decision === 'APPROVE' ? 'Approved' : 'Rejected',
-      reviewedBy: currentUser.username,
-      reviewedAt: getNowTimestamp(),
-      remark: remark || ''
-    } : p));
-
-    addAudit(
-      decision === 'APPROVE' ? 'APPROVED_PURCHASE' : 'REJECTED_PURCHASE',
-      batchId,
-      `${batch.supplier} | ${batch.lines.length} items | net ₹${batch.netTotal} ${remark ? `(${remark})` : ''}`
+    const nextPurchases = latestRef.current.purchases.map(p =>
+      p.batchId === batchId
+        ? {
+            ...p,
+            status: (decision === 'APPROVE' ? 'Approved' : 'Rejected') as PurchaseBatch['status'],
+            reviewedBy: currentUser.username,
+            reviewedAt: getNowTimestamp(),
+            remark: remark || ''
+          }
+        : p
     );
+
+    commitLocalState(
+      { purchases: nextPurchases },
+      [
+        buildAuditEntry(
+          decision === 'APPROVE' ? 'APPROVED_PURCHASE' : 'REJECTED_PURCHASE',
+          batchId,
+          `${batch.supplier} | ${batch.lines.length} items | net ₹${batch.netTotal} ${remark ? `(${remark})` : ''}`
+        )
+      ]
+    );
+    await flushServerPush();
   };
 
   const editPurchaseRecord = async (id: string, updates: {
@@ -1069,7 +1339,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let foundLine: any = null;
     let targetBatch: PurchaseBatch | null = null;
 
-    setPurchases(prev => prev.map(batch => {
+    const nextPurchases = latestRef.current.purchases.map(batch => {
       const line = batch.lines.find(l => l.id === id);
       if (line) {
         foundLine = { ...line };
@@ -1079,16 +1349,20 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const tcs = Math.round(taxable * (updates.tcsPct / 100) * 100) / 100;
         const net = Math.round((taxable + tcs) * 100) / 100;
 
-        const updatedLines = batch.lines.map(l => l.id === id ? {
-          ...l,
-          qty: updates.qty,
-          rate: updates.rate,
-          sedAmt: updates.sedAmt,
-          discountAmt: updates.discountAmt,
-          tcsPct: updates.tcsPct,
-          grossAmount: gross,
-          netAmount: net
-        } : l);
+        const updatedLines = batch.lines.map(l =>
+          l.id === id
+            ? {
+                ...l,
+                qty: updates.qty,
+                rate: updates.rate,
+                sedAmt: updates.sedAmt,
+                discountAmt: updates.discountAmt,
+                tcsPct: updates.tcsPct,
+                grossAmount: gross,
+                netAmount: net
+              }
+            : l
+        );
 
         return {
           ...batch,
@@ -1103,7 +1377,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         };
       }
       return batch;
-    }));
+    });
 
     if (foundLine && targetBatch && (targetBatch as PurchaseBatch).status === 'Approved') {
       const delta = updates.qty - foundLine.qty;
@@ -1117,7 +1391,37 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
-    addAudit('ADMIN_HISTORICAL_PURCHASE_EDIT', id, `Updated purchase row | reason: ${updates.reason}`);
+    commitLocalState(
+      { purchases: nextPurchases },
+      [buildAuditEntry('ADMIN_HISTORICAL_PURCHASE_EDIT', id, `Updated purchase row | reason: ${updates.reason}`)]
+    );
+    await flushServerPush();
+  };
+
+  const deletePurchaseBatch = async (batchId: string) => {
+    if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
+    const curPurchases = latestRef.current.purchases;
+    const batch = curPurchases.find(p => p.batchId === batchId);
+    if (!batch) throw new Error('Purchase entry not found.');
+
+    if (batch.status === 'Approved') {
+      const reverseMoves = batch.lines
+        .filter(l => l.qty > 0)
+        .map(l => ({
+          loc: 'GODOWN' as StockLocation,
+          productId: l.productId,
+          delta: -l.qty
+        }));
+      if (reverseMoves.length > 0) {
+        applyMovements(reverseMoves, 'PURCHASE_CORRECTION', batchId, batch.date);
+      }
+    }
+
+    commitLocalState(
+      { purchases: latestRef.current.purchases.filter(p => p.batchId !== batchId) },
+      [buildAuditEntry('PURCHASE_DELETED', batchId, `${batch.supplier} | Invoice #${batch.invoiceNo} | ${batch.totalQty} btls | ₹${batch.netTotal}`)]
+    );
+    await flushServerPush();
   };
 
   // Requests
@@ -1127,14 +1431,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     if (!data.items.length) throw new Error('Select at least one product.');
     const counter = currentUser.counter || (currentUser.role as CounterLocation);
-    const productMap = new Map(products.map(p => [p.productId, p]));
+    const curProducts = latestRef.current.products;
+    const curRequests = latestRef.current.requests;
+    const productMap = new Map(curProducts.map(p => [p.productId, p]));
     const now = getNowTimestamp();
+    const existingReqIds = curRequests.map(r => r.requestId);
 
     const newRequests: StockRequestItem[] = data.items.map((it, idx) => {
       const p = productMap.get(it.productId);
       const pack = p ? bottlesPerCase_(p) : 1;
       const totalBottles = it.qty * (it.unit === 'CASE' ? pack : 1);
-      const reqId = `REQ-${String(requests.length + idx + 1).padStart(6, '0')}`;
+      const reqId = nextPrefixedId('REQ', existingReqIds, 6, idx);
 
       return {
         requestId: reqId,
@@ -1155,18 +1462,19 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     });
 
-    setRequests(prev => [...newRequests, ...prev]);
     const totalBottles = newRequests.reduce((s, r) => s + r.qty, 0);
-    addAudit(
-      'REQUEST_SUBMITTED',
-      newRequests[0].requestId,
-      `${counter} requested ${newRequests.length} item(s), ${totalBottles} bottles | ${data.reason}`
+    commitLocalState(
+      { requests: [...newRequests, ...curRequests] },
+      [buildAuditEntry('REQUEST_SUBMITTED', newRequests[0].requestId, `${counter} requested ${newRequests.length} item(s), ${totalBottles} bottles | ${data.reason}`)]
     );
+    await flushServerPush();
   };
 
   const reviewRequestGroup = async (ids: string[], decision: 'APPROVE' | 'REJECT', remark?: string, skipShort = false) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    const targetRequests = requests.filter(r => ids.includes(r.requestId));
+    const curRequests = latestRef.current.requests;
+    const curStock = latestRef.current.stock;
+    const targetRequests = curRequests.filter(r => ids.includes(r.requestId));
     if (!targetRequests.length) throw new Error('Requests not found.');
 
     const moves: { loc: StockLocation; productId: string; delta: number }[] = [];
@@ -1174,7 +1482,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const rejectedIds: string[] = [];
 
     targetRequests.forEach(r => {
-      const godownStock = stock[r.productId]?.godown || 0;
+      const godownStock = curStock[r.productId]?.godown || 0;
       const isShort = godownStock < r.qty;
 
       if (decision === 'APPROVE') {
@@ -1197,27 +1505,33 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const now = getNowTimestamp();
-    setRequests(prev => prev.map(r => {
+    const nextRequests = latestRef.current.requests.map(r => {
       if (approvedIds.includes(r.requestId)) {
-        return { ...r, status: 'Approved', reviewedBy: currentUser.username, reviewedAt: now, remark: remark || '' };
+        return { ...r, status: 'Approved' as const, reviewedBy: currentUser.username, reviewedAt: now, remark: remark || '' };
       }
       if (rejectedIds.includes(r.requestId)) {
         return {
           ...r,
-          status: 'Rejected',
+          status: 'Rejected' as const,
           reviewedBy: currentUser.username,
           reviewedAt: now,
           remark: remark || (decision === 'APPROVE' ? 'Not enough godown stock' : 'Rejected by admin')
         };
       }
       return r;
-    }));
+    });
 
-    addAudit(
-      decision === 'APPROVE' ? 'APPROVED_REQUEST' : 'REJECTED_REQUEST',
-      ids.join(','),
-      `Reviewed ${ids.length} requests: ${approvedIds.length} approved, ${rejectedIds.length} rejected`
+    commitLocalState(
+      { requests: nextRequests },
+      [
+        buildAuditEntry(
+          decision === 'APPROVE' ? 'APPROVED_REQUEST' : 'REJECTED_REQUEST',
+          ids.join(','),
+          `Reviewed ${ids.length} requests: ${approvedIds.length} approved, ${rejectedIds.length} rejected`
+        )
+      ]
     );
+    await flushServerPush();
 
     return { approved: approvedIds.length, rejected: rejectedIds.length };
   };
@@ -1226,7 +1540,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const submitTransfer = async (data: { productId: string; qty: number; unit?: 'CASE' | 'BOTTLE'; to?: CounterLocation; note?: string }) => {
     if (!currentUser) throw new Error('Not logged in');
     const isAdmin = currentUser.role === 'ADMIN';
-    const prod = products.find(p => p.productId === data.productId);
+    const curState = latestRef.current;
+    const prod = curState.products.find(p => p.productId === data.productId);
     if (!prod) throw new Error('Product not found');
 
     const pack = bottlesPerCase_(prod);
@@ -1238,12 +1553,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ? (data.to || 'NORMAL')
       : (currentUser.counter === 'NORMAL' ? 'AC' : 'NORMAL');
 
-    const avail = stock[data.productId]?.[fromLoc.toLowerCase() as 'godown' | 'normal' | 'ac'] || 0;
+    const avail = curState.stock[data.productId]?.[fromLoc.toLowerCase() as 'godown' | 'normal' | 'ac'] || 0;
     if (totalBottles > avail) {
       throw new Error(`Not enough stock. ${fromLoc} has ${avail} bottles, requested ${totalBottles}.`);
     }
 
-    const transferId = `TRF-${String(transfers.length + 1).padStart(6, '0')}`;
+    const transferId = nextPrefixedId('TRF', curState.transfers.map(t => t.transferId), 6);
     const autoApproved = !isAdmin; // Counter-to-counter transfers auto-approve immediately
     const now = getNowTimestamp();
 
@@ -1274,12 +1589,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       remark: autoApproved ? 'Auto-approved (counter to counter)' : undefined
     };
 
-    setTransfers(prev => [newTransfer, ...prev]);
-    addAudit(
-      autoApproved ? 'TRANSFER_COMPLETED' : 'TRANSFER_SUBMITTED',
-      transferId,
-      `${fromLoc} → ${toLoc} | ${prod.name} x ${totalBottles} btls ${data.note ? `(${data.note})` : ''}`
+    commitLocalState(
+      { transfers: [newTransfer, ...latestRef.current.transfers] },
+      [
+        buildAuditEntry(
+          autoApproved ? 'TRANSFER_COMPLETED' : 'TRANSFER_SUBMITTED',
+          transferId,
+          `${fromLoc} → ${toLoc} | ${prod.name} x ${totalBottles} btls ${data.note ? `(${data.note})` : ''}`
+        )
+      ]
     );
+    await flushServerPush();
 
     return { autoApproved };
   };
@@ -1389,11 +1709,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const form = getReportFormLines(counter, data.date);
     if (form.blockedMessage) throw new Error(form.blockedMessage);
 
-    const productMap = new Map(products.map(p => [p.productId, p]));
+    const curProducts = latestRef.current.products;
+    const curSales = latestRef.current.dailySales;
+    const productMap = new Map(curProducts.map(p => [p.productId, p]));
     const givenMap = new Map(data.lines.map(l => [l.productId, l.closing]));
 
     let totalSold = 0;
     let totalVal = 0;
+
+    const reportId = nextPrefixedId('RPT', curSales.map(r => r.reportId), 6);
 
     const reportLines = form.lines.map((l, i) => {
       const p = productMap.get(l.productId);
@@ -1407,8 +1731,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       totalVal += val;
 
       return {
-        lineId: `SLN-${String(dailySales.length + 1).padStart(4, '0')}-${String(i + 1).padStart(3, '0')}`,
-        reportId: '',
+        lineId: `SLN-${reportId.slice(4)}-${String(i + 1).padStart(3, '0')}`,
+        reportId,
         productId: l.productId,
         name: `${l.name} ${l.sizeML}ml`,
         category: p?.category || 'Other',
@@ -1433,10 +1757,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const totalCollected = data.cashAmount + data.upiAmount + data.cardAmount + acCharges;
     const expected = totalVal + acCharges;
     const diff = Math.round((totalCollected - expected) * 100) / 100;
-    // Payment mismatch explanation is optional; allow submitting with difference
-
-    const reportId = `RPT-${String(dailySales.length + 1).padStart(6, '0')}`;
-    reportLines.forEach(l => { l.reportId = reportId; });
 
     // Apply stock deduction movements immediately since Daily Sales is auto-approved
     const moves = reportLines.filter(l => l.sold > 0).map(l => ({
@@ -1465,7 +1785,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       helperName: data.helperName,
       paymentDifference: diff,
       paymentExplanation: data.paymentExplanation || '',
-      cutoffSeq: (ledger[0]?.seq || 0),
+      cutoffSeq: latestRef.current.ledger[0]?.seq || 0,
       submittedBy: currentUser.username,
       submittedAt: now,
       reviewedBy: 'Auto-Approved',
@@ -1474,8 +1794,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lines: reportLines
     };
 
-    setDailySales(prev => [newReport, ...prev]);
-    addAudit('SALES_SUBMITTED_AND_APPROVED', reportId, `${data.date} | ${counter} | sold ${totalSold} btls | ₹${newReport.totalSalesValue}${acCharges > 0 ? ` + ₹${acCharges} AC` : ''} (Auto-Approved)`);
+    commitLocalState(
+      { dailySales: [newReport, ...latestRef.current.dailySales] },
+      [
+        buildAuditEntry(
+          'SALES_SUBMITTED_AND_APPROVED',
+          reportId,
+          `${data.date} | ${counter} | sold ${totalSold} btls | ₹${newReport.totalSalesValue}${acCharges > 0 ? ` + ₹${acCharges} AC` : ''} (Auto-Approved)`
+        )
+      ]
+    );
+    await flushServerPush();
     return reportId;
   };
 
@@ -1484,8 +1813,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     lines: { productId: string; sold: number }[];
   }) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    const productMap = new Map(products.map(p => [p.productId, p]));
-    const reportId = `RPT-${String(dailySales.length + 1).padStart(6, '0')}`;
+    const curState = latestRef.current;
+    const productMap = new Map(curState.products.map(p => [p.productId, p]));
+    const reportId = nextPrefixedId('RPT', curState.dailySales.map(r => r.reportId), 6);
 
     let totalSold = 0;
     let totalVal = 0;
@@ -1545,18 +1875,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lines: reportLines
     };
 
-    setDailySales(prev => [newReport, ...prev]);
-    addAudit(
-      'ADMIN_HISTORICAL_SALES_CREATED',
-      reportId,
-      `${data.date} | ${data.counter} | sold ${totalSold} | ₹${totalVal} | stock unchanged | ${data.reason}`
+    commitLocalState(
+      { dailySales: [newReport, ...latestRef.current.dailySales] },
+      [buildAuditEntry('ADMIN_HISTORICAL_SALES_CREATED', reportId, `${data.date} | ${data.counter} | sold ${totalSold} | ₹${totalVal} | stock unchanged | ${data.reason}`)]
     );
+    await flushServerPush();
 
     return reportId;
   };
 
   const adminEditReport = async (reportId: string, data: { recordedAmount: number; reason: string; lines: { productId: string; closing?: number; sold?: number }[] }) => {
-    const report = dailySales.find(r => r.reportId === reportId);
+    const report = latestRef.current.dailySales.find(r => r.reportId === reportId);
     if (!report) throw new Error('Report not found');
     const isAdmin = currentUser?.role === 'ADMIN';
     if (!isAdmin && report.status !== 'Pending') {
@@ -1589,7 +1918,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       totalVal += newVal;
 
       if (isAdmin && report.status === 'Approved' && !isHistorical) {
-        const delta = l.sold - newSold; // If old sold was 5 and new sold is 3, delta is +2 back to stock
+        const delta = l.sold - newSold;
         if (delta !== 0) {
           stockMoves.push({ loc: report.counter, productId: l.productId, delta });
         }
@@ -1607,23 +1936,31 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       applyMovements(stockMoves, 'SALES_CORRECTION', reportId, report.date);
     }
 
-    setDailySales(prev => prev.map(r => r.reportId === reportId ? {
-      ...r,
-      totalSoldQty: totalSold,
-      totalSalesValue: Math.round(totalVal * 100) / 100,
-      recordedAmount: data.recordedAmount,
-      lines: updatedLines,
-      editedBy: currentUser?.username,
-      editedAt: getNowTimestamp(),
-      remark: `${r.remark ? r.remark + ' | ' : ''}Correction: ${data.reason}`
-    } : r));
+    const nextSales = latestRef.current.dailySales.map(r =>
+      r.reportId === reportId
+        ? {
+            ...r,
+            totalSoldQty: totalSold,
+            totalSalesValue: Math.round(totalVal * 100) / 100,
+            recordedAmount: data.recordedAmount,
+            lines: updatedLines,
+            editedBy: currentUser?.username,
+            editedAt: getNowTimestamp(),
+            remark: `${r.remark ? r.remark + ' | ' : ''}Correction: ${data.reason}`
+          }
+        : r
+    );
 
-    addAudit('SALES_EDITED', reportId, `Sold ${report.totalSoldQty} → ${totalSold} | ${data.reason}`);
+    commitLocalState(
+      { dailySales: nextSales },
+      [buildAuditEntry('SALES_EDITED', reportId, `Sold ${report.totalSoldQty} → ${totalSold} | ${data.reason}`)]
+    );
+    await flushServerPush();
   };
 
   const reviewDailySales = async (reportId: string, decision: 'APPROVE' | 'REJECT', remark?: string) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    const report = dailySales.find(r => r.reportId === reportId);
+    const report = latestRef.current.dailySales.find(r => r.reportId === reportId);
     if (!report) throw new Error('Report not found');
     if (report.status !== 'Pending') throw new Error('Report already reviewed.');
 
@@ -1636,26 +1973,30 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       applyMovements(moves, 'SALE', reportId, report.date);
     }
 
-    setDailySales(prev => prev.map(r => r.reportId === reportId ? {
-      ...r,
-      status: decision === 'APPROVE' ? 'Approved' : 'Rejected',
-      reviewedBy: currentUser.username,
-      reviewedAt: getNowTimestamp(),
-      remark: remark || ''
-    } : r));
-
-    addAudit(
-      decision === 'APPROVE' ? 'APPROVED_SALES' : 'REJECTED_SALES',
-      reportId,
-      `${report.counter} | ${report.date} | sold ${report.totalSoldQty} btls ${remark ? `(${remark})` : ''}`
+    const nextSales = latestRef.current.dailySales.map(r =>
+      r.reportId === reportId
+        ? {
+            ...r,
+            status: (decision === 'APPROVE' ? 'Approved' : 'Rejected') as DailySalesReport['status'],
+            reviewedBy: currentUser.username,
+            reviewedAt: getNowTimestamp(),
+            remark: remark || ''
+          }
+        : r
     );
+
+    commitLocalState(
+      { dailySales: nextSales },
+      [buildAuditEntry(decision === 'APPROVE' ? 'APPROVED_SALES' : 'REJECTED_SALES', reportId, `${report.counter} | ${report.date} | sold ${report.totalSoldQty} btls ${remark ? `(${remark})` : ''}`)]
+    );
+    await flushServerPush();
   };
 
   const adminDeleteDailySales = async (reportId: string, reason?: string) => {
     if (currentUser?.role !== 'ADMIN') {
       throw new Error('Admin permission required to delete a daily sales report.');
     }
-    const report = dailySales.find(r => r.reportId === reportId);
+    const report = latestRef.current.dailySales.find(r => r.reportId === reportId);
     if (!report) {
       throw new Error('Daily sales report not found.');
     }
@@ -1676,13 +2017,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
-    setDailySales(prev => prev.filter(r => r.reportId !== reportId));
-
-    addAudit(
-      'ADMIN_SALES_DELETED',
-      reportId,
-      `${report.date} | ${report.counter} | reversed ${report.totalSoldQty} btls (₹${report.totalSalesValue})${reason?.trim() ? ` | Reason: ${reason.trim()}` : ''}`
+    commitLocalState(
+      { dailySales: latestRef.current.dailySales.filter(r => r.reportId !== reportId) },
+      [
+        buildAuditEntry(
+          'ADMIN_SALES_DELETED',
+          reportId,
+          `${report.date} | ${report.counter} | reversed ${report.totalSoldQty} btls (₹${report.totalSalesValue})${reason?.trim() ? ` | Reason: ${reason.trim()}` : ''}`
+        )
+      ]
     );
+    await flushServerPush();
   };
 
   // Daily Operations
@@ -1692,22 +2037,23 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     location?: StockLocation; productId?: string; qty?: number; note?: string;
   }) => {
     if (!currentUser) throw new Error('Not logged in');
-    const opId = `OPR-${String(operations.length + 1).padStart(6, '0')}`;
+    const curOps = latestRef.current.operations;
+    const opId = nextPrefixedId('OPR', curOps.map(o => o.operationId), 6);
     const now = getNowTimestamp();
-    const status = 'Approved'; // Operations are auto-approved per latest MM Residency guidelines
+    const status = 'Approved';
 
     if (data.type === 'DAMAGE') {
       if (!data.productId) throw new Error('Choose a product.');
       const qty = Number(data.qty) || 1;
       const loc = data.location || (currentUser.role === 'ADMIN' ? 'GODOWN' : (currentUser.counter || 'NORMAL'));
-      const avail = stock[data.productId]?.[loc.toLowerCase() as 'godown' | 'normal' | 'ac'] || 0;
+      const avail = latestRef.current.stock[data.productId]?.[loc.toLowerCase() as 'godown' | 'normal' | 'ac'] || 0;
       if (qty > avail) {
         throw new Error(`Damaged quantity (${qty}) exceeds stock available at ${loc} (${avail}).`);
       }
       applyMovements([{ loc, productId: data.productId, delta: -qty }], 'DAMAGE', opId, data.date);
     }
 
-    const prod = data.productId ? products.find(p => p.productId === data.productId) : null;
+    const prod = data.productId ? latestRef.current.products.find(p => p.productId === data.productId) : null;
     const newOp: DailyOperation = {
       operationId: opId,
       type: data.type,
@@ -1728,8 +2074,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       reviewedAt: now
     };
 
-    setOperations(prev => [newOp, ...prev]);
-    addAudit('DAILY_OPERATION_SAVED', opId, `${data.type} | ${data.date} | ${data.name} | ₹${data.amount || data.qty}`);
+    commitLocalState(
+      { operations: [newOp, ...latestRef.current.operations] },
+      [buildAuditEntry('DAILY_OPERATION_SAVED', opId, `${data.type} | ${data.date} | ${data.name} | ₹${data.amount || data.qty}`)]
+    );
+    await flushServerPush();
     return opId;
   };
 
@@ -1739,13 +2088,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }) => {
     if (!currentUser) throw new Error('Not logged in');
     if (!data.items.length) throw new Error('Add at least one item.');
+    const curOps = latestRef.current.operations;
+    const existingOpIds = curOps.map(o => o.operationId);
     const now = getNowTimestamp();
     let total = 0;
 
     const newOps: DailyOperation[] = data.items.map((it, idx) => {
       total += it.amount;
       return {
-        operationId: `OPR-${String(operations.length + idx + 1).padStart(6, '0')}`,
+        operationId: nextPrefixedId('OPR', existingOpIds, 6, idx),
         type: data.type,
         date: data.date,
         name: it.name,
@@ -1759,14 +2110,34 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     });
 
-    setOperations(prev => [...newOps, ...prev]);
-    addAudit('DAILY_OPERATIONS_BATCH', newOps[0].operationId, `${data.type} batch: ${newOps.length} items | ₹${total}`);
+    commitLocalState(
+      { operations: [...newOps, ...latestRef.current.operations] },
+      [buildAuditEntry('DAILY_OPERATIONS_BATCH', newOps[0].operationId, `${data.type} batch: ${newOps.length} items | ₹${total}`)]
+    );
+    await flushServerPush();
     return { count: newOps.length, total: Math.round(total * 100) / 100 };
+  };
+
+  const deleteDailyOperation = async (operationId: string) => {
+    if (!currentUser) throw new Error('Not logged in');
+    const op = latestRef.current.operations.find(o => o.operationId === operationId);
+    if (!op) throw new Error('Entry not found.');
+
+    if (op.type === 'DAMAGE' && op.status === 'Approved' && op.productId && op.qty) {
+      const loc = op.location || 'GODOWN';
+      applyMovements([{ loc, productId: op.productId, delta: op.qty }], 'ADJUSTMENT', operationId, op.date);
+    }
+
+    commitLocalState(
+      { operations: latestRef.current.operations.filter(o => o.operationId !== operationId) },
+      [buildAuditEntry('DAILY_OPERATION_DELETED', operationId, `${op.type} | ${op.date} | ${op.name} | ₹${op.amount || op.qty || 0}`)]
+    );
+    await flushServerPush();
   };
 
   const reviewDailyOperation = async (id: string, decision: 'APPROVE' | 'REJECT', remark?: string) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    const op = operations.find(o => o.operationId === id);
+    const op = latestRef.current.operations.find(o => o.operationId === id);
     if (!op) throw new Error('Operation not found.');
 
     if (decision === 'APPROVE' && op.type === 'DAMAGE' && op.productId && op.qty) {
@@ -1774,47 +2145,86 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       applyMovements([{ loc, productId: op.productId, delta: -op.qty }], 'DAMAGE', id, op.date);
     }
 
-    setOperations(prev => prev.map(o => o.operationId === id ? {
-      ...o,
-      status: decision === 'APPROVE' ? 'Approved' : 'Rejected',
-      reviewedBy: currentUser.username,
-      reviewedAt: getNowTimestamp(),
-      reviewRemark: remark || ''
-    } : o));
+    const nextOps = latestRef.current.operations.map(o =>
+      o.operationId === id
+        ? {
+            ...o,
+            status: (decision === 'APPROVE' ? 'Approved' : 'Rejected') as DailyOperation['status'],
+            reviewedBy: currentUser.username,
+            reviewedAt: getNowTimestamp(),
+            reviewRemark: remark || ''
+          }
+        : o
+    );
 
-    addAudit(`DAILY_OPERATION_${decision}`, id, `${op.type} | ${remark || ''}`);
+    commitLocalState(
+      { operations: nextOps },
+      [buildAuditEntry(`DAILY_OPERATION_${decision}`, id, `${op.type} | ${remark || ''}`)]
+    );
+    await flushServerPush();
   };
 
   // Administration helpers
   const addSupplier = async (name: string) => {
-    if (!name.trim()) throw new Error('Supplier name is required.');
-    if (!suppliers.includes(name.trim())) {
-      setSuppliers(prev => [...prev, name.trim()]);
-      addAudit('SUPPLIER_ADDED', '', name.trim());
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('Supplier name is required.');
+    const curSuppliers = latestRef.current.suppliers;
+    if (!curSuppliers.some(s => s.toLowerCase() === trimmed.toLowerCase())) {
+      commitLocalState(
+        { suppliers: [...curSuppliers, trimmed] },
+        [buildAuditEntry('SUPPLIER_ADDED', '', trimmed)]
+      );
+      await flushServerPush();
     }
   };
 
+  const deleteSupplier = async (name: string) => {
+    if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('Supplier name is required.');
+    const curSuppliers = latestRef.current.suppliers;
+    const nextSuppliers = curSuppliers.filter(s => s.toLowerCase() !== trimmed.toLowerCase());
+    if (nextSuppliers.length === curSuppliers.length) {
+      throw new Error('Supplier not found.');
+    }
+    commitLocalState(
+      { suppliers: nextSuppliers },
+      [buildAuditEntry('SUPPLIER_DELETED', '', trimmed)]
+    );
+    await flushServerPush();
+  };
+
   const addDropdownOption = async (type: 'EXPENSE' | 'WAGE', value: string) => {
-    if (!value.trim()) throw new Error('Value is required.');
-    const optId = `OPT-${String(dropdownOptions.length + 1).padStart(3, '0')}`;
+    const trimmed = value.trim();
+    if (!trimmed) throw new Error('Value is required.');
+    const curOpts = latestRef.current.dropdownOptions;
+    if (curOpts.some(o => o.type === type && o.value.toLowerCase() === trimmed.toLowerCase())) {
+      return;
+    }
+    const optId = nextPrefixedId('OPT', curOpts.map(o => o.optionId), 3);
     const newOpt: DropdownOption = {
       optionId: optId,
       type,
-      value: value.trim(),
+      value: trimmed,
       active: true,
       createdAt: getTodayISO()
     };
-    setDropdownOptions(prev => [...prev, newOpt]);
-    addAudit('DROPDOWN_OPTION_ADDED', optId, `${type} | ${value.trim()}`);
+    commitLocalState(
+      { dropdownOptions: [...curOpts, newOpt] },
+      [buildAuditEntry('DROPDOWN_OPTION_ADDED', optId, `${type} | ${trimmed}`)]
+    );
+    await flushServerPush();
   };
 
   const createUser = async (u: { username: string; fullName: string; role: Role; password: string }) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     const cleanU = u.username.trim().toLowerCase();
-    if (users.some(x => x.username.toLowerCase() === cleanU)) {
+    const curUsers = latestRef.current.users;
+    if (curUsers.some(x => x.username.toLowerCase() === cleanU)) {
       throw new Error('Username already exists.');
     }
-    const newId = `USR-${String(users.length + 1).padStart(6, '0')}`;
+    const newId = nextPrefixedId('USR', curUsers.map(x => x.userId), 6);
+    const now = getNowTimestamp();
     const newUser: User = {
       userId: newId,
       username: cleanU,
@@ -1823,17 +2233,28 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       counter: u.role === 'NORMAL' || u.role === 'AC' ? u.role : undefined,
       active: true,
       mustChange: true,
-      createdAt: getNowTimestamp(),
+      createdAt: now,
+      updatedAt: now,
       password: u.password
     };
-    setUsers(prev => [...prev, newUser]);
-    addAudit('USER_CREATED', newId, `${cleanU} (${u.role})`);
+    commitLocalState(
+      { users: [...curUsers, newUser] },
+      [buildAuditEntry('USER_CREATED', newId, `${cleanU} (${u.role})`)]
+    );
+    await flushServerPush();
   };
 
   const resetUserPassword = async (userId: string, newPw: string) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    setUsers(prev => prev.map(u => u.userId === userId ? { ...u, password: newPw, mustChange: true } : u));
-    addAudit('PASSWORD_RESET', userId, 'Admin reset user password');
+    const now = getNowTimestamp();
+    const nextUsers = latestRef.current.users.map(u =>
+      u.userId === userId ? { ...u, password: newPw, mustChange: true, updatedAt: now } : u
+    );
+    commitLocalState(
+      { users: nextUsers },
+      [buildAuditEntry('PASSWORD_RESET', userId, 'Admin reset user password')]
+    );
+    await flushServerPush();
   };
 
   const toggleUserActive = async (userId: string, active: boolean) => {
@@ -1841,18 +2262,25 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (userId === currentUser.userId && !active) {
       throw new Error('You cannot deactivate your own account.');
     }
-    setUsers(prev => prev.map(u => u.userId === userId ? { ...u, active } : u));
-    addAudit(active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', userId, '');
+    const now = getNowTimestamp();
+    const nextUsers = latestRef.current.users.map(u =>
+      u.userId === userId ? { ...u, active, updatedAt: now } : u
+    );
+    commitLocalState(
+      { users: nextUsers },
+      [buildAuditEntry(active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', userId, '')]
+    );
+    await flushServerPush();
   };
 
   const reconcileStock = () => {
     const issues: any[] = [];
-    products.forEach(p => {
-      const s = stock[p.productId] || { godown: 0, normal: 0, ac: 0 };
+    latestRef.current.products.forEach(p => {
+      const s = latestRef.current.stock[p.productId] || { godown: 0, normal: 0, ac: 0 };
       (['GODOWN', 'NORMAL', 'AC'] as StockLocation[]).forEach(loc => {
         const key = loc.toLowerCase() as 'godown' | 'normal' | 'ac';
         const sheetQty = s[key];
-        const ledgerDeltas = ledger
+        const ledgerDeltas = latestRef.current.ledger
           .filter(l => l.productId === p.productId && l.location === loc)
           .reduce((sum, l) => sum + l.delta, 0);
 
@@ -1877,22 +2305,24 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     return {
-      checked: products.length * 3,
+      checked: latestRef.current.products.length * 3,
       issues
     };
   };
 
   const syncLedger = () => {
     const today = businessDate || getTodayISO();
-    const nextSeq = (ledger[0]?.seq || 0) + 1;
+    const curState = latestRef.current;
+    const nextSeq = curState.ledger.reduce((m, l) => Math.max(m, l.seq || 0), 0) + 1;
+    const existingLedgerIds = curState.ledger.map(l => l.ledgerId);
     const newEntries: StockLedgerEntry[] = [];
 
-    products.forEach((p, idx) => {
-      const s = stock[p.productId] || { godown: 0, normal: 0, ac: 0 };
+    curState.products.forEach((p, idx) => {
+      const s = curState.stock[p.productId] || { godown: 0, normal: 0, ac: 0 };
       (['GODOWN', 'NORMAL', 'AC'] as StockLocation[]).forEach((loc, lIdx) => {
         const key = loc.toLowerCase() as 'godown' | 'normal' | 'ac';
         const q = s[key];
-        const led = ledger
+        const led = curState.ledger
           .filter(l => l.productId === p.productId && l.location === loc)
           .reduce((sum, l) => sum + l.delta, 0);
         const diff = q - led;
@@ -1900,7 +2330,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (diff !== 0) {
           newEntries.push({
             seq: nextSeq + (idx * 3) + lIdx,
-            ledgerId: `LED-${String(ledger.length + newEntries.length + 1).padStart(6, '0')}`,
+            ledgerId: nextPrefixedId('LED', existingLedgerIds, 6, newEntries.length),
             timestamp: getNowTimestamp(),
             location: loc,
             productId: p.productId,
@@ -1917,8 +2347,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     if (newEntries.length > 0) {
-      setLedger(prev => [...newEntries, ...prev]);
-      addAudit('LEDGER_SYNC', 'OPENING-SYNC', `Synced ${newEntries.length} lines from physical stock`);
+      commitLocalState(
+        { ledger: [...newEntries, ...curState.ledger] },
+        [buildAuditEntry('LEDGER_SYNC', 'OPENING-SYNC', `Synced ${newEntries.length} lines from physical stock`)]
+      );
     }
 
     return newEntries.length;
@@ -1930,20 +2362,23 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
     localStorage.setItem('mm_business_date', getTodayISO());
     setBusinessDateState(getTodayISO());
-    setUsers(INITIAL_USERS);
-    setProducts(INITIAL_PRODUCTS);
-    setStock(buildInitialStockMap());
-    setSuppliers(INITIAL_SUPPLIERS);
-    setDropdownOptions(INITIAL_DROPDOWN_OPTIONS);
-    setPurchases([]);
-    setRequests([]);
-    setTransfers([]);
-    setDailySales([]);
-    setOperations([]);
-    setLedger([]);
-    setAuditLog([]);
+    commitLocalState({
+      users: INITIAL_USERS,
+      products: INITIAL_PRODUCTS,
+      stock: buildInitialStockMap(),
+      suppliers: INITIAL_SUPPLIERS,
+      dropdownOptions: INITIAL_DROPDOWN_OPTIONS,
+      purchases: [],
+      requests: [],
+      transfers: [],
+      dailySales: [],
+      operations: [],
+      ledger: [],
+      auditLog: []
+    });
     setCurrentUser(INITIAL_USERS[0]);
     localStorage.setItem('mm_user', JSON.stringify(INITIAL_USERS[0]));
+    pushServerState(buildPayloadFromRef({ _resetRequested: true }));
   };
 
   return (
@@ -1978,6 +2413,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         submitPurchaseBatch,
         reviewPurchaseBill,
         editPurchaseRecord,
+        deletePurchaseBatch,
 
         submitRequestBatch,
         reviewRequestGroup,
@@ -1993,9 +2429,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         saveDailyOperation,
         saveDailyOperationsBatch,
+        deleteDailyOperation,
         reviewDailyOperation,
 
         addSupplier,
+        deleteSupplier,
         addDropdownOption,
         createUser,
         resetUserPassword,

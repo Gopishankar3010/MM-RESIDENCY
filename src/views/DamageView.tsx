@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { AlertTriangle, Search, CheckCircle, Printer } from 'lucide-react';
 import { StockLocation } from '../types';
-import { bottlesPerCase_, stockQtyLabel } from '../data/initialData';
+import { bottlesPerCase_, matchesSearchQuery, sortProductsCategoryWise, stockQtyLabel } from '../data/initialData';
 
 export const DamageView: React.FC = () => {
   const { currentUser, businessDate, stockItems, operations, saveDailyOperation } = useStock();
@@ -24,7 +24,9 @@ export const DamageView: React.FC = () => {
 
   // Search filter
   const searchResults = search.trim()
-    ? availableProducts.filter(p => (p.name + ' ' + p.category).toLowerCase().includes(search.trim().toLowerCase())).slice(0, 8)
+    ? sortProductsCategoryWise(
+        availableProducts.filter(p => matchesSearchQuery(search, p.name, p.category, p.sizeML, p.productId))
+      ).slice(0, 12)
     : [];
 
   const handleRecordDamage = async () => {

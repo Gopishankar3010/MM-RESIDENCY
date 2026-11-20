@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { StockItem } from '../types';
 import { Search, Printer, X, Filter, Edit3, CheckCircle2, AlertCircle } from 'lucide-react';
-import { CATEGORY_ORDER, sortProductsCategoryWise } from '../data/initialData';
+import { CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
 
 export const StockView: React.FC = () => {
   const { stockItems, currentUser, adminAdjustStock, saveProduct } = useStock();
@@ -36,8 +36,7 @@ export const StockView: React.FC = () => {
   const filtered = sortProductsCategoryWise(
     visibleBaseItems.filter(item => {
       const matchesCat = !selectedCat || item.category === selectedCat;
-      const q = search.trim().toLowerCase();
-      const matchesSearch = !q || (item.name + ' ' + item.category + ' ' + item.sizeML).toLowerCase().includes(q);
+      const matchesSearch = matchesSearchQuery(search, item.name, item.category, item.sizeML, item.productId);
       return matchesCat && matchesSearch;
     })
   );

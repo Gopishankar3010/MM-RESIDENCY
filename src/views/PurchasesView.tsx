@@ -1,5 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useStock } from '../context/StockContext';
+import { Product, PurchaseBatch } from '../types';
 import {
   Truck,
   Plus,
@@ -9,10 +11,13 @@ import {
   Calendar,
   Printer,
   ArrowDownToLine,
-  Filter,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Search,
+  ChevronDown,
+  X,
+  AlertTriangle
 } from 'lucide-react';
-import { bottlesPerCase_ } from '../data/initialData';
+import { bottlesPerCase_, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
 
 interface PurchaseInputRow {
   productId: string;
@@ -22,6 +27,207 @@ interface PurchaseInputRow {
   sedAmt: string;
 }
 
+interface PurchaseProductPickerProps {
+  products: Product[];
+  value: string;
+  onChange: (productId: string) => void;
+}
+
+const PurchaseProductPicker: React.FC<PurchaseProductPickerProps> = ({ products, value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number }>({
+    top: 0,
+    left: 0,
+    width: 320
+  });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const selected = useMemo(() => products.find(p => p.productId === value) || null, [products, value]);
+
+  const filteredProducts = useMemo(() => {
+    const active = products.filter(p => p.active);
+    const matched = query.trim()
+      ? active.filter(p => matchesSearchQuery(query, p.name, p.category, p.sizeML, p.productId))
+      : active;
+    return sortProductsCategoryWise(matched);
+  }, [products, query]);
+
+  const updateMenuPosition = () => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const width = Math.max(rect.width, 300);
+    const maxLeft = Math.max(8, window.innerWidth - width - 12);
+    const left = Math.min(rect.left, maxLeft);
+    const estimatedHeight = 280;
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const top =
+      spaceBelow >= estimatedHeight || spaceBelow >= rect.top
+        ? rect.bottom + 4
+        : Math.max(8, rect.top - estimatedHeight - 4);
+    setMenuPos({ top, left, width });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+    const handleReposition = () => updateMenuPosition();
+    const handlePointerDown = (ev: MouseEvent) => {
+      const target = ev.target as Node;
+      if (
+        containerRef.current?.contains(target) ||
+        menuRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setOpen(false);
+      setQuery('');
+    };
+    const handleKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    window.addEventListener('scroll', handleReposition, true);
+    window.addEventListener('resize', handleReposition);
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('scroll', handleReposition, true);
+      window.removeEventListener('resize', handleReposition);
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  const displayText = open
+    ? query
+    : selected
+    ? `${selected.name} ${selected.sizeML}ml (${bottlesPerCase_(selected)}/case)`
+    : '';
+
+  return (
+    <div ref={containerRef} className="relative min-w-[230px]">
+      <div className="relative flex items-center">
+        <Search className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-slate-400" />
+        <input
+          ref={inputRef}
+          type="text"
+          value={displayText}
+          placeholder="Search & choose product..."
+          onFocus={() => {
+            setQuery('');
+            setOpen(true);
+          }}
+          onClick={() => {
+            if (!open) {
+              setQuery('');
+              setOpen(true);
+            }
+          }}
+          onChange={e => {
+            setQuery(e.target.value);
+            if (!open) setOpen(true);
+          }}
+          className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-8 pr-12 text-xs font-semibold text-slate-900 placeholder:font-normal placeholder:text-slate-400 outline-none focus:border-amber-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:bg-slate-900"
+        />
+        <div className="absolute right-1.5 flex items-center gap-0.5">
+          {selected && !open && (
+            <button
+              type="button"
+              title="Clear selected product"
+              onClick={e => {
+                e.stopPropagation();
+                onChange('');
+                setQuery('');
+              }}
+              className="rounded p-1 text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200 cursor-pointer"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+          <button
+            type="button"
+            tabIndex={-1}
+            title="Toggle product list"
+            onClick={() => {
+              if (open) {
+                setOpen(false);
+                setQuery('');
+              } else {
+                setQuery('');
+                setOpen(true);
+                inputRef.current?.focus();
+              }
+            }}
+            className="rounded p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+          >
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+          </button>
+        </div>
+      </div>
+
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{
+              position: 'fixed',
+              top: menuPos.top,
+              left: menuPos.left,
+              width: menuPos.width,
+              zIndex: 70
+            }}
+            className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900 divide-y divide-slate-100 dark:divide-slate-800"
+          >
+            {filteredProducts.length === 0 ? (
+              <div className="p-3 text-center text-xs text-slate-500 dark:text-slate-400">
+                No products match "{query}".
+              </div>
+            ) : (
+              filteredProducts.map(p => {
+                const isSelected = p.productId === value;
+                return (
+                  <button
+                    key={p.productId}
+                    type="button"
+                    onMouseDown={e => {
+                      e.preventDefault();
+                      onChange(p.productId);
+                      setQuery('');
+                      setOpen(false);
+                    }}
+                    className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-amber-50 text-amber-950 dark:bg-amber-950/40 dark:text-amber-200'
+                        : 'hover:bg-slate-50 dark:hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-900 dark:text-white truncate">
+                        {p.name} {p.sizeML}ml
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                        {p.category} · {bottlesPerCase_(p)}/case
+                      </div>
+                    </div>
+                    <span className="shrink-0 font-mono text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                      ₹{Number(p.sellingPrice || 0).toLocaleString('en-IN')}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>,
+          document.body
+        )}
+    </div>
+  );
+};
+
 export const PurchasesView: React.FC = () => {
   const {
     currentUser,
@@ -30,7 +236,9 @@ export const PurchasesView: React.FC = () => {
     purchases,
     suppliers,
     submitPurchaseBatch,
-    addSupplier
+    deletePurchaseBatch,
+    addSupplier,
+    deleteSupplier
   } = useStock();
 
   const isAdmin = currentUser?.role === 'ADMIN';
@@ -55,6 +263,11 @@ export const PurchasesView: React.FC = () => {
   // Supplier modal
   const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
   const [newSupplierName, setNewSupplierName] = useState('');
+
+  // Delete confirmation modals
+  const [deleteSupplierTarget, setDeleteSupplierTarget] = useState<string | null>(null);
+  const [deleteBatchTarget, setDeleteBatchTarget] = useState<PurchaseBatch | null>(null);
+  const [isDeletingPurchase, setIsDeletingPurchase] = useState(false);
 
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
@@ -459,16 +672,28 @@ export const PurchasesView: React.FC = () => {
                     + New
                   </button>
                 </div>
-                <select
-                  value={supplier}
-                  onChange={e => setSupplier(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 font-semibold dark:bg-slate-800 dark:text-white dark:border-slate-700"
-                >
-                  <option value="">Select supplier...</option>
-                  {suppliers.map(s => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={supplier}
+                    onChange={e => setSupplier(e.target.value)}
+                    className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-2 font-semibold dark:bg-slate-800 dark:text-white dark:border-slate-700"
+                  >
+                    <option value="">Select supplier...</option>
+                    {suppliers.map(s => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  {supplier && (
+                    <button
+                      type="button"
+                      title={`Delete supplier "${supplier}"`}
+                      onClick={() => setDeleteSupplierTarget(supplier)}
+                      className="shrink-0 rounded-lg border border-red-200 bg-red-50 p-2 text-red-600 hover:bg-red-100 hover:text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-900/50 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -524,21 +749,13 @@ export const PurchasesView: React.FC = () => {
                   {finalRows.map((r, idx) => (
                     <tr key={idx}>
                       <td className="py-2 px-3">
-                        <select
+                        <PurchaseProductPicker
+                          products={products}
                           value={r.productId}
-                          onChange={e => {
-                            const val = e.target.value;
-                            setRows(prev => prev.map((row, i) => i === idx ? { ...row, productId: val } : row));
+                          onChange={val => {
+                            setRows(prev => prev.map((row, i) => (i === idx ? { ...row, productId: val } : row)));
                           }}
-                          className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-semibold dark:bg-slate-800 dark:text-white dark:border-slate-700"
-                        >
-                          <option value="">Choose product...</option>
-                          {products.filter(p => p.active).map(p => (
-                            <option key={p.productId} value={p.productId}>
-                              {p.name} {p.sizeML}ml ({bottlesPerCase_(p)}/case)
-                            </option>
-                          ))}
-                        </select>
+                        />
                       </td>
 
                       <td className="py-2 px-3">
@@ -706,7 +923,19 @@ export const PurchasesView: React.FC = () => {
                       <tr key={p.batchId} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                         <td className="py-3 px-4 font-mono font-semibold">{p.date}</td>
                         <td className="py-3 px-4 font-mono">{p.billDate}</td>
-                        <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">{p.supplier}</td>
+                        <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
+                          <div className="flex items-center gap-2">
+                            <span>{p.supplier}</span>
+                            <button
+                              type="button"
+                              title={`Delete purchase batch ${p.batchId}`}
+                              onClick={() => setDeleteBatchTarget(p)}
+                              className="no-print rounded-md p-1 text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
                         <td className="py-3 px-4 font-mono font-bold text-slate-700 dark:text-slate-300">{p.invoiceNo}</td>
                         <td className="py-3 px-4 font-mono">
                           {p.lines.length} items · {p.totalQty} btls
@@ -1036,6 +1265,116 @@ export const PurchasesView: React.FC = () => {
                 className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-40 cursor-pointer"
               >
                 Add Supplier
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP: Confirm Delete Supplier */}
+      {deleteSupplierTarget && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-red-100 p-2 text-red-600 dark:bg-red-950/50 dark:text-red-400">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Delete Supplier?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Remove <strong>{deleteSupplierTarget}</strong> from the supplier dropdown list? Existing historical purchase bills will remain intact.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDeleteSupplierTarget(null)}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const target = deleteSupplierTarget;
+                    await deleteSupplier(target);
+                    if (supplier === target) setSupplier('');
+                    setDeleteSupplierTarget(null);
+                    setStatusMsg({ type: 'ok', text: `Supplier "${target}" removed from list.` });
+                  } catch (e: any) {
+                    setStatusMsg({ type: 'err', text: e?.message || 'Failed to remove supplier.' });
+                    setDeleteSupplierTarget(null);
+                  }
+                }}
+                className="rounded-lg bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 cursor-pointer"
+              >
+                Delete Supplier
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP: Confirm Delete Purchase Batch */}
+      {deleteBatchTarget && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-red-100 p-2 text-red-600 dark:bg-red-950/50 dark:text-red-400">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Delete Purchase Entry?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Supplier: <strong className="text-slate-900 dark:text-white">{deleteBatchTarget.supplier}</strong> · Invoice{' '}
+                  <strong className="font-mono text-slate-900 dark:text-white">#{deleteBatchTarget.invoiceNo}</strong> ·{' '}
+                  <strong className="font-mono text-emerald-700 dark:text-emerald-400">{formatCurrency(deleteBatchTarget.netTotal)}</strong>
+                </p>
+                {deleteBatchTarget.status === 'Approved' && (
+                  <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[11px] font-semibold text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200">
+                    This batch was Approved — deleting it will also deduct its {deleteBatchTarget.totalQty} bottles back from Central Godown stock.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                disabled={isDeletingPurchase}
+                onClick={() => setDeleteBatchTarget(null)}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingPurchase}
+                onClick={async () => {
+                  try {
+                    setIsDeletingPurchase(true);
+                    const batchId = deleteBatchTarget.batchId;
+                    const inv = deleteBatchTarget.invoiceNo;
+                    await deletePurchaseBatch(batchId);
+                    setDeleteBatchTarget(null);
+                    setStatusMsg({ type: 'ok', text: `Purchase batch ${batchId} (Invoice #${inv}) deleted and saved.` });
+                  } catch (e: any) {
+                    setStatusMsg({ type: 'err', text: e?.message || 'Failed to delete purchase batch.' });
+                    setDeleteBatchTarget(null);
+                  } finally {
+                    setIsDeletingPurchase(false);
+                  }
+                }}
+                className="rounded-lg bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+              >
+                {isDeletingPurchase ? 'Deleting...' : 'Delete Purchase'}
               </button>
             </div>
           </div>

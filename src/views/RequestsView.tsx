@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { Search, ShoppingBag, Plus, Trash2, CheckCircle2, Clock, XCircle, ArrowRight, Printer, Copy, Share2 } from 'lucide-react';
-import { bottlesPerCase_, stockQtyLabel } from '../data/initialData';
+import { bottlesPerCase_, matchesSearchQuery, sortProductsCategoryWise, stockQtyLabel } from '../data/initialData';
 
 export const RequestsView: React.FC = () => {
   const { currentUser, businessDate, stockItems, requests, submitRequestBatch } = useStock();
@@ -28,7 +28,9 @@ export const RequestsView: React.FC = () => {
   // Filter products for search
   const availableProducts = stockItems.filter(p => p.active && p.godownAvailable > 0);
   const searchResults = search.trim()
-    ? availableProducts.filter(p => (p.name + ' ' + p.category + ' ' + p.sizeML).toLowerCase().includes(search.trim().toLowerCase())).slice(0, 8)
+    ? sortProductsCategoryWise(
+        availableProducts.filter(p => matchesSearchQuery(search, p.name, p.category, p.sizeML, p.productId))
+      ).slice(0, 12)
     : [];
 
   const handleAddToBasket = () => {

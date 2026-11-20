@@ -105,6 +105,43 @@ app.get('/api/state', (req, res) => {
   });
 });
 
+function persistStateAtomically(stateObj: any) {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  const tmpFile = `${DATA_FILE}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(stateObj, null, 2), 'utf-8');
+  fs.renameSync(tmpFile, DATA_FILE);
+}
+
+function mergeServerUsers(existingUsers: any[], incomingUsers: any[]) {
+  const byKey = new Map<string, any>();
+  const keyOf = (u: any) => String(u?.userId || u?.username || '').toLowerCase();
+
+  (Array.isArray(existingUsers) ? existingUsers : []).forEach(u => {
+    const k = keyOf(u);
+    if (k) byKey.set(k, u);
+  });
+
+  (Array.isArray(incomingUsers) ? incomingUsers : []).forEach(u => {
+    const k = keyOf(u);
+    if (!k) return;
+    const prev = byKey.get(k);
+    if (!prev) {
+      byKey.set(k, u);
+    } else {
+      // Keep whichever version has a newer updatedAt or prefer incoming for explicit edits
+      const prevTs = String(prev.updatedAt || '');
+      const incTs = String(u.updatedAt || '');
+      if (!prevTs || incTs >= prevTs) {
+        byKey.set(k, u);
+      }
+    }
+  });
+
+  return Array.from(byKey.values());
+}
+
 // POST /api/state - Save updated state from any device and persist to disk
 app.post('/api/state', (req, res) => {
   try {
@@ -122,22 +159,28 @@ app.post('/api/state', (req, res) => {
     const version = (cachedState?._version || 0) + 1;
     const updatedAt = new Date().toISOString();
 
-    const newPendingRequests = Array.isArray(incoming.requests)
-      ? incoming.requests.filter((r: any) => r?.status === 'Pending' && !prevPendingIds.has(String(r.requestId)))
+    const { _resetRequested, ...cleanIncoming } = incoming;
+
+    // Never allow a stale payload to wipe existing system users unless explicit sample reset requested
+    const safeUsers = _resetRequested
+      ? (Array.isArray(cleanIncoming.users) ? cleanIncoming.users : [])
+      : Array.isArray(cachedState?.users) && cachedState.users.length > 0
+      ? mergeServerUsers(cachedState.users, cleanIncoming.users)
+      : (Array.isArray(cleanIncoming.users) ? cleanIncoming.users : []);
+
+    const newPendingRequests = Array.isArray(cleanIncoming.requests)
+      ? cleanIncoming.requests.filter((r: any) => r?.status === 'Pending' && !prevPendingIds.has(String(r.requestId)))
       : [];
 
     cachedState = {
-      ...incoming,
+      ...cleanIncoming,
+      users: safeUsers,
       _version: version,
       updatedAt
     };
 
-    // Asynchronously write to disk
-    fs.writeFile(DATA_FILE, JSON.stringify(cachedState, null, 2), 'utf-8', (err) => {
-      if (err) {
-        console.error('[Store] Error persisting state to file:', err);
-      }
-    });
+    // Atomically persist to disk before returning HTTP 200 so saves are guaranteed durable
+    persistStateAtomically(cachedState);
 
     broadcastSSE('state_updated', { version, updatedAt });
     if (newPendingRequests.length > 0) {

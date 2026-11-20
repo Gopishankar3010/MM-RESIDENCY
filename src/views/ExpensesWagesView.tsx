@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Plus, Trash2, Wallet, PlusCircle, Check, Printer } from 'lucide-react';
+import { DailyOperation } from '../types';
+import { Plus, Trash2, PlusCircle, Check, Printer, AlertTriangle } from 'lucide-react';
 
 interface EntryRow {
   name: string;
@@ -9,7 +10,14 @@ interface EntryRow {
 }
 
 export const ExpensesWagesView: React.FC = () => {
-  const { businessDate, operations, dropdownOptions, saveDailyOperationsBatch, addDropdownOption } = useStock();
+  const {
+    businessDate,
+    operations,
+    dropdownOptions,
+    saveDailyOperationsBatch,
+    deleteDailyOperation,
+    addDropdownOption
+  } = useStock();
 
   // Tabular state for expenses
   const [expenseRows, setExpenseRows] = useState<EntryRow[]>([{ name: '', amount: '', note: '' }]);
@@ -19,6 +27,10 @@ export const ExpensesWagesView: React.FC = () => {
   // Add custom option dialog
   const [showAddOptionModal, setShowAddOptionModal] = useState<{ type: 'EXPENSE' | 'WAGE' } | null>(null);
   const [newOptionValue, setNewOptionValue] = useState('');
+
+  // Delete operation confirmation dialog
+  const [deleteOpTarget, setDeleteOpTarget] = useState<DailyOperation | null>(null);
+  const [isDeletingOp, setIsDeletingOp] = useState(false);
 
   const [statusMessage, setStatusMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
@@ -94,7 +106,7 @@ export const ExpensesWagesView: React.FC = () => {
       setNewOptionValue('');
       setShowAddOptionModal(null);
     } catch (e: any) {
-      alert(e.message);
+      setStatusMessage({ type: 'err', text: e?.message || 'Failed to add option.' });
     }
   };
 
@@ -214,14 +226,20 @@ export const ExpensesWagesView: React.FC = () => {
                     />
                   </td>
                   <td className="no-print py-2 px-3 text-center">
-                    {expenseRows.length > 1 && (
-                      <button
-                        onClick={() => setExpenseRows(prev => prev.filter((_, i) => i !== idx))}
-                        className="text-red-500 hover:text-red-700 p-1"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      title={expenseRows.length > 1 ? 'Remove row' : 'Clear row'}
+                      onClick={() => {
+                        if (expenseRows.length > 1) {
+                          setExpenseRows(prev => prev.filter((_, i) => i !== idx));
+                        } else {
+                          setExpenseRows([{ name: '', amount: '', note: '' }]);
+                        }
+                      }}
+                      className="text-red-500 hover:text-red-700 p-1 cursor-pointer"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -265,12 +283,22 @@ export const ExpensesWagesView: React.FC = () => {
             </h4>
             <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
               {dayExpenses.map(e => (
-                <div key={e.operationId} className="py-2 flex items-center justify-between">
+                <div key={e.operationId} className="py-2 flex items-center justify-between gap-3">
                   <div>
                     <span className="font-bold text-slate-900 dark:text-white">{e.name}</span>
                     {e.reason && <span className="text-slate-500 ml-2">({e.reason})</span>}
                   </div>
-                  <span className="font-mono font-bold text-red-600">{formatCurrency(e.amount)}</span>
+                  <div className="flex items-center gap-2.5">
+                    <span className="font-mono font-bold text-red-600">{formatCurrency(e.amount)}</span>
+                    <button
+                      type="button"
+                      title={`Delete expense "${e.name}"`}
+                      onClick={() => setDeleteOpTarget(e)}
+                      className="no-print rounded-md p-1 text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -350,14 +378,20 @@ export const ExpensesWagesView: React.FC = () => {
                     />
                   </td>
                   <td className="no-print py-2 px-3 text-center">
-                    {wageRows.length > 1 && (
-                      <button
-                        onClick={() => setWageRows(prev => prev.filter((_, i) => i !== idx))}
-                        className="text-red-500 hover:text-red-700 p-1"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      title={wageRows.length > 1 ? 'Remove row' : 'Clear row'}
+                      onClick={() => {
+                        if (wageRows.length > 1) {
+                          setWageRows(prev => prev.filter((_, i) => i !== idx));
+                        } else {
+                          setWageRows([{ name: '', amount: '', note: '' }]);
+                        }
+                      }}
+                      className="text-red-500 hover:text-red-700 p-1 cursor-pointer"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -401,12 +435,22 @@ export const ExpensesWagesView: React.FC = () => {
             </h4>
             <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
               {dayWages.map(w => (
-                <div key={w.operationId} className="py-2 flex items-center justify-between">
+                <div key={w.operationId} className="py-2 flex items-center justify-between gap-3">
                   <div>
                     <span className="font-bold text-slate-900 dark:text-white">{w.name}</span>
                     {w.reason && <span className="text-slate-500 ml-2">({w.reason})</span>}
                   </div>
-                  <span className="font-mono font-bold text-red-600">{formatCurrency(w.amount)}</span>
+                  <div className="flex items-center gap-2.5">
+                    <span className="font-mono font-bold text-red-600">{formatCurrency(w.amount)}</span>
+                    <button
+                      type="button"
+                      title={`Delete wage "${w.name}"`}
+                      onClick={() => setDeleteOpTarget(w)}
+                      className="no-print rounded-md p-1 text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -448,6 +492,61 @@ export const ExpensesWagesView: React.FC = () => {
                 className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-40"
               >
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP MODAL: Confirm Delete Expense / Wage */}
+      {deleteOpTarget && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-red-100 p-2 text-red-600 dark:bg-red-950/50 dark:text-red-400">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Delete {deleteOpTarget.type === 'WAGE' ? 'Wage Payout' : 'Expense Entry'}?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  <strong className="text-slate-900 dark:text-white">{deleteOpTarget.name}</strong> ·{' '}
+                  <strong className="font-mono text-red-600 dark:text-red-400">{formatCurrency(deleteOpTarget.amount)}</strong>
+                  {deleteOpTarget.reason ? ` (${deleteOpTarget.reason})` : ''}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                disabled={isDeletingOp}
+                onClick={() => setDeleteOpTarget(null)}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingOp}
+                onClick={async () => {
+                  try {
+                    setIsDeletingOp(true);
+                    const label = `${deleteOpTarget.type === 'WAGE' ? 'Wage' : 'Expense'} "${deleteOpTarget.name}" (${formatCurrency(deleteOpTarget.amount)})`;
+                    await deleteDailyOperation(deleteOpTarget.operationId);
+                    setDeleteOpTarget(null);
+                    setStatusMessage({ type: 'ok', text: `Deleted ${label} and saved.` });
+                  } catch (err: any) {
+                    setStatusMessage({ type: 'err', text: err?.message || 'Failed to delete entry.' });
+                    setDeleteOpTarget(null);
+                  } finally {
+                    setIsDeletingOp(false);
+                  }
+                }}
+                className="rounded-lg bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+              >
+                {isDeletingOp ? 'Deleting...' : 'Delete Entry'}
               </button>
             </div>
           </div>

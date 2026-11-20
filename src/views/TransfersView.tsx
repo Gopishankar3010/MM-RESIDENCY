@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { ArrowRightLeft, Search, CheckCircle2, AlertCircle, Printer } from 'lucide-react';
 import { CounterLocation } from '../types';
-import { bottlesPerCase_, stockQtyLabel } from '../data/initialData';
+import { bottlesPerCase_, matchesSearchQuery, sortProductsCategoryWise, stockQtyLabel } from '../data/initialData';
 
 export const TransfersView: React.FC = () => {
   const { currentUser, stockItems, transfers, submitTransfer } = useStock();
   const isAdmin = currentUser?.role === 'ADMIN';
 
+  const [productSearch, setProductSearch] = useState('');
   const [productId, setProductId] = useState('');
   const [qty, setQty] = useState('1');
   const [unit, setUnit] = useState<'CASE' | 'BOTTLE'>('BOTTLE');
@@ -21,7 +22,12 @@ export const TransfersView: React.FC = () => {
 
   // Products available at the source location
   const sourceKey = isAdmin ? 'godown' : (currentUser?.counter?.toLowerCase() as 'normal' | 'ac' || 'normal');
-  const transferableProducts = stockItems.filter(p => p[sourceKey] > 0);
+  const transferableProducts = sortProductsCategoryWise(stockItems.filter(p => p[sourceKey] > 0));
+  const searchResults = productSearch.trim()
+    ? transferableProducts
+        .filter(p => matchesSearchQuery(productSearch, p.name, p.category, p.sizeML, p.productId))
+        .slice(0, 12)
+    : [];
   const selectedProduct = transferableProducts.find(p => p.productId === productId);
   const pack = selectedProduct ? bottlesPerCase_(selectedProduct) : 1;
   const numQty = Number(qty) || 0;
@@ -159,22 +165,58 @@ export const TransfersView: React.FC = () => {
             </div>
           )}
 
-          <div className={isAdmin ? '' : 'sm:col-span-2'}>
-            <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-              Select Product Available at {fromLocation}
-            </label>
-            <select
-              value={productId}
-              onChange={e => setProductId(e.target.value)}
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-            >
-              <option value="">Choose a product with stock...</option>
-              {transferableProducts.map(p => (
-                <option key={p.productId} value={p.productId}>
-                  {p.name} {p.sizeML}ml — {p.casePack}/case (Available: {p[sourceKey]} btls)
-                </option>
-              ))}
-            </select>
+          <div className={`relative ${isAdmin ? '' : 'sm:col-span-2'} space-y-2`}>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder={`Search product at ${fromLocation} (case-insensitive)...`}
+                value={productSearch}
+                onChange={e => setProductSearch(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-xs text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+              {searchResults.length > 0 && (
+                <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800 divide-y divide-slate-100 dark:divide-slate-700">
+                  {searchResults.map(p => (
+                    <button
+                      key={p.productId}
+                      type="button"
+                      onClick={() => {
+                        setProductId(p.productId);
+                        setProductSearch('');
+                      }}
+                      className="w-full p-2 text-left text-xs hover:bg-slate-50 dark:hover:bg-slate-700/50 flex items-center justify-between cursor-pointer"
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">{p.name} {p.sizeML}ml</div>
+                        <span className="text-[10px] text-slate-500">{p.category} · {p.casePack}/case</span>
+                      </div>
+                      <span className="font-mono text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                        {p[sourceKey]} btls
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                Select Product Available at {fromLocation}
+              </label>
+              <select
+                value={productId}
+                onChange={e => setProductId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              >
+                <option value="">Choose a product with stock...</option>
+                {transferableProducts.map(p => (
+                  <option key={p.productId} value={p.productId}>
+                    {p.name} {p.sizeML}ml — {p.casePack}/case (Available: {p[sourceKey]} btls)
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 

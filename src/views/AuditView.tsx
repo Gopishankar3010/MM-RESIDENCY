@@ -5,6 +5,7 @@ import {
   FileCheck, History, Search, RefreshCw, CheckCircle2, 
   AlertTriangle, Filter, ArrowDownUp, ShieldCheck, DatabaseZap, Printer
 } from 'lucide-react';
+import { matchesSearchQuery } from '../data/initialData';
 
 export const AuditView: React.FC = () => {
   const { auditLog, ledger, products, reconcileStock, syncLedger } = useStock();
@@ -18,12 +19,14 @@ export const AuditView: React.FC = () => {
   // Filtered Audit Logs
   const filteredAudit = useMemo(() => {
     return (auditLog || []).filter((log: AuditLogEntry) => {
-      const matchSearch = 
-        log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        log.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        log.details.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (log.refId && log.refId.toLowerCase().includes(searchTerm.toLowerCase()));
-      
+      const matchSearch = matchesSearchQuery(
+        searchTerm,
+        log.action,
+        log.username,
+        log.role,
+        log.details,
+        log.refId
+      );
       const matchAction = actionFilter === 'ALL' || log.action === actionFilter;
       return matchSearch && matchAction;
     });
@@ -33,12 +36,18 @@ export const AuditView: React.FC = () => {
   const filteredLedger = useMemo(() => {
     return (ledger || []).filter((entry: StockLedgerEntry) => {
       const prod = products.find((p: Product) => p.productId === entry.productId);
-      const prodName = prod ? prod.name.toLowerCase() : (entry.productName || '').toLowerCase();
-      const matchSearch = 
-        prodName.includes(searchTerm.toLowerCase()) ||
-        entry.refType.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        entry.refId.toLowerCase().includes(searchTerm.toLowerCase());
-      
+      const matchSearch = matchesSearchQuery(
+        searchTerm,
+        prod?.name,
+        prod?.category,
+        prod?.sizeML,
+        entry.productName,
+        entry.productId,
+        entry.location,
+        entry.refType,
+        entry.refId,
+        entry.approvedBy
+      );
       const matchLoc = locationFilter === 'ALL' || entry.location === locationFilter;
       return matchSearch && matchLoc;
     });

@@ -11,6 +11,7 @@ export interface User {
   active: boolean;
   mustChange: boolean;
   createdAt: string;
+  updatedAt?: string;
   password?: string;
 }
 

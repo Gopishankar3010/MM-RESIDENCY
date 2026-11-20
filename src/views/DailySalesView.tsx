@@ -15,10 +15,11 @@ import {
   User,
   Users,
   UserCheck,
-  Calendar
+  Calendar,
+  Search
 } from 'lucide-react';
 import { DailySalesReport, CounterLocation } from '../types';
-import { CATEGORY_ORDER, sortProductsCategoryWise } from '../data/initialData';
+import { CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
 
 export const DailySalesView: React.FC = () => {
   const {
@@ -158,8 +159,7 @@ export const DailySalesView: React.FC = () => {
   const filteredLines = sortProductsCategoryWise(
     availableLineCalculations.filter(l => {
       const matchesCat = !categoryFilter || l.category === categoryFilter;
-      const q = searchFilter.trim().toLowerCase();
-      const matchesSearch = !q || (l.name + ' ' + l.category + ' ' + l.sizeML).toLowerCase().includes(q);
+      const matchesSearch = matchesSearchQuery(searchFilter, l.name, l.category, l.sizeML, l.productId);
       const matchesOnlySelected = !onlySelected || l.sold > 0;
       return matchesCat && matchesSearch && matchesOnlySelected;
     })
@@ -581,13 +581,16 @@ export const DailySalesView: React.FC = () => {
               {/* Filter tools */}
               <div className="no-print rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs dark:border-slate-800 dark:bg-slate-900 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2.5">
-                  <input
-                    type="text"
-                    placeholder="Search product..."
-                    value={searchFilter}
-                    onChange={e => setSearchFilter(e.target.value)}
-                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  />
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search product..."
+                      value={searchFilter}
+                      onChange={e => setSearchFilter(e.target.value)}
+                      className="rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 py-1.5 text-xs text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    />
+                  </div>
 
                   <select
                     value={categoryFilter}
@@ -1255,9 +1258,7 @@ export const DailySalesView: React.FC = () => {
                 {sortProductsCategoryWise(
                   products.filter(p => {
                     if (!p.active) return false;
-                    const q = histSearch.trim().toLowerCase();
-                    if (!q) return true;
-                    return `${p.name} ${p.category} ${p.sizeML}`.toLowerCase().includes(q);
+                    return matchesSearchQuery(histSearch, p.name, p.category, p.sizeML, p.productId);
                   })
                 ).map(p => (
                   <div key={p.productId} className="py-2 flex items-center justify-between gap-3">
