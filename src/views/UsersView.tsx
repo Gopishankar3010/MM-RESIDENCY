@@ -6,7 +6,7 @@ import {
   XCircle, Search, Power, Printer, Cloud, Trash2, MailPlus
 } from 'lucide-react';
 import { matchesSearchQuery } from '../data/initialData';
-import { BOOTSTRAPPED_ADMIN_EMAIL } from '../firebase';
+import { BOOTSTRAPPED_ADMIN_EMAILS, isBootstrappedAdminEmail } from '../firebase';
 
 export const UsersView: React.FC = () => {
   const {
@@ -42,8 +42,7 @@ export const UsersView: React.FC = () => {
   const [cloudRoleInput, setCloudRoleInput] = useState<'ADMIN' | 'STAFF'>('ADMIN');
   const [isSavingCloudMember, setIsSavingCloudMember] = useState(false);
 
-  const isCloudOwner =
-    (firebaseUser?.email || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+  const isCloudOwner = isBootstrappedAdminEmail(firebaseUser?.email);
 
   if (currentUser?.role !== 'ADMIN') {
     return (
@@ -406,7 +405,7 @@ export const UsersView: React.FC = () => {
           </form>
         ) : (
           <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
-            Only the Primary Owner Google account (<span className="font-mono font-bold">{BOOTSTRAPPED_ADMIN_EMAIL}</span>) can authorize or remove multi-device Google emails.
+            Only an Owner Google account (<span className="font-mono font-bold">{BOOTSTRAPPED_ADMIN_EMAILS.join(', ')}</span>) can authorize or remove multi-device Google emails.
           </div>
         )}
 
@@ -424,12 +423,12 @@ export const UsersView: React.FC = () => {
               {cloudMembers.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="py-4 px-4 text-center text-stone-400">
-                    Primary owner ({BOOTSTRAPPED_ADMIN_EMAIL}) is synced. Add additional Google accounts above if your friend uses a separate Gmail.
+                    Owner accounts ({BOOTSTRAPPED_ADMIN_EMAILS.join(', ')}) are synced. Add additional Google accounts above if staff use a separate Gmail.
                   </td>
                 </tr>
               ) : (
                 cloudMembers.map((m) => {
-                  const isOwnerRow = m.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+                  const isOwnerRow = isBootstrappedAdminEmail(m.email);
                   return (
                     <tr key={m.memberId} className="hover:bg-stone-50/50 dark:hover:bg-stone-800/40">
                       <td className="py-2.5 px-4 font-mono font-semibold text-stone-900 dark:text-stone-100">

@@ -5,7 +5,7 @@ import {
   DocumentReference,
   increment,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType, BOOTSTRAPPED_ADMIN_EMAIL } from '../firebase';
+import { db, handleFirestoreError, OperationType, BOOTSTRAPPED_ADMIN_EMAILS } from '../firebase';
 import {
   AuditLogEntry,
   DailyOperation,
@@ -66,7 +66,7 @@ export function stripUndefinedDeep<T>(obj: T): T {
 }
 
 export function sanitizeEmailList(emails: string[]): string[] {
-  const set = new Set<string>([BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase()]);
+  const set = new Set<string>(BOOTSTRAPPED_ADMIN_EMAILS.map(e => e.toLowerCase()));
   for (const e of emails) {
     const clean = String(e || '').trim().toLowerCase();
     if (clean && clean.length >= 5 && clean.length <= 160 && clean.includes('@')) {

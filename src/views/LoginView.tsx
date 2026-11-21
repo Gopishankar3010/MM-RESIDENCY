@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
+import { FIREBASE_PROJECT_ID } from '../firebase';
 import {
   ArrowRight, AlertCircle, Lock, Cloud, CheckCircle2,
-  RefreshCw, LogOut, Loader2, ShieldAlert
+  RefreshCw, LogOut, Loader2, ShieldAlert, Copy, ExternalLink, Check
 } from 'lucide-react';
 
 export const LoginView: React.FC = () => {
@@ -19,25 +20,54 @@ export const LoginView: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [unauthorizedDomainHost, setUnauthorizedDomainHost] = useState<string | null>(null);
+  const [copiedDomain, setCopiedDomain] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
+  const authorizedDomainsConsoleUrl = `https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`;
+
+  const handleCopyDomain = async () => {
+    if (!unauthorizedDomainHost) return;
+    try {
+      await navigator.clipboard.writeText(unauthorizedDomainHost);
+      setCopiedDomain(true);
+      setTimeout(() => setCopiedDomain(false), 2500);
+    } catch {
+      // Clipboard API unavailable; user can copy the visible text manually
+    }
+  };
+
   const handleGoogleConnect = async () => {
     setError('');
+    setUnauthorizedDomainHost(null);
     setIsGoogleLoading(true);
+    try {
+      await signInWithPopupSafe();
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
+
+  const signInWithPopupSafe = async () => {
     try {
       await signInWithGoogle();
     } catch (err: any) {
       const code = err?.code || '';
-      if (code === 'auth/popup-closed-by-user') {
+      const msg = String(err?.message || '');
+      if (code === 'auth/unauthorized-domain' || msg.includes('auth/unauthorized-domain')) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        setUnauthorizedDomainHost(host || 'this domain');
+        setError(
+          `This website domain (${host || 'current URL'}) is not yet allowlisted in Firebase Authentication Authorized Domains.`
+        );
+      } else if (code === 'auth/popup-closed-by-user') {
         setError('Google sign-in popup was closed before completing.');
       } else if (code === 'auth/popup-blocked') {
         setError('Sign-in popup was blocked by your browser. Please allow popups for this site and try again.');
       } else {
-        setError(err?.message || 'Google authentication failed. Please try again.');
+        setError(msg || 'Google authentication failed. Please try again.');
       }
-    } finally {
-      setIsGoogleLoading(false);
     }
   };
 
@@ -62,6 +92,60 @@ export const LoginView: React.FC = () => {
       setError(err?.message || 'Authentication failed. Please verify credentials.');
       setIsLoading(false);
     }
+  };
+
+  const renderAuthErrorBox = () => {
+    if (!error) return null;
+    if (unauthorizedDomainHost) {
+      return (
+        <div className="bg-amber-950/60 border border-amber-600/70 text-amber-100 p-4 rounded-xl text-xs space-y-3">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-bold text-amber-200">Authorize Domain in Firebase Project: <code className="font-mono text-white">{FIREBASE_PROJECT_ID}</code></div>
+              <p className="text-amber-100/90 mt-1 leading-relaxed">
+                Firebase blocked Google Sign-In because this exact hostname is not in project <strong>{FIREBASE_PROJECT_ID}</strong>&apos;s Authorized Domains list yet.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 rounded-lg bg-stone-950/80 border border-stone-700 px-3 py-2">
+            <code className="font-mono text-[11px] text-emerald-300 truncate">{unauthorizedDomainHost}</code>
+            <button
+              type="button"
+              onClick={handleCopyDomain}
+              className="shrink-0 inline-flex items-center gap-1 rounded bg-stone-800 hover:bg-stone-700 px-2 py-1 text-[10px] font-bold text-stone-200 cursor-pointer"
+            >
+              {copiedDomain ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+              <span>{copiedDomain ? 'Copied' : 'Copy'}</span>
+            </button>
+          </div>
+
+          <ol className="list-decimal pl-4 space-y-1 text-[11px] text-amber-100/90">
+            <li>Open Authentication Settings for project <code className="font-mono text-white">{FIREBASE_PROJECT_ID}</code> (make sure you are in this exact project).</li>
+            <li>Go to <strong>Settings → Authorized domains → Add domain</strong>.</li>
+            <li>Paste the bare domain <code className="font-mono text-emerald-300">{unauthorizedDomainHost}</code> (no <code>https://</code> or path) and click <strong>Add</strong>, then reload and retry.</li>
+          </ol>
+
+          <a
+            href={authorizedDomainsConsoleUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold py-2 px-3 text-xs transition-colors"
+          >
+            <span>Open Firebase Authorized Domains</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        </div>
+      );
+    }
+
+    return (
+      <div className="bg-rose-950/70 border border-rose-800 text-rose-300 p-3.5 rounded-xl text-xs flex items-start gap-2.5">
+        <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+        <span className="font-medium">{error}</span>
+      </div>
+    );
   };
 
   return (
@@ -120,12 +204,7 @@ export const LoginView: React.FC = () => {
                 </p>
               </div>
 
-              {error && (
-                <div className="bg-rose-950/70 border border-rose-800 text-rose-300 p-3.5 rounded-xl text-xs flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span className="font-medium">{error}</span>
-                </div>
-              )}
+              {renderAuthErrorBox()}
 
               <button
                 type="button"
@@ -168,11 +247,7 @@ export const LoginView: React.FC = () => {
                 {cloudError || 'Unable to verify cloud workspace permissions.'}
               </div>
 
-              {error && (
-                <div className="bg-rose-950/70 border border-rose-800 text-rose-300 p-3 rounded-xl text-xs">
-                  {error}
-                </div>
-              )}
+              {renderAuthErrorBox()}
 
               <div className="grid grid-cols-2 gap-2.5 pt-1">
                 <button

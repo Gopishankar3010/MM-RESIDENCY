@@ -19,9 +19,11 @@ import {
 import {
   auth,
   BOOTSTRAPPED_ADMIN_EMAIL,
+  BOOTSTRAPPED_ADMIN_EMAILS,
   db,
   googleProvider,
   handleFirestoreError,
+  isBootstrappedAdminEmail,
   OperationType,
 } from '../firebase';
 import {
@@ -353,7 +355,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [cloudAccessStatus, setCloudAccessStatus] = useState<CloudAccessStatus>('loading');
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [cloudMembers, setCloudMembers] = useState<CloudMemberRecord[]>([]);
-  const memberEmailsRef = React.useRef<string[]>([BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase()]);
+  const memberEmailsRef = React.useRef<string[]>([...BOOTSTRAPPED_ADMIN_EMAILS]);
   const [reconnectSeq, setReconnectSeq] = useState(0);
 
   // Database tables (initialized from localStorage cache, synced live from Firestore)
@@ -675,7 +677,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // Fall back to INITIAL_* opening state
     }
 
-    const memberList = sanitizeEmailList([ownerEmail]);
+    const memberList = sanitizeEmailList([ownerEmail, ...BOOTSTRAPPED_ADMIN_EMAILS]);
     memberEmailsRef.current = memberList;
 
     try {
@@ -695,19 +697,22 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const ops: BatchOp[] = [];
-    const ownerMemberId = makeSafeMemberId(BOOTSTRAPPED_ADMIN_EMAIL);
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'cloud_members', ownerMemberId),
-      data: {
-        memberId: ownerMemberId,
-        email: BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase(),
-        label: 'Primary Owner Admin',
-        role: 'ADMIN',
-        addedBy: ownerEmail,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      },
+    BOOTSTRAPPED_ADMIN_EMAILS.forEach((adminEmail, idx) => {
+      const cleanAdmin = adminEmail.toLowerCase();
+      const memberId = makeSafeMemberId(cleanAdmin);
+      ops.push({
+        type: 'set',
+        ref: doc(db, 'cloud_members', memberId),
+        data: {
+          memberId,
+          email: cleanAdmin,
+          label: idx === 0 ? 'Primary Owner Admin' : 'Co-Owner Admin',
+          role: 'ADMIN',
+          addedBy: ownerEmail,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
     });
 
     seedUsers.forEach(u => {
@@ -767,7 +772,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const email = (firebaseUser.email || '').trim().toLowerCase();
-    const isOwner = email === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    const isOwner = isBootstrappedAdminEmail(email);
     let cancelled = false;
     const unsubs: (() => void)[] = [];
 
@@ -791,9 +796,43 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
 
           // Check whether workspace_meta/main has already been seeded
-          const metaSnap = await getDoc(doc(db, 'workspace_meta', 'main'));
+          const metaRef = doc(db, 'workspace_meta', 'main');
+          const metaSnap = await getDoc(metaRef);
           if (!metaSnap.exists()) {
             await seedWorkspaceToFirestore(email);
+          } else {
+            const metaData = metaSnap.data();
+            const existingList: string[] = Array.isArray(metaData?.memberEmails) ? metaData.memberEmails : [];
+            if (!existingList.includes(email)) {
+              const nextMembers = sanitizeEmailList([...existingList, email]);
+              memberEmailsRef.current = nextMembers;
+              const ownerOps: BatchOp[] = [
+                {
+                  type: 'update',
+                  ref: metaRef,
+                  data: { memberEmails: nextMembers, updatedAt: serverTimestamp() },
+                },
+              ];
+              const memberId = makeSafeMemberId(email);
+              const memberRef = doc(db, 'cloud_members', memberId);
+              const memberSnap = await getDoc(memberRef);
+              if (!memberSnap.exists()) {
+                ownerOps.push({
+                  type: 'set',
+                  ref: memberRef,
+                  data: {
+                    memberId,
+                    email,
+                    label: 'Co-Owner Admin',
+                    role: 'ADMIN',
+                    addedBy: email,
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  },
+                });
+              }
+              await commitFirestoreOps(ownerOps, 'sync_owner_member');
+            }
           }
         } else {
           // Verify team member email exists in workspace_meta/main
@@ -1139,9 +1178,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     if (!firebaseUser?.email) throw new Error('Connect Google Cloud Sync first.');
     const fbEmail = firebaseUser.email.trim().toLowerCase();
-    const isOwner = fbEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    const isOwner = isBootstrappedAdminEmail(fbEmail);
     if (!isOwner) {
-      throw new Error(`Only the Primary Shop Owner (${BOOTSTRAPPED_ADMIN_EMAIL}) can add or remove Cloud Sync Google accounts.`);
+      throw new Error(`Only a Shop Owner (${BOOTSTRAPPED_ADMIN_EMAILS.join(', ')}) can add or remove Cloud Sync Google accounts.`);
     }
 
     const cleanEmail = rawEmail.trim().toLowerCase();
@@ -1152,20 +1191,32 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     memberEmailsRef.current = nextMembers;
 
     const memberId = makeSafeMemberId(cleanEmail);
+    const memberRef = doc(db, 'cloud_members', memberId);
+    const existingMemberSnap = await getDoc(memberRef);
     const ops: BatchOp[] = [
-      {
-        type: 'set',
-        ref: doc(db, 'cloud_members', memberId),
-        data: {
-          memberId,
-          email: cleanEmail,
-          label: clampStr(label.trim() || cleanEmail, 80),
-          role,
-          addedBy: clampStr(fbEmail || currentUser.username, 160),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        },
-      },
+      existingMemberSnap.exists()
+        ? {
+            type: 'update',
+            ref: memberRef,
+            data: {
+              label: clampStr(label.trim() || cleanEmail, 80),
+              role,
+              updatedAt: serverTimestamp(),
+            },
+          }
+        : {
+            type: 'set',
+            ref: memberRef,
+            data: {
+              memberId,
+              email: cleanEmail,
+              label: clampStr(label.trim() || cleanEmail, 80),
+              role,
+              addedBy: clampStr(fbEmail || currentUser.username, 160),
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+          },
       {
         type: 'update',
         ref: doc(db, 'workspace_meta', 'main'),
@@ -1222,14 +1273,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     if (!firebaseUser?.email) throw new Error('Connect Google Cloud Sync first.');
     const fbEmail = firebaseUser.email.trim().toLowerCase();
-    const isOwner = fbEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    const isOwner = isBootstrappedAdminEmail(fbEmail);
     if (!isOwner) {
-      throw new Error(`Only the Primary Shop Owner (${BOOTSTRAPPED_ADMIN_EMAIL}) can add or remove Cloud Sync Google accounts.`);
+      throw new Error(`Only a Shop Owner (${BOOTSTRAPPED_ADMIN_EMAILS.join(', ')}) can add or remove Cloud Sync Google accounts.`);
     }
 
     const cleanEmail = rawEmail.trim().toLowerCase();
-    if (cleanEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase()) {
-      throw new Error('Cannot remove the primary owner account.');
+    if (isBootstrappedAdminEmail(cleanEmail)) {
+      throw new Error('Cannot remove a primary owner account.');
     }
     const nextMembers = sanitizeEmailList(memberEmailsRef.current.filter(e => e !== cleanEmail));
     memberEmailsRef.current = nextMembers;
@@ -3133,7 +3184,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem('mm_user', JSON.stringify(INITIAL_USERS[0]));
 
     const fbEmail = (firebaseUser?.email || '').trim().toLowerCase();
-    const isOwner = fbEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    const isOwner = isBootstrappedAdminEmail(fbEmail);
     const ops: BatchOp[] = [];
     const colsToClear = ['purchases', 'requests', 'transfers', 'daily_sales', 'operations', 'ledger', 'audit_log'];
     for (const colName of colsToClear) {

@@ -39,7 +39,10 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isVerified() && request.auth.token.email == 'gopishankarsegar@ptuniv.edu.in';
+      return isVerified() && request.auth.token.email.lower() in [
+        'gopishankarsegar@ptuniv.edu.in',
+        'madhumithame1008@gmail.com'
+      ];
     }
 
     function isAdmin() {
