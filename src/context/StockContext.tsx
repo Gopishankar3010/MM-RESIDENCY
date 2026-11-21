@@ -1,32 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
-  User as FirebaseUser,
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut,
-} from 'firebase/auth';
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  query,
-  serverTimestamp,
-  setDoc,
-  where,
-} from 'firebase/firestore';
-import {
-  auth,
-  BOOTSTRAPPED_ADMIN_EMAIL,
-  BOOTSTRAPPED_ADMIN_EMAILS,
-  db,
-  googleProvider,
-  handleFirestoreError,
-  isBootstrappedAdminEmail,
-  OperationType,
-} from '../firebase';
-import {
   User, Product, StockItem, PurchaseBatch, StockRequestItem, StockTransfer,
   DailySalesReport, DailyOperation, StockLedgerEntry, AuditLogEntry, DropdownOption,
   CounterLocation, StockLocation, Role
@@ -35,43 +8,6 @@ import {
   INITIAL_USERS, INITIAL_PRODUCTS, INITIAL_STOCK, INITIAL_SUPPLIERS,
   INITIAL_DROPDOWN_OPTIONS, bottlesPerCase_, sortProductsCategoryWise
 } from '../data/initialData';
-import {
-  BatchOp,
-  buildStockIncrementOp,
-  clampStr,
-  CloudMemberRecord,
-  commitFirestoreOps,
-  fromFirestoreAuditEntry,
-  fromFirestoreDailyOperation,
-  fromFirestoreDailySalesReport,
-  fromFirestoreDropdownOption,
-  fromFirestoreLedgerEntry,
-  fromFirestoreProduct,
-  fromFirestorePurchaseBatch,
-  fromFirestoreStaffUser,
-  fromFirestoreStockRequest,
-  fromFirestoreStockTransfer,
-  makeSafeMemberId,
-  sanitizeEmailList,
-  toFirestoreAuditEntry,
-  toFirestoreDailyOperation,
-  toFirestoreDailySalesReport,
-  toFirestoreDropdownOption,
-  toFirestoreLedgerEntry,
-  toFirestoreProduct,
-  toFirestorePurchaseBatch,
-  toFirestoreStaffUser,
-  toFirestoreStockLevel,
-  toFirestoreStockRequest,
-  toFirestoreStockTransfer,
-} from '../utils/firestoreSync';
-
-export type CloudAccessStatus =
-  | 'loading'
-  | 'signed_out'
-  | 'unauthorized'
-  | 'connected'
-  | 'offline';
 
 interface StockContextType {
   currentUser: User | null;
@@ -91,18 +27,7 @@ interface StockContextType {
   dropdownOptions: DropdownOption[];
   pendingCount: number;
 
-  // Cloud & Multi-Device Firebase Sync & Admin Request Notifications
-  firebaseUser: FirebaseUser | null;
-  isFirebaseAuthReady: boolean;
-  cloudAccessStatus: CloudAccessStatus;
-  cloudError: string | null;
-  cloudMembers: CloudMemberRecord[];
-  signInWithGoogle: () => Promise<void>;
-  signOutGoogle: () => Promise<void>;
-  retryCloudConnection: () => Promise<void>;
-  authorizeCloudEmail: (email: string, label: string, role: 'ADMIN' | 'STAFF') => Promise<void>;
-  revokeCloudEmail: (memberId: string, email: string) => Promise<void>;
-
+  // Multi-Device Server Sync & Admin Request Notifications
   syncStatus: 'synced' | 'syncing' | 'offline';
   lastSyncTime: string;
   triggerManualSync: () => Promise<void>;
@@ -349,16 +274,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   });
 
-  // Firebase Auth & Cloud Sync State
-  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
-  const [isFirebaseAuthReady, setIsFirebaseAuthReady] = useState<boolean>(false);
-  const [cloudAccessStatus, setCloudAccessStatus] = useState<CloudAccessStatus>('loading');
-  const [cloudError, setCloudError] = useState<string | null>(null);
-  const [cloudMembers, setCloudMembers] = useState<CloudMemberRecord[]>([]);
-  const memberEmailsRef = React.useRef<string[]>([...BOOTSTRAPPED_ADMIN_EMAILS]);
-  const [reconnectSeq, setReconnectSeq] = useState(0);
-
-  // Database tables (initialized from localStorage cache, synced live from Firestore)
+  // Database tables (initialized from localStorage cache, synced live with Express server)
   const [users, setUsers] = useState<User[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_users');
     return raw ? JSON.parse(raw) : INITIAL_USERS;
@@ -445,10 +361,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return raw ? JSON.parse(raw) : INITIAL_DROPDOWN_OPTIONS;
   });
 
-  // Cloud Sync UI Status & Notifications
-  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('synced');
+  // Server Sync Status & Notifications
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('syncing');
   const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString());
-  const isCloudHydratedRef = React.useRef(false);
+  const isServerHydratedRef = React.useRef(false);
+  const serverVersionRef = React.useRef<number>(0);
+  const clientIdRef = React.useRef<string>(`cli_${Math.random().toString(36).slice(2, 10)}`);
+  const syncChainRef = React.useRef<Promise<void>>(Promise.resolve());
+  const pendingDirtySlicesRef = React.useRef<Set<string>>(new Set());
   const seenPendingIdsRef = React.useRef<Set<string> | null>(null);
   const currentUserRef = React.useRef(currentUser);
   currentUserRef.current = currentUser;
@@ -524,6 +444,267 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (partial.dropdownOptions !== undefined) setDropdownOptions(next.dropdownOptions);
   };
 
+  // Apply authoritative state fetched from /api/state
+  const applyServerSnapshot = React.useCallback((s: any, ver?: number) => {
+    if (!s || typeof s !== 'object') return;
+    if (typeof ver === 'number' && ver > 0) {
+      serverVersionRef.current = ver;
+    } else if (typeof s._version === 'number' && s._version > 0) {
+      serverVersionRef.current = s._version;
+    }
+
+    const nextUsers = Array.isArray(s.users) && s.users.length > 0 ? s.users : latestRef.current.users;
+    const nextProducts =
+      Array.isArray(s.products) && s.products.length > 0
+        ? mergeCatalogueWithDefaults(s.products)
+        : latestRef.current.products;
+    const nextStock =
+      s.stock && typeof s.stock === 'object'
+        ? { ...buildInitialStockMap(), ...s.stock }
+        : latestRef.current.stock;
+    const nextPurchases = Array.isArray(s.purchases)
+      ? [...s.purchases].sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || '') || String(b.batchId).localeCompare(String(a.batchId)))
+      : latestRef.current.purchases;
+    const nextRequests = Array.isArray(s.requests)
+      ? [...s.requests].sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || '') || String(b.requestId).localeCompare(String(a.requestId)))
+      : latestRef.current.requests;
+    const nextTransfers = Array.isArray(s.transfers)
+      ? [...s.transfers].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || String(b.transferId).localeCompare(String(a.transferId)))
+      : latestRef.current.transfers;
+    const nextDailySales = Array.isArray(s.dailySales)
+      ? [...s.dailySales].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.reportId).localeCompare(String(a.reportId)))
+      : latestRef.current.dailySales;
+    const nextOperations = Array.isArray(s.operations)
+      ? [...s.operations].sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || '') || String(b.operationId).localeCompare(String(a.operationId)))
+      : latestRef.current.operations;
+    const nextLedger = Array.isArray(s.ledger)
+      ? [...s.ledger].sort((a, b) => (b.seq || 0) - (a.seq || 0) || String(b.ledgerId).localeCompare(String(a.ledgerId)))
+      : latestRef.current.ledger;
+    const nextAuditLog = Array.isArray(s.auditLog)
+      ? [...s.auditLog].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '') || String(b.auditId).localeCompare(String(a.auditId)))
+      : latestRef.current.auditLog;
+    const nextSuppliers = Array.isArray(s.suppliers) && s.suppliers.length > 0 ? s.suppliers : latestRef.current.suppliers;
+    const nextDropdowns =
+      Array.isArray(s.dropdownOptions) && s.dropdownOptions.length > 0
+        ? s.dropdownOptions
+        : latestRef.current.dropdownOptions;
+
+    if (!isServerHydratedRef.current && seenPendingIdsRef.current === null) {
+      seenPendingIdsRef.current = new Set(
+        nextRequests.filter((r: StockRequestItem) => r.status === 'Pending').map((r: StockRequestItem) => r.requestId)
+      );
+    }
+    isServerHydratedRef.current = true;
+
+    commitLocalState({
+      users: nextUsers,
+      products: nextProducts,
+      stock: nextStock,
+      purchases: nextPurchases,
+      requests: nextRequests,
+      transfers: nextTransfers,
+      dailySales: nextDailySales,
+      operations: nextOperations,
+      ledger: nextLedger,
+      auditLog: nextAuditLog,
+      suppliers: nextSuppliers,
+      dropdownOptions: nextDropdowns
+    });
+
+    // Keep current session synced if admin edited password/role/active status
+    const active = currentUserRef.current;
+    if (active) {
+      const refreshed = nextUsers.find(
+        (u: User) => u.userId === active.userId || u.username.toLowerCase() === active.username.toLowerCase()
+      );
+      if (refreshed) {
+        if (!refreshed.active) {
+          setCurrentUser(null);
+          localStorage.removeItem('mm_user');
+        } else if (
+          refreshed.fullName !== active.fullName ||
+          refreshed.password !== active.password ||
+          refreshed.role !== active.role ||
+          refreshed.updatedAt !== active.updatedAt
+        ) {
+          setCurrentUser(refreshed);
+          localStorage.setItem('mm_user', JSON.stringify(refreshed));
+        }
+      }
+    }
+  }, []);
+
+  // Serialized push to Express /api/state with conflict-safe slice & delete tracking
+  const syncToServer = React.useCallback(
+    (dirtySlices: string[], deletedIds?: Record<string, string[]>, isReset = false): Promise<void> => {
+      dirtySlices.forEach(s => pendingDirtySlicesRef.current.add(s));
+      setSyncStatus('syncing');
+
+      const task = syncChainRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          const allDirty = Array.from(pendingDirtySlicesRef.current);
+          const payload = {
+            ...latestRef.current,
+            _openingEpoch: OPENING_EPOCH,
+            _catalogVersion: CATALOG_VERSION,
+            _baseVersion: serverVersionRef.current,
+            _dirtySlices: allDirty.length > 0 ? allDirty : dirtySlices,
+            _deletedIds: deletedIds,
+            _clientId: clientIdRef.current,
+            _resetRequested: isReset
+          };
+
+          const res = await fetch('/api/state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            cache: 'no-store',
+            body: JSON.stringify(payload)
+          });
+
+          if (!res.ok) {
+            throw new Error(`Server sync returned ${res.status}`);
+          }
+
+          const json = await res.json();
+          if (typeof json?.version === 'number') {
+            serverVersionRef.current = json.version;
+          }
+          if (json?.merged && json?.data) {
+            applyServerSnapshot(json.data, json.version);
+          }
+          pendingDirtySlicesRef.current.clear();
+          setSyncStatus('synced');
+          setLastSyncTime(new Date().toLocaleTimeString());
+        })
+        .catch((err) => {
+          console.warn('Server sync warning:', err);
+          setSyncStatus('offline');
+        });
+
+      syncChainRef.current = task;
+      return task;
+    },
+    [applyServerSnapshot]
+  );
+
+  const pullServerState = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/state?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) {
+        setSyncStatus('offline');
+        return;
+      }
+      const json = await res.json();
+      if (json?.data) {
+        applyServerSnapshot(json.data, json.version);
+        setSyncStatus('synced');
+        setLastSyncTime(new Date().toLocaleTimeString());
+      } else {
+        // Brand-new empty server store: seed initial opening workspace once
+        isServerHydratedRef.current = true;
+        await syncToServer([
+          'users', 'products', 'stock', 'suppliers', 'dropdownOptions',
+          'purchases', 'requests', 'transfers', 'dailySales', 'operations', 'ledger', 'auditLog'
+        ]);
+      }
+    } catch {
+      setSyncStatus('offline');
+    }
+  }, [applyServerSnapshot, syncToServer]);
+
+  // Real-time Server-Sent Events + version poll + focus refresh
+  useEffect(() => {
+    let active = true;
+    let eventSource: EventSource | null = null;
+
+    const init = async () => {
+      await pullServerState();
+    };
+    void init();
+
+    try {
+      if (typeof EventSource !== 'undefined') {
+        eventSource = new EventSource('/api/events');
+        eventSource.addEventListener('state_updated', (ev: MessageEvent) => {
+          if (!active) return;
+          try {
+            const payload = JSON.parse(ev.data || '{}');
+            const incomingVer = Number(payload?.version || 0);
+            if (payload?.clientId !== clientIdRef.current && incomingVer > serverVersionRef.current) {
+              void pullServerState();
+            } else if (incomingVer > serverVersionRef.current) {
+              serverVersionRef.current = incomingVer;
+            }
+          } catch {
+            void pullServerState();
+          }
+        });
+        eventSource.addEventListener('connected', (ev: MessageEvent) => {
+          if (!active) return;
+          try {
+            const payload = JSON.parse(ev.data || '{}');
+            const remoteVer = Number(payload?.version || 0);
+            if (remoteVer > serverVersionRef.current) {
+              void pullServerState();
+            }
+          } catch {
+            // Ignore malformed keepalive
+          }
+        });
+      }
+    } catch {
+      // Fallback polling below keeps multi-device sync working
+    }
+
+    const pollInterval = window.setInterval(async () => {
+      if (!active) return;
+      try {
+        if (pendingDirtySlicesRef.current.size > 0) {
+          await syncToServer(Array.from(pendingDirtySlicesRef.current));
+          return;
+        }
+        const res = await fetch(`/api/version?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const json = await res.json();
+        const remoteVer = Number(json?.version || 0);
+        if (remoteVer > serverVersionRef.current) {
+          await pullServerState();
+        } else {
+          setSyncStatus('synced');
+        }
+      } catch {
+        setSyncStatus('offline');
+      }
+    }, 3000);
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void pullServerState();
+      }
+    };
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    return () => {
+      active = false;
+      window.clearInterval(pollInterval);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [pullServerState, syncToServer]);
+
+  const triggerManualSync = async () => {
+    setSyncStatus('syncing');
+    if (pendingDirtySlicesRef.current.size > 0) {
+      await syncToServer(Array.from(pendingDirtySlicesRef.current));
+    }
+    await pullServerState();
+  };
+
   // Notifications state & sound alerts
   const [latestRequestAlert, setLatestRequestAlert] = useState<StockContextType['latestRequestAlert']>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
@@ -592,7 +773,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const currentPending = requests.filter(r => r.status === 'Pending');
     const currentPendingIds = new Set(currentPending.map(r => r.requestId));
 
-    if (!isCloudHydratedRef.current) return;
+    if (!isServerHydratedRef.current) return;
 
     if (seenPendingIdsRef.current === null) {
       seenPendingIdsRef.current = currentPendingIds;
@@ -637,694 +818,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [requests, currentUser?.role, soundEnabled]);
 
-  // Seed initial shop state into Firestore on very first connection if workspace_meta/main does not exist
-  const seedWorkspaceToFirestore = async (ownerEmail: string) => {
-    let seedUsers: User[] = INITIAL_USERS;
-    let seedProducts: Product[] = INITIAL_PRODUCTS;
-    let seedStock: Record<string, { godown: number; normal: number; ac: number }> = buildInitialStockMap();
-    let seedPurchases: PurchaseBatch[] = [];
-    let seedRequests: StockRequestItem[] = [];
-    let seedTransfers: StockTransfer[] = [];
-    let seedSales: DailySalesReport[] = [];
-    let seedOps: DailyOperation[] = [];
-    let seedLedger: StockLedgerEntry[] = [];
-    let seedAudit: AuditLogEntry[] = [];
-    let seedSuppliers: string[] = INITIAL_SUPPLIERS;
-    let seedDropdowns: DropdownOption[] = INITIAL_DROPDOWN_OPTIONS;
-
-    // Preserve any opening data already stored on the server if present
-    try {
-      const res = await fetch(`/api/state?t=${Date.now()}`, { cache: 'no-store' });
-      if (res.ok) {
-        const json = await res.json();
-        const s = json?.data;
-        if (s && s._openingEpoch === OPENING_EPOCH) {
-          if (Array.isArray(s.users) && s.users.length) seedUsers = s.users;
-          if (Array.isArray(s.products) && s.products.length) seedProducts = mergeCatalogueWithDefaults(s.products);
-          if (s.stock && typeof s.stock === 'object') seedStock = { ...seedStock, ...s.stock };
-          if (Array.isArray(s.purchases)) seedPurchases = s.purchases;
-          if (Array.isArray(s.requests)) seedRequests = s.requests;
-          if (Array.isArray(s.transfers)) seedTransfers = s.transfers;
-          if (Array.isArray(s.dailySales)) seedSales = s.dailySales;
-          if (Array.isArray(s.operations)) seedOps = s.operations;
-          if (Array.isArray(s.ledger)) seedLedger = s.ledger;
-          if (Array.isArray(s.auditLog)) seedAudit = s.auditLog;
-          if (Array.isArray(s.suppliers) && s.suppliers.length) seedSuppliers = s.suppliers;
-          if (Array.isArray(s.dropdownOptions) && s.dropdownOptions.length) seedDropdowns = s.dropdownOptions;
-        }
-      }
-    } catch {
-      // Fall back to INITIAL_* opening state
-    }
-
-    const memberList = sanitizeEmailList([ownerEmail, ...BOOTSTRAPPED_ADMIN_EMAILS]);
-    memberEmailsRef.current = memberList;
-
-    try {
-      await setDoc(doc(db, 'workspace_meta', 'main'), {
-        metaId: 'main',
-        bootstrapped: true,
-        openingEpoch: OPENING_EPOCH,
-        catalogVersion: CATALOG_VERSION,
-        ownerEmail: BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase(),
-        memberEmails: memberList,
-        suppliers: seedSuppliers.slice(0, 100),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'workspace_meta/main');
-    }
-
-    const ops: BatchOp[] = [];
-    BOOTSTRAPPED_ADMIN_EMAILS.forEach((adminEmail, idx) => {
-      const cleanAdmin = adminEmail.toLowerCase();
-      const memberId = makeSafeMemberId(cleanAdmin);
-      ops.push({
-        type: 'set',
-        ref: doc(db, 'cloud_members', memberId),
-        data: {
-          memberId,
-          email: cleanAdmin,
-          label: idx === 0 ? 'Primary Owner Admin' : 'Co-Owner Admin',
-          role: 'ADMIN',
-          addedBy: ownerEmail,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        },
-      });
-    });
-
-    seedUsers.forEach(u => {
-      ops.push({ type: 'set', ref: doc(db, 'staff_users', u.userId), data: toFirestoreStaffUser(u, memberList, true) });
-    });
-    seedProducts.forEach(p => {
-      ops.push({ type: 'set', ref: doc(db, 'products', p.productId), data: toFirestoreProduct(p, memberList, true) });
-      const s = seedStock[p.productId] || { godown: 0, normal: 0, ac: 0 };
-      ops.push({ type: 'set', ref: doc(db, 'stock', p.productId), data: toFirestoreStockLevel(p.productId, s, memberList, true) });
-    });
-    seedDropdowns.forEach(d => {
-      ops.push({ type: 'set', ref: doc(db, 'dropdown_options', d.optionId), data: toFirestoreDropdownOption(d, memberList, true) });
-    });
-    seedPurchases.forEach(b => {
-      ops.push({ type: 'set', ref: doc(db, 'purchases', b.batchId), data: toFirestorePurchaseBatch(b, memberList, true) });
-    });
-    seedRequests.forEach(r => {
-      ops.push({ type: 'set', ref: doc(db, 'requests', r.requestId), data: toFirestoreStockRequest(r, memberList, true) });
-    });
-    seedTransfers.forEach(t => {
-      ops.push({ type: 'set', ref: doc(db, 'transfers', t.transferId), data: toFirestoreStockTransfer(t, memberList, true) });
-    });
-    seedSales.forEach(r => {
-      ops.push({ type: 'set', ref: doc(db, 'daily_sales', r.reportId), data: toFirestoreDailySalesReport(r, memberList, true) });
-    });
-    seedOps.forEach(o => {
-      ops.push({ type: 'set', ref: doc(db, 'operations', o.operationId), data: toFirestoreDailyOperation(o, memberList, true) });
-    });
-    seedLedger.forEach(l => {
-      ops.push({ type: 'set', ref: doc(db, 'ledger', l.ledgerId), data: toFirestoreLedgerEntry(l, memberList, true) });
-    });
-    seedAudit.forEach(a => {
-      ops.push({ type: 'set', ref: doc(db, 'audit_log', a.auditId), data: toFirestoreAuditEntry(a, memberList, true) });
-    });
-
-    await commitFirestoreOps(ops, 'bootstrap_seed');
-  };
-
-  // Real-time Firebase Auth & Firestore Subscription Engine
-  useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
-      setFirebaseUser(fbUser);
-      setIsFirebaseAuthReady(true);
-    });
-    return () => unsubAuth();
-  }, []);
-
-  useEffect(() => {
-    if (!isFirebaseAuthReady) return;
-
-    if (!firebaseUser) {
-      isCloudHydratedRef.current = false;
-      setCloudAccessStatus('signed_out');
-      setCloudError(null);
-      setSyncStatus('offline');
-      return;
-    }
-
-    const email = (firebaseUser.email || '').trim().toLowerCase();
-    const isOwner = isBootstrappedAdminEmail(email);
-    let cancelled = false;
-    const unsubs: (() => void)[] = [];
-
-    const setupRealtimeSync = async () => {
-      setCloudAccessStatus('loading');
-      setCloudError(null);
-      setSyncStatus('syncing');
-
-      try {
-        if (isOwner) {
-          // Ensure owner UID exists in /admins
-          const adminDocRef = doc(db, 'admins', firebaseUser.uid);
-          const adminSnap = await getDoc(adminDocRef);
-          if (!adminSnap.exists()) {
-            await setDoc(adminDocRef, {
-              uid: firebaseUser.uid,
-              email,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          }
-
-          // Check whether workspace_meta/main has already been seeded
-          const metaRef = doc(db, 'workspace_meta', 'main');
-          const metaSnap = await getDoc(metaRef);
-          if (!metaSnap.exists()) {
-            await seedWorkspaceToFirestore(email);
-          } else {
-            const metaData = metaSnap.data();
-            const existingList: string[] = Array.isArray(metaData?.memberEmails) ? metaData.memberEmails : [];
-            if (!existingList.includes(email)) {
-              const nextMembers = sanitizeEmailList([...existingList, email]);
-              memberEmailsRef.current = nextMembers;
-              const ownerOps: BatchOp[] = [
-                {
-                  type: 'update',
-                  ref: metaRef,
-                  data: { memberEmails: nextMembers, updatedAt: serverTimestamp() },
-                },
-              ];
-              const memberId = makeSafeMemberId(email);
-              const memberRef = doc(db, 'cloud_members', memberId);
-              const memberSnap = await getDoc(memberRef);
-              if (!memberSnap.exists()) {
-                ownerOps.push({
-                  type: 'set',
-                  ref: memberRef,
-                  data: {
-                    memberId,
-                    email,
-                    label: 'Co-Owner Admin',
-                    role: 'ADMIN',
-                    addedBy: email,
-                    createdAt: serverTimestamp(),
-                    updatedAt: serverTimestamp(),
-                  },
-                });
-              }
-              await commitFirestoreOps(ownerOps, 'sync_owner_member');
-            }
-          }
-        } else {
-          // Verify team member email exists in workspace_meta/main
-          try {
-            const metaSnap = await getDoc(doc(db, 'workspace_meta', 'main'));
-            if (!metaSnap.exists()) {
-              if (!cancelled) {
-                setCloudAccessStatus('unauthorized');
-                setCloudError(
-                  `Shop cloud database has not been initialized by the owner (${BOOTSTRAPPED_ADMIN_EMAIL}) yet. Please have the Shop Admin sign in once first.`
-                );
-                setSyncStatus('offline');
-              }
-              return;
-            }
-            const metaData = metaSnap.data();
-            const list: string[] = Array.isArray(metaData?.memberEmails) ? metaData.memberEmails : [];
-            if (!list.includes(email)) {
-              if (!cancelled) {
-                setCloudAccessStatus('unauthorized');
-                setCloudError(
-                  `Google account "${email}" is not authorized yet. Ask Shop Admin (${BOOTSTRAPPED_ADMIN_EMAIL}) to add "${email}" in User Management → Cloud Sync Devices.`
-                );
-                setSyncStatus('offline');
-              }
-              return;
-            }
-          } catch (permErr: any) {
-            if (!cancelled) {
-              setCloudAccessStatus('unauthorized');
-              setCloudError(
-                `Google account "${email}" does not have cloud workspace access yet. Ask Shop Admin (${BOOTSTRAPPED_ADMIN_EMAIL}) to authorize "${email}" in User Management → Cloud Sync Devices.`
-              );
-              setSyncStatus('offline');
-            }
-            return;
-          }
-        }
-
-        if (cancelled) return;
-
-        // Helper for queries respecting Pillar 8 (allow list validates resource.data.memberEmails)
-        const scopedQuery = (colName: string) =>
-          isOwner
-            ? collection(db, colName)
-            : query(collection(db, colName), where('memberEmails', 'array-contains', email));
-
-        // 1. workspace_meta/main
-        unsubs.push(
-          onSnapshot(
-            doc(db, 'workspace_meta', 'main'),
-            (snap) => {
-              if (!snap.exists()) return;
-              const data = snap.data();
-              if (Array.isArray(data.memberEmails)) {
-                memberEmailsRef.current = sanitizeEmailList(data.memberEmails);
-              }
-              if (Array.isArray(data.suppliers)) {
-                latestRef.current.suppliers = data.suppliers;
-                setSuppliers(data.suppliers);
-              }
-              setSyncStatus('synced');
-              setLastSyncTime(new Date().toLocaleTimeString());
-            },
-            (err) => handleFirestoreError(err, OperationType.GET, 'workspace_meta/main')
-          )
-        );
-
-        // 2. cloud_members (admins see all, team sees own)
-        unsubs.push(
-          onSnapshot(
-            isOwner
-              ? collection(db, 'cloud_members')
-              : query(collection(db, 'cloud_members'), where('email', '==', email)),
-            (snap) => {
-              const list = snap.docs
-                .map(d => d.data() as CloudMemberRecord)
-                .sort((a, b) => a.email.localeCompare(b.email));
-              setCloudMembers(list);
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'cloud_members')
-          )
-        );
-
-        // 3. staff_users
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('staff_users'),
-            (snap) => {
-              const list = snap.docs
-                .map(d => fromFirestoreStaffUser(d.data()))
-                .sort((a, b) => a.userId.localeCompare(b.userId));
-              if (list.length > 0) {
-                latestRef.current.users = list;
-                setUsers(list);
-                const active = currentUserRef.current;
-                if (active) {
-                  const refreshed = list.find(
-                    u => u.userId === active.userId || u.username.toLowerCase() === active.username.toLowerCase()
-                  );
-                  if (refreshed) {
-                    if (!refreshed.active) {
-                      setCurrentUser(null);
-                      localStorage.removeItem('mm_user');
-                    } else if (
-                      refreshed.fullName !== active.fullName ||
-                      refreshed.password !== active.password ||
-                      refreshed.role !== active.role ||
-                      refreshed.updatedAt !== active.updatedAt
-                    ) {
-                      setCurrentUser(refreshed);
-                      localStorage.setItem('mm_user', JSON.stringify(refreshed));
-                    }
-                  }
-                }
-              }
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'staff_users')
-          )
-        );
-
-        // 4. products
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('products'),
-            (snap) => {
-              const list = sortProductsCategoryWise(snap.docs.map(d => fromFirestoreProduct(d.data())));
-              if (list.length > 0) {
-                latestRef.current.products = list;
-                setProducts(list);
-              }
-              setSyncStatus('synced');
-              setLastSyncTime(new Date().toLocaleTimeString());
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'products')
-          )
-        );
-
-        // 5. stock
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('stock'),
-            (snap) => {
-              const map: Record<string, { godown: number; normal: number; ac: number }> = {};
-              snap.docs.forEach(d => {
-                const data = d.data();
-                map[d.id] = {
-                  godown: Math.max(0, Number(data.godown) || 0),
-                  normal: Math.max(0, Number(data.normal) || 0),
-                  ac: Math.max(0, Number(data.ac) || 0),
-                };
-              });
-              if (Object.keys(map).length > 0) {
-                latestRef.current.stock = map;
-                setStock(map);
-              }
-              setSyncStatus('synced');
-              setLastSyncTime(new Date().toLocaleTimeString());
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'stock')
-          )
-        );
-
-        // 6. purchases
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('purchases'),
-            (snap) => {
-              const list = snap.docs
-                .map(d => fromFirestorePurchaseBatch(d.data()))
-                .sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date) || b.batchId.localeCompare(a.batchId));
-              latestRef.current.purchases = list;
-              setPurchases(list);
-              setSyncStatus('synced');
-              setLastSyncTime(new Date().toLocaleTimeString());
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'purchases')
-          )
-        );
-
-        // 7. requests
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('requests'),
-            (snap) => {
-              const list = snap.docs
-                .map(d => fromFirestoreStockRequest(d.data()))
-                .sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date) || b.requestId.localeCompare(a.requestId));
-              if (!isCloudHydratedRef.current && seenPendingIdsRef.current === null) {
-                seenPendingIdsRef.current = new Set(
-                  list.filter(r => r.status === 'Pending').map(r => r.requestId)
-                );
-              }
-              isCloudHydratedRef.current = true;
-              latestRef.current.requests = list;
-              setRequests(list);
-              setSyncStatus('synced');
-              setLastSyncTime(new Date().toLocaleTimeString());
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'requests')
-          )
-        );
-
-        // 8. transfers
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('transfers'),
-            (snap) => {
-              const list = snap.docs
-                .map(d => fromFirestoreStockTransfer(d.data()))
-                .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || b.transferId.localeCompare(a.transferId));
-              latestRef.current.transfers = list;
-              setTransfers(list);
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'transfers')
-          )
-        );
-
-        // 9. daily_sales
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('daily_sales'),
-            (snap) => {
-              const list = snap.docs
-                .map(d => fromFirestoreDailySalesReport(d.data()))
-                .sort((a, b) => b.date.localeCompare(a.date) || b.reportId.localeCompare(a.reportId));
-              latestRef.current.dailySales = list;
-              setDailySales(list);
-              setSyncStatus('synced');
-              setLastSyncTime(new Date().toLocaleTimeString());
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'daily_sales')
-          )
-        );
-
-        // 10. operations
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('operations'),
-            (snap) => {
-              const list = snap.docs
-                .map(d => fromFirestoreDailyOperation(d.data()))
-                .sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date) || b.operationId.localeCompare(a.operationId));
-              latestRef.current.operations = list;
-              setOperations(list);
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'operations')
-          )
-        );
-
-        // 11. ledger
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('ledger'),
-            (snap) => {
-              const list = snap.docs
-                .map(d => fromFirestoreLedgerEntry(d.data()))
-                .sort((a, b) => (b.seq || 0) - (a.seq || 0) || b.ledgerId.localeCompare(a.ledgerId));
-              latestRef.current.ledger = list;
-              setLedger(list);
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'ledger')
-          )
-        );
-
-        // 12. audit_log
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('audit_log'),
-            (snap) => {
-              const list = snap.docs
-                .map(d => fromFirestoreAuditEntry(d.data()))
-                .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '') || b.auditId.localeCompare(a.auditId));
-              latestRef.current.auditLog = list;
-              setAuditLog(list);
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'audit_log')
-          )
-        );
-
-        // 13. dropdown_options
-        unsubs.push(
-          onSnapshot(
-            scopedQuery('dropdown_options'),
-            (snap) => {
-              const list = snap.docs
-                .map(d => fromFirestoreDropdownOption(d.data()))
-                .sort((a, b) => a.optionId.localeCompare(b.optionId));
-              if (list.length > 0) {
-                latestRef.current.dropdownOptions = list;
-                setDropdownOptions(list);
-              }
-            },
-            (err) => handleFirestoreError(err, OperationType.LIST, 'dropdown_options')
-          )
-        );
-
-        if (!cancelled) {
-          setCloudAccessStatus('connected');
-          setSyncStatus('synced');
-          setLastSyncTime(new Date().toLocaleTimeString());
-        }
-      } catch (err: any) {
-        if (!cancelled) {
-          setCloudAccessStatus('offline');
-          setCloudError(err?.message || 'Unable to connect to cloud sync database.');
-          setSyncStatus('offline');
-        }
-      }
-    };
-
-    setupRealtimeSync();
-
-    return () => {
-      cancelled = true;
-      unsubs.forEach(fn => fn());
-    };
-  }, [firebaseUser, isFirebaseAuthReady, reconnectSeq]);
-
-  const signInWithGoogle = async () => {
-    setCloudError(null);
-    await signInWithPopup(auth, googleProvider);
-  };
-
-  const signOutGoogle = async () => {
-    await signOut(auth);
-    setCurrentUser(null);
-    localStorage.removeItem('mm_user');
-  };
-
-  const retryCloudConnection = async () => {
-    setReconnectSeq(n => n + 1);
-  };
-
-  const triggerManualSync = async () => {
-    if (!firebaseUser) return;
-    setSyncStatus('syncing');
-    setReconnectSeq(n => n + 1);
-  };
-
-  // Authorize another Google email (e.g. friend's or staff's Gmail) for multi-device sync
-  const authorizeCloudEmail = async (rawEmail: string, label: string, role: 'ADMIN' | 'STAFF') => {
-    if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    if (!firebaseUser?.email) throw new Error('Connect Google Cloud Sync first.');
-    const fbEmail = firebaseUser.email.trim().toLowerCase();
-    const isOwner = isBootstrappedAdminEmail(fbEmail);
-    if (!isOwner) {
-      throw new Error(`Only a Shop Owner (${BOOTSTRAPPED_ADMIN_EMAILS.join(', ')}) can add or remove Cloud Sync Google accounts.`);
-    }
-
-    const cleanEmail = rawEmail.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes('@') || cleanEmail.length < 5 || cleanEmail.length > 160) {
-      throw new Error('Enter a valid Google email address.');
-    }
-    const nextMembers = sanitizeEmailList([...memberEmailsRef.current, cleanEmail]);
-    memberEmailsRef.current = nextMembers;
-
-    const memberId = makeSafeMemberId(cleanEmail);
-    const memberRef = doc(db, 'cloud_members', memberId);
-    const existingMemberSnap = await getDoc(memberRef);
-    const ops: BatchOp[] = [
-      existingMemberSnap.exists()
-        ? {
-            type: 'update',
-            ref: memberRef,
-            data: {
-              label: clampStr(label.trim() || cleanEmail, 80),
-              role,
-              updatedAt: serverTimestamp(),
-            },
-          }
-        : {
-            type: 'set',
-            ref: memberRef,
-            data: {
-              memberId,
-              email: cleanEmail,
-              label: clampStr(label.trim() || cleanEmail, 80),
-              role,
-              addedBy: clampStr(fbEmail || currentUser.username, 160),
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            },
-          },
-      {
-        type: 'update',
-        ref: doc(db, 'workspace_meta', 'main'),
-        data: {
-          memberEmails: nextMembers,
-          updatedAt: serverTimestamp(),
-        },
-      },
-    ];
-
-    // Stamp memberEmails onto all shared workspace documents so the new user's live queries receive everything
-    const cols = [
-      'staff_users',
-      'products',
-      'stock',
-      'purchases',
-      'requests',
-      'transfers',
-      'daily_sales',
-      'operations',
-      'ledger',
-      'audit_log',
-      'dropdown_options',
-    ];
-    for (const colName of cols) {
-      try {
-        const snap = await getDocs(collection(db, colName));
-        snap.docs.forEach(d => {
-          ops.push({
-            type: 'update',
-            ref: doc(db, colName, d.id),
-            data: {
-              memberEmails: nextMembers,
-              updatedAt: serverTimestamp(),
-            },
-          });
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.LIST, colName);
-      }
-    }
-
-    const auditEntry = buildAuditEntry('CLOUD_MEMBER_ADDED', memberId, `${cleanEmail} (${role})`);
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, nextMembers, true),
-    });
-
-    await commitFirestoreOps(ops, 'authorize_cloud_email');
-  };
-
-  const revokeCloudEmail = async (memberId: string, rawEmail: string) => {
-    if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    if (!firebaseUser?.email) throw new Error('Connect Google Cloud Sync first.');
-    const fbEmail = firebaseUser.email.trim().toLowerCase();
-    const isOwner = isBootstrappedAdminEmail(fbEmail);
-    if (!isOwner) {
-      throw new Error(`Only a Shop Owner (${BOOTSTRAPPED_ADMIN_EMAILS.join(', ')}) can add or remove Cloud Sync Google accounts.`);
-    }
-
-    const cleanEmail = rawEmail.trim().toLowerCase();
-    if (isBootstrappedAdminEmail(cleanEmail)) {
-      throw new Error('Cannot remove a primary owner account.');
-    }
-    const nextMembers = sanitizeEmailList(memberEmailsRef.current.filter(e => e !== cleanEmail));
-    memberEmailsRef.current = nextMembers;
-
-    const ops: BatchOp[] = [
-      { type: 'delete', ref: doc(db, 'cloud_members', memberId) },
-      {
-        type: 'update',
-        ref: doc(db, 'workspace_meta', 'main'),
-        data: { memberEmails: nextMembers, updatedAt: serverTimestamp() },
-      },
-    ];
-
-    const cols = [
-      'staff_users',
-      'products',
-      'stock',
-      'purchases',
-      'requests',
-      'transfers',
-      'daily_sales',
-      'operations',
-      'ledger',
-      'audit_log',
-      'dropdown_options',
-    ];
-    for (const colName of cols) {
-      try {
-        const snap = await getDocs(collection(db, colName));
-        snap.docs.forEach(d => {
-          ops.push({
-            type: 'update',
-            ref: doc(db, colName, d.id),
-            data: { memberEmails: nextMembers, updatedAt: serverTimestamp() },
-          });
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.LIST, colName);
-      }
-    }
-
-    await commitFirestoreOps(ops, 'revoke_cloud_email');
-  };
-
   // Sync theme
   useEffect(() => {
     if (theme === 'dark') {
@@ -1362,22 +855,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const writeAuditAsync = async (entry: AuditLogEntry) => {
     commitLocalState({ auditLog: [entry, ...latestRef.current.auditLog] });
-    if (cloudAccessStatus === 'connected') {
-      await commitFirestoreOps(
-        [{ type: 'set', ref: doc(db, 'audit_log', entry.auditId), data: toFirestoreAuditEntry(entry, memberEmailsRef.current, true) }],
-        'audit_log'
-      );
-    }
+    await syncToServer(['auditLog']);
   };
 
-  // Stock Movement Engine - returns atomic Firestore BatchOps alongside local optimistic state update
+  // Stock Movement Engine
   const applyMovements = (
     moves: { loc: StockLocation; productId: string; delta: number }[],
     refType: StockLedgerEntry['refType'],
     refId: string,
     bDate?: string,
     actor?: User
-  ): BatchOp[] => {
+  ): boolean => {
     const now = getNowTimestamp();
     const effectiveBDate = bDate || businessDate || now.slice(0, 10);
     const curState = latestRef.current;
@@ -1388,12 +876,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const updatedStock = { ...curState.stock };
     const newLedgerEntries: StockLedgerEntry[] = [];
     const newAuditEntries: AuditLogEntry[] = [];
-    const firestoreOps: BatchOp[] = [];
-    const perProductDeltas: Record<string, { godown?: number; normal?: number; ac?: number; existed: boolean; snapshot: { godown: number; normal: number; ac: number } }> = {};
 
     moves.forEach((m) => {
       if (!m.delta) return;
-      const existed = Boolean(updatedStock[m.productId]);
       const currentLocStock = updatedStock[m.productId] || { godown: 0, normal: 0, ac: 0 };
       const key = m.loc.toLowerCase() as 'godown' | 'normal' | 'ac';
       const before = currentLocStock[key] || 0;
@@ -1405,17 +890,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         throw new Error(`Not enough stock of ${pName} at ${m.loc}: it has ${before} but ${-m.delta} is needed.`);
       }
 
-      const nextProdStock = {
+      updatedStock[m.productId] = {
         ...currentLocStock,
         [key]: after
       };
-      updatedStock[m.productId] = nextProdStock;
-
-      if (!perProductDeltas[m.productId]) {
-        perProductDeltas[m.productId] = { existed, snapshot: nextProdStock };
-      }
-      perProductDeltas[m.productId][key] = (perProductDeltas[m.productId][key] || 0) + m.delta;
-      perProductDeltas[m.productId].snapshot = nextProdStock;
 
       const prod = productMap.get(m.productId);
       const offsetIdx = newLedgerEntries.length;
@@ -1435,11 +913,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         businessDate: effectiveBDate
       };
       newLedgerEntries.push(lEntry);
-      firestoreOps.push({
-        type: 'set',
-        ref: doc(db, 'ledger', lEntry.ledgerId),
-        data: toFirestoreLedgerEntry(lEntry, memberEmailsRef.current, true),
-      });
 
       const aEntry = buildAuditEntry(
         'STOCK_CHANGE',
@@ -1449,28 +922,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         offsetIdx
       );
       newAuditEntries.unshift(aEntry);
-      firestoreOps.push({
-        type: 'set',
-        ref: doc(db, 'audit_log', aEntry.auditId),
-        data: toFirestoreAuditEntry(aEntry, memberEmailsRef.current, true),
-      });
-    });
-
-    Object.entries(perProductDeltas).forEach(([pid, info]) => {
-      if (info.existed) {
-        const op = buildStockIncrementOp(pid, {
-          godown: info.godown,
-          normal: info.normal,
-          ac: info.ac,
-        });
-        if (op) firestoreOps.push(op);
-      } else {
-        firestoreOps.push({
-          type: 'set',
-          ref: doc(db, 'stock', pid),
-          data: toFirestoreStockLevel(pid, info.snapshot, memberEmailsRef.current, true),
-        });
-      }
     });
 
     if (newLedgerEntries.length > 0) {
@@ -1481,9 +932,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         },
         newAuditEntries
       );
+      return true;
     }
 
-    return firestoreOps;
+    return false;
   };
 
   // Stock items with computed available quantities
@@ -1520,11 +972,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const user = curUsers.find(u => u.username.toLowerCase() === cleanU && u.active);
     if (!user) {
       await writeAuditAsync(buildAuditEntry('LOGIN_FAILED', '', `Unknown user or inactive: ${cleanU}`));
-      return { success: false, error: 'Wrong username or password.' };
+      return { success: false, error: 'Wrong User ID or password.' };
     }
     if (user.password && user.password !== password) {
       await writeAuditAsync(buildAuditEntry('LOGIN_FAILED', '', `Incorrect password for ${cleanU}`, user));
-      return { success: false, error: 'Wrong username or password.' };
+      return { success: false, error: 'Wrong User ID or password.' };
     }
     setCurrentUser(user);
     localStorage.setItem('mm_user', JSON.stringify(user));
@@ -1534,7 +986,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const logout = () => {
     if (currentUser) {
-      writeAuditAsync(buildAuditEntry('LOGOUT', '', 'User signed out'));
+      void writeAuditAsync(buildAuditEntry('LOGOUT', '', 'User signed out'));
     }
     setCurrentUser(null);
     localStorage.removeItem('mm_user');
@@ -1545,7 +997,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (u) {
       setCurrentUser(u);
       localStorage.setItem('mm_user', JSON.stringify(u));
-      writeAuditAsync(buildAuditEntry('USER_SWITCH', '', `Switched active profile to ${u.username}`));
+      void writeAuditAsync(buildAuditEntry('USER_SWITCH', '', `Switched active profile to ${u.username}`));
     }
   };
 
@@ -1554,8 +1006,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (currentUser.password && currentUser.password !== oldPw) {
       throw new Error('Current password is incorrect.');
     }
-    if (newPw.length < 8) {
-      throw new Error('Password must be at least 8 characters.');
+    if (newPw.length < 4) {
+      throw new Error('Password must be at least 4 characters.');
     }
     const now = getNowTimestamp();
     const nextUsers = latestRef.current.users.map(u =>
@@ -1566,24 +1018,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem('mm_user', JSON.stringify(updatedMe));
     const auditEntry = buildAuditEntry('PASSWORD_CHANGED', currentUser.userId, 'User changed own password');
     commitLocalState({ users: nextUsers }, [auditEntry]);
-
-    await commitFirestoreOps([
-      {
-        type: 'update',
-        ref: doc(db, 'staff_users', currentUser.userId),
-        data: {
-          password: clampStr(newPw, 128),
-          mustChange: false,
-          updatedAtStr: now,
-          updatedAt: serverTimestamp(),
-        },
-      },
-      {
-        type: 'set',
-        ref: doc(db, 'audit_log', auditEntry.auditId),
-        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-      },
-    ], 'staff_users');
+    await syncToServer(['users', 'auditLog']);
   };
 
   // Product management
@@ -1610,29 +1045,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       );
       const auditEntry = buildAuditEntry('PRODUCT_UPDATED', p.productId, `${p.name} ${p.sizeML}ml (${pack}/case) ₹${p.sellingPrice}`);
       commitLocalState({ products: nextProducts }, [auditEntry]);
-
-      await commitFirestoreOps([
-        {
-          type: 'update',
-          ref: doc(db, 'products', p.productId),
-          data: {
-            name: clampStr(updatedProd.name, 140),
-            category: clampStr(updatedProd.category, 80),
-            sizeML: Math.max(0, Number(updatedProd.sizeML) || 0),
-            casePack: Math.max(1, Number(updatedProd.casePack) || 1),
-            sellingPrice: Math.max(0, Number(updatedProd.sellingPrice) || 0),
-            active: Boolean(updatedProd.active),
-            updatedAtStr: now,
-            updatedBy: clampStr(currentUser.username, 80),
-            updatedAt: serverTimestamp(),
-          },
-        },
-        {
-          type: 'set',
-          ref: doc(db, 'audit_log', auditEntry.auditId),
-          data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-        },
-      ], 'products');
+      await syncToServer(['products', 'auditLog']);
       return p.productId;
     } else {
       const newId = nextPrefixedId('PRD', curProducts.map(x => x.productId), 6);
@@ -1655,24 +1068,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         },
         [auditEntry]
       );
-
-      await commitFirestoreOps([
-        {
-          type: 'set',
-          ref: doc(db, 'products', newId),
-          data: toFirestoreProduct(newProduct, memberEmailsRef.current, true),
-        },
-        {
-          type: 'set',
-          ref: doc(db, 'stock', newId),
-          data: toFirestoreStockLevel(newId, { godown: 0, normal: 0, ac: 0 }, memberEmailsRef.current, true),
-        },
-        {
-          type: 'set',
-          ref: doc(db, 'audit_log', auditEntry.auditId),
-          data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-        },
-      ], 'products');
+      await syncToServer(['products', 'stock', 'auditLog']);
       return newId;
     }
   };
@@ -1704,20 +1100,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (moves.length === 0) return;
 
     const refId = `ADJ-${Date.now().toString().slice(-6)}`;
-    const ops = applyMovements(moves, 'ADJUSTMENT', refId, businessDate);
+    applyMovements(moves, 'ADJUSTMENT', refId, businessDate);
     const auditEntry = buildAuditEntry(
       'ADMIN_STOCK_EDITED',
       refId,
       `${prod.name} ${prod.sizeML}ml | Godown: ${cur.godown || 0}→${nextGodown}, Normal: ${cur.normal || 0}→${nextNormal}, AC: ${cur.ac || 0}→${nextAc}${data.reason?.trim() ? ` | Reason: ${data.reason.trim()}` : ''}`
     );
     commitLocalState({}, [auditEntry]);
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'stock');
+    await syncToServer(['stock', 'ledger', 'auditLog']);
   };
 
   // Purchases
@@ -1808,20 +1198,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
 
     commitLocalState({ purchases: [newBatch, ...curPurchases] }, [auditEntry]);
-
-    await commitFirestoreOps([
-      {
-        type: 'set',
-        ref: doc(db, 'purchases', batchId),
-        data: toFirestorePurchaseBatch(newBatch, memberEmailsRef.current, true),
-      },
-      {
-        type: 'set',
-        ref: doc(db, 'audit_log', auditEntry.auditId),
-        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-      },
-    ], 'purchases');
-
+    await syncToServer(['purchases', 'auditLog']);
     return batchId;
   };
 
@@ -1832,14 +1209,16 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!batch) throw new Error('Purchase entry not found.');
     if (batch.status !== 'Pending') throw new Error('This purchase entry was already reviewed.');
 
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['purchases', 'auditLog'];
     if (decision === 'APPROVE') {
       const moves = batch.lines.map(l => ({
         loc: 'GODOWN' as StockLocation,
         productId: l.productId,
         delta: l.qty
       }));
-      ops.push(...applyMovements(moves, 'PURCHASE', batchId, batch.date));
+      if (applyMovements(moves, 'PURCHASE', batchId, batch.date)) {
+        dirtySlices.push('stock', 'ledger');
+      }
     }
 
     const now = getNowTimestamp();
@@ -1862,25 +1241,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       `${batch.supplier} | ${batch.lines.length} items | net ₹${batch.netTotal} ${remark ? `(${remark})` : ''}`
     );
     commitLocalState({ purchases: nextPurchases }, [auditEntry]);
-
-    ops.push({
-      type: 'update',
-      ref: doc(db, 'purchases', batchId),
-      data: {
-        status: nextStatus,
-        reviewedBy: clampStr(currentUser.username, 80),
-        reviewedAtStr: now,
-        remark: clampStr(remark || '', 300),
-        updatedAt: serverTimestamp(),
-      },
-    });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'purchases');
+    await syncToServer(dirtySlices);
   };
 
   const editPurchaseRecord = async (id: string, updates: {
@@ -1890,7 +1251,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
     let foundLine: any = null;
     let targetBatch: PurchaseBatch | null = null;
-    let updatedBatchObj: PurchaseBatch | null = null;
+    const now = getNowTimestamp();
 
     const nextPurchases = latestRef.current.purchases.map(batch => {
       const line = batch.lines.find(l => l.id === id);
@@ -1917,7 +1278,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             : l
         );
 
-        updatedBatchObj = {
+        return {
           ...batch,
           date: updates.date,
           billDate: updates.billDate,
@@ -1926,54 +1287,26 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           lines: updatedLines,
           totalQty: updatedLines.reduce((s, l) => s + l.qty, 0),
           netTotal: Math.round(updatedLines.reduce((s, l) => s + l.netAmount, 0)),
+          reviewedAt: batch.reviewedAt || now,
           remark: `${batch.remark ? batch.remark + ' | ' : ''}Admin correction: ${updates.reason}`
         };
-        return updatedBatchObj;
       }
       return batch;
     });
 
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['purchases', 'auditLog'];
     if (foundLine && targetBatch && (targetBatch as PurchaseBatch).status === 'Approved') {
       const delta = updates.qty - foundLine.qty;
       if (delta !== 0) {
-        ops.push(...applyMovements(
-          [{ loc: 'GODOWN', productId: foundLine.productId, delta }],
-          'PURCHASE_CORRECTION',
-          id,
-          updates.date
-        ));
+        if (applyMovements([{ loc: 'GODOWN', productId: foundLine.productId, delta }], 'PURCHASE_CORRECTION', id, updates.date)) {
+          dirtySlices.push('stock', 'ledger');
+        }
       }
     }
 
     const auditEntry = buildAuditEntry('ADMIN_HISTORICAL_PURCHASE_EDIT', id, `Updated purchase row | reason: ${updates.reason}`);
     commitLocalState({ purchases: nextPurchases }, [auditEntry]);
-
-    if (updatedBatchObj) {
-      const b = updatedBatchObj as PurchaseBatch;
-      ops.push({
-        type: 'update',
-        ref: doc(db, 'purchases', b.batchId),
-        data: {
-          date: clampStr(b.date, 20),
-          billDate: clampStr(b.billDate, 20),
-          supplier: clampStr(b.supplier, 160),
-          invoiceNo: clampStr(b.invoiceNo, 80),
-          lines: toFirestorePurchaseBatch(b, memberEmailsRef.current, false).lines,
-          totalQty: b.totalQty,
-          netTotal: b.netTotal,
-          remark: clampStr(b.remark || '', 300),
-          updatedAt: serverTimestamp(),
-        },
-      });
-    }
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'purchases');
+    await syncToServer(dirtySlices);
   };
 
   const deletePurchaseBatch = async (batchId: string) => {
@@ -1982,7 +1315,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const batch = curPurchases.find(p => p.batchId === batchId);
     if (!batch) throw new Error('Purchase entry not found.');
 
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['purchases', 'auditLog'];
     if (batch.status === 'Approved') {
       const reverseMoves = batch.lines
         .filter(l => l.qty > 0)
@@ -1991,22 +1324,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           productId: l.productId,
           delta: -l.qty
         }));
-      if (reverseMoves.length > 0) {
-        ops.push(...applyMovements(reverseMoves, 'PURCHASE_CORRECTION', batchId, batch.date));
+      if (reverseMoves.length > 0 && applyMovements(reverseMoves, 'PURCHASE_CORRECTION', batchId, batch.date)) {
+        dirtySlices.push('stock', 'ledger');
       }
     }
 
     const auditEntry = buildAuditEntry('PURCHASE_DELETED', batchId, `${batch.supplier} | Invoice #${batch.invoiceNo} | ${batch.totalQty} btls | ₹${batch.netTotal}`);
     commitLocalState({ purchases: latestRef.current.purchases.filter(p => p.batchId !== batchId) }, [auditEntry]);
-
-    ops.push({ type: 'delete', ref: doc(db, 'purchases', batchId) });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'purchases');
+    await syncToServer(dirtySlices, { purchases: [batchId] });
   };
 
   // Requests
@@ -2051,19 +1376,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const totalBottles = newRequests.reduce((s, r) => s + r.qty, 0);
     const auditEntry = buildAuditEntry('REQUEST_SUBMITTED', newRequests[0].requestId, `${counter} requested ${newRequests.length} item(s), ${totalBottles} bottles | ${data.reason}`);
     commitLocalState({ requests: [...newRequests, ...curRequests] }, [auditEntry]);
-
-    const ops: BatchOp[] = newRequests.map(r => ({
-      type: 'set' as const,
-      ref: doc(db, 'requests', r.requestId),
-      data: toFirestoreStockRequest(r, memberEmailsRef.current, true),
-    }));
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'requests');
+    await syncToServer(['requests', 'auditLog']);
   };
 
   const reviewRequestGroup = async (ids: string[], decision: 'APPROVE' | 'REJECT', remark?: string, skipShort = false) => {
@@ -2096,9 +1409,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     });
 
-    const ops: BatchOp[] = [];
-    if (moves.length > 0) {
-      ops.push(...applyMovements(moves, 'REQUEST', ids[0], targetRequests[0].date));
+    const dirtySlices = ['requests', 'auditLog'];
+    if (moves.length > 0 && applyMovements(moves, 'REQUEST', ids[0], targetRequests[0].date)) {
+      dirtySlices.push('stock', 'ledger');
     }
 
     const now = getNowTimestamp();
@@ -2124,40 +1437,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       `Reviewed ${ids.length} requests: ${approvedIds.length} approved, ${rejectedIds.length} rejected`
     );
     commitLocalState({ requests: nextRequests }, [auditEntry]);
-
-    approvedIds.forEach(reqId => {
-      ops.push({
-        type: 'update',
-        ref: doc(db, 'requests', reqId),
-        data: {
-          status: 'Approved',
-          reviewedBy: clampStr(currentUser.username, 80),
-          reviewedAtStr: now,
-          remark: clampStr(remark || '', 300),
-          updatedAt: serverTimestamp(),
-        },
-      });
-    });
-    rejectedIds.forEach(reqId => {
-      ops.push({
-        type: 'update',
-        ref: doc(db, 'requests', reqId),
-        data: {
-          status: 'Rejected',
-          reviewedBy: clampStr(currentUser.username, 80),
-          reviewedAtStr: now,
-          remark: clampStr(remark || (decision === 'APPROVE' ? 'Not enough godown stock' : 'Rejected by admin'), 300),
-          updatedAt: serverTimestamp(),
-        },
-      });
-    });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'requests');
+    await syncToServer(dirtySlices);
 
     return { approved: approvedIds.length, rejected: rejectedIds.length };
   };
@@ -2188,12 +1468,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const autoApproved = !isAdmin;
     const now = getNowTimestamp();
 
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['transfers', 'auditLog'];
     if (autoApproved) {
-      ops.push(...applyMovements([
+      if (applyMovements([
         { loc: fromLoc, productId: data.productId, delta: -totalBottles },
         { loc: toLoc, productId: data.productId, delta: totalBottles }
-      ], 'TRANSFER', transferId));
+      ], 'TRANSFER', transferId)) {
+        dirtySlices.push('stock', 'ledger');
+      }
     }
 
     const newTransfer: StockTransfer = {
@@ -2222,19 +1504,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       `${fromLoc} → ${toLoc} | ${prod.name} x ${totalBottles} btls ${data.note ? `(${data.note})` : ''}`
     );
     commitLocalState({ transfers: [newTransfer, ...latestRef.current.transfers] }, [auditEntry]);
-
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'transfers', transferId),
-      data: toFirestoreStockTransfer(newTransfer, memberEmailsRef.current, true),
-    });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'transfers');
+    await syncToServer(dirtySlices);
 
     return { autoApproved };
   };
@@ -2381,14 +1651,14 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const expected = totalVal + acCharges;
     const diff = Math.round((totalCollected - expected) * 100) / 100;
 
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['dailySales', 'auditLog'];
     const moves = reportLines.filter(l => l.sold > 0).map(l => ({
       loc: counter as StockLocation,
       productId: l.productId,
       delta: -l.sold
     }));
-    if (moves.length > 0) {
-      ops.push(...applyMovements(moves, 'SALE', reportId, data.date));
+    if (moves.length > 0 && applyMovements(moves, 'SALE', reportId, data.date)) {
+      dirtySlices.push('stock', 'ledger');
     }
 
     const now = getNowTimestamp();
@@ -2423,19 +1693,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       `${data.date} | ${counter} | sold ${totalSold} btls | ₹${newReport.totalSalesValue}${acCharges > 0 ? ` + ₹${acCharges} AC` : ''} (Auto-Approved)`
     );
     commitLocalState({ dailySales: [newReport, ...latestRef.current.dailySales] }, [auditEntry]);
-
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'daily_sales', reportId),
-      data: toFirestoreDailySalesReport(newReport, memberEmailsRef.current, true),
-    });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'daily_sales');
+    await syncToServer(dirtySlices);
     return reportId;
   };
 
@@ -2508,20 +1766,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const auditEntry = buildAuditEntry('ADMIN_HISTORICAL_SALES_CREATED', reportId, `${data.date} | ${data.counter} | sold ${totalSold} | ₹${totalVal} | stock unchanged | ${data.reason}`);
     commitLocalState({ dailySales: [newReport, ...latestRef.current.dailySales] }, [auditEntry]);
-
-    await commitFirestoreOps([
-      {
-        type: 'set',
-        ref: doc(db, 'daily_sales', reportId),
-        data: toFirestoreDailySalesReport(newReport, memberEmailsRef.current, true),
-      },
-      {
-        type: 'set',
-        ref: doc(db, 'audit_log', auditEntry.auditId),
-        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-      },
-    ], 'daily_sales');
-
+    await syncToServer(['dailySales', 'auditLog']);
     return reportId;
   };
 
@@ -2568,9 +1813,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return { ...l, closing: newClosing, sold: newSold, value: newVal };
     });
 
-    const ops: BatchOp[] = [];
-    if (stockMoves.length > 0) {
-      ops.push(...applyMovements(stockMoves, 'SALES_CORRECTION', reportId, report.date));
+    const dirtySlices = ['dailySales', 'auditLog'];
+    if (stockMoves.length > 0 && applyMovements(stockMoves, 'SALES_CORRECTION', reportId, report.date)) {
+      dirtySlices.push('stock', 'ledger');
     }
 
     const now = getNowTimestamp();
@@ -2593,29 +1838,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const auditEntry = buildAuditEntry('SALES_EDITED', reportId, `Sold ${report.totalSoldQty} → ${totalSold} | ${data.reason}`);
     commitLocalState({ dailySales: nextSales }, [auditEntry]);
-
-    const updatedReport = nextSales.find(r => r.reportId === reportId)!;
-    ops.push({
-      type: 'update',
-      ref: doc(db, 'daily_sales', reportId),
-      data: {
-        totalSoldQty: totalSold,
-        totalSalesValue: nextSalesVal,
-        recordedAmount: data.recordedAmount,
-        lines: toFirestoreDailySalesReport(updatedReport, memberEmailsRef.current, false).lines,
-        editedBy: clampStr(currentUser?.username || 'admin', 80),
-        editedAtStr: now,
-        remark: clampStr(nextRemark, 300),
-        updatedAt: serverTimestamp(),
-      },
-    });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'daily_sales');
+    await syncToServer(dirtySlices);
   };
 
   const reviewDailySales = async (reportId: string, decision: 'APPROVE' | 'REJECT', remark?: string) => {
@@ -2624,14 +1847,16 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!report) throw new Error('Report not found');
     if (report.status !== 'Pending') throw new Error('Report already reviewed.');
 
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['dailySales', 'auditLog'];
     if (decision === 'APPROVE') {
       const moves = report.lines.filter(l => l.sold > 0).map(l => ({
         loc: report.counter as StockLocation,
         productId: l.productId,
         delta: -l.sold
       }));
-      ops.push(...applyMovements(moves, 'SALE', reportId, report.date));
+      if (applyMovements(moves, 'SALE', reportId, report.date)) {
+        dirtySlices.push('stock', 'ledger');
+      }
     }
 
     const now = getNowTimestamp();
@@ -2648,25 +1873,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       `${report.counter} | ${report.date} | sold ${report.totalSoldQty} btls ${remark ? `(${remark})` : ''}`
     );
     commitLocalState({ dailySales: nextSales }, [auditEntry]);
-
-    ops.push({
-      type: 'update',
-      ref: doc(db, 'daily_sales', reportId),
-      data: {
-        status: nextStatus,
-        reviewedBy: clampStr(currentUser.username, 80),
-        reviewedAtStr: now,
-        remark: clampStr(remark || '', 300),
-        updatedAt: serverTimestamp(),
-      },
-    });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'daily_sales');
+    await syncToServer(dirtySlices);
   };
 
   const adminDeleteDailySales = async (reportId: string, reason?: string) => {
@@ -2677,7 +1884,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!report) throw new Error('Daily sales report not found.');
 
     const isHistoricalOnly = report.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['dailySales', 'auditLog'];
 
     if (report.status === 'Approved' && !isHistoricalOnly) {
       const reverseMoves = report.lines
@@ -2688,8 +1895,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           delta: l.sold
         }));
 
-      if (reverseMoves.length > 0) {
-        ops.push(...applyMovements(reverseMoves, 'SALES_CORRECTION', reportId, report.date));
+      if (reverseMoves.length > 0 && applyMovements(reverseMoves, 'SALES_CORRECTION', reportId, report.date)) {
+        dirtySlices.push('stock', 'ledger');
       }
     }
 
@@ -2699,15 +1906,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       `${report.date} | ${report.counter} | reversed ${report.totalSoldQty} btls (₹${report.totalSalesValue})${reason?.trim() ? ` | Reason: ${reason.trim()}` : ''}`
     );
     commitLocalState({ dailySales: latestRef.current.dailySales.filter(r => r.reportId !== reportId) }, [auditEntry]);
-
-    ops.push({ type: 'delete', ref: doc(db, 'daily_sales', reportId) });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'daily_sales');
+    await syncToServer(dirtySlices, { dailySales: [reportId] });
   };
 
   // Daily Operations
@@ -2721,7 +1920,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const opId = `${nextPrefixedId('OPR', curOps.map(o => o.operationId), 6)}-${uniqueSuffix()}`;
     const now = getNowTimestamp();
     const status = 'Approved';
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['operations', 'auditLog'];
 
     if (data.type === 'DAMAGE') {
       if (!data.productId) throw new Error('Choose a product.');
@@ -2731,7 +1930,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (qty > avail) {
         throw new Error(`Damaged quantity (${qty}) exceeds stock available at ${loc} (${avail}).`);
       }
-      ops.push(...applyMovements([{ loc, productId: data.productId, delta: -qty }], 'DAMAGE', opId, data.date));
+      if (applyMovements([{ loc, productId: data.productId, delta: -qty }], 'DAMAGE', opId, data.date)) {
+        dirtySlices.push('stock', 'ledger');
+      }
     }
 
     const prod = data.productId ? latestRef.current.products.find(p => p.productId === data.productId) : null;
@@ -2757,19 +1958,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const auditEntry = buildAuditEntry('DAILY_OPERATION_SAVED', opId, `${data.type} | ${data.date} | ${data.name} | ₹${data.amount || data.qty}`);
     commitLocalState({ operations: [newOp, ...latestRef.current.operations] }, [auditEntry]);
-
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'operations', opId),
-      data: toFirestoreDailyOperation(newOp, memberEmailsRef.current, true),
-    });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'operations');
+    await syncToServer(dirtySlices);
     return opId;
   };
 
@@ -2804,19 +1993,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const auditEntry = buildAuditEntry('DAILY_OPERATIONS_BATCH', newOps[0].operationId, `${data.type} batch: ${newOps.length} items | ₹${total}`);
     commitLocalState({ operations: [...newOps, ...latestRef.current.operations] }, [auditEntry]);
-
-    const ops: BatchOp[] = newOps.map(o => ({
-      type: 'set' as const,
-      ref: doc(db, 'operations', o.operationId),
-      data: toFirestoreDailyOperation(o, memberEmailsRef.current, true),
-    }));
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'operations');
+    await syncToServer(['operations', 'auditLog']);
     return { count: newOps.length, total: Math.round(total * 100) / 100 };
   };
 
@@ -2825,23 +2002,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const op = latestRef.current.operations.find(o => o.operationId === operationId);
     if (!op) throw new Error('Entry not found.');
 
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['operations', 'auditLog'];
     if (op.type === 'DAMAGE' && op.status === 'Approved' && op.productId && op.qty) {
       const loc = op.location || 'GODOWN';
-      ops.push(...applyMovements([{ loc, productId: op.productId, delta: op.qty }], 'ADJUSTMENT', operationId, op.date));
+      if (applyMovements([{ loc, productId: op.productId, delta: op.qty }], 'ADJUSTMENT', operationId, op.date)) {
+        dirtySlices.push('stock', 'ledger');
+      }
     }
 
     const auditEntry = buildAuditEntry('DAILY_OPERATION_DELETED', operationId, `${op.type} | ${op.date} | ${op.name} | ₹${op.amount || op.qty || 0}`);
     commitLocalState({ operations: latestRef.current.operations.filter(o => o.operationId !== operationId) }, [auditEntry]);
-
-    ops.push({ type: 'delete', ref: doc(db, 'operations', operationId) });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'operations');
+    await syncToServer(dirtySlices, { operations: [operationId] });
   };
 
   const reviewDailyOperation = async (id: string, decision: 'APPROVE' | 'REJECT', remark?: string) => {
@@ -2849,10 +2020,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const op = latestRef.current.operations.find(o => o.operationId === id);
     if (!op) throw new Error('Operation not found.');
 
-    const ops: BatchOp[] = [];
+    const dirtySlices = ['operations', 'auditLog'];
     if (decision === 'APPROVE' && op.type === 'DAMAGE' && op.productId && op.qty) {
       const loc = op.location || 'GODOWN';
-      ops.push(...applyMovements([{ loc, productId: op.productId, delta: -op.qty }], 'DAMAGE', id, op.date));
+      if (applyMovements([{ loc, productId: op.productId, delta: -op.qty }], 'DAMAGE', id, op.date)) {
+        dirtySlices.push('stock', 'ledger');
+      }
     }
 
     const now = getNowTimestamp();
@@ -2865,25 +2038,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const auditEntry = buildAuditEntry(`DAILY_OPERATION_${decision}`, id, `${op.type} | ${remark || ''}`);
     commitLocalState({ operations: nextOps }, [auditEntry]);
-
-    ops.push({
-      type: 'update',
-      ref: doc(db, 'operations', id),
-      data: {
-        status: nextStatus,
-        reviewedBy: clampStr(currentUser.username, 80),
-        reviewedAtStr: now,
-        reviewRemark: clampStr(remark || '', 300),
-        updatedAt: serverTimestamp(),
-      },
-    });
-    ops.push({
-      type: 'set',
-      ref: doc(db, 'audit_log', auditEntry.auditId),
-      data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-    });
-
-    await commitFirestoreOps(ops, 'operations');
+    await syncToServer(dirtySlices);
   };
 
   // Administration helpers
@@ -2895,18 +2050,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const nextSuppliers = [...curSuppliers, trimmed].slice(0, 100);
       const auditEntry = buildAuditEntry('SUPPLIER_ADDED', '', trimmed);
       commitLocalState({ suppliers: nextSuppliers }, [auditEntry]);
-      await commitFirestoreOps([
-        {
-          type: 'update',
-          ref: doc(db, 'workspace_meta', 'main'),
-          data: { suppliers: nextSuppliers, updatedAt: serverTimestamp() },
-        },
-        {
-          type: 'set',
-          ref: doc(db, 'audit_log', auditEntry.auditId),
-          data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-        },
-      ], 'workspace_meta/main');
+      await syncToServer(['suppliers', 'auditLog']);
     }
   };
 
@@ -2921,18 +2065,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     const auditEntry = buildAuditEntry('SUPPLIER_DELETED', '', trimmed);
     commitLocalState({ suppliers: nextSuppliers }, [auditEntry]);
-    await commitFirestoreOps([
-      {
-        type: 'update',
-        ref: doc(db, 'workspace_meta', 'main'),
-        data: { suppliers: nextSuppliers, updatedAt: serverTimestamp() },
-      },
-      {
-        type: 'set',
-        ref: doc(db, 'audit_log', auditEntry.auditId),
-        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-      },
-    ], 'workspace_meta/main');
+    await syncToServer(['suppliers', 'auditLog']);
   };
 
   const addDropdownOption = async (type: 'EXPENSE' | 'WAGE', value: string) => {
@@ -2952,19 +2085,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
     const auditEntry = buildAuditEntry('DROPDOWN_OPTION_ADDED', optId, `${type} | ${trimmed}`);
     commitLocalState({ dropdownOptions: [...curOpts, newOpt] }, [auditEntry]);
-
-    await commitFirestoreOps([
-      {
-        type: 'set',
-        ref: doc(db, 'dropdown_options', optId),
-        data: toFirestoreDropdownOption(newOpt, memberEmailsRef.current, true),
-      },
-      {
-        type: 'set',
-        ref: doc(db, 'audit_log', auditEntry.auditId),
-        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-      },
-    ], 'dropdown_options');
+    await syncToServer(['dropdownOptions', 'auditLog']);
   };
 
   const createUser = async (u: { username: string; fullName: string; role: Role; password: string }) => {
@@ -2990,19 +2111,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
     const auditEntry = buildAuditEntry('USER_CREATED', newId, `${cleanU} (${u.role})`);
     commitLocalState({ users: [...curUsers, newUser] }, [auditEntry]);
-
-    await commitFirestoreOps([
-      {
-        type: 'set',
-        ref: doc(db, 'staff_users', newId),
-        data: toFirestoreStaffUser(newUser, memberEmailsRef.current, true),
-      },
-      {
-        type: 'set',
-        ref: doc(db, 'audit_log', auditEntry.auditId),
-        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-      },
-    ], 'staff_users');
+    await syncToServer(['users', 'auditLog']);
   };
 
   const resetUserPassword = async (userId: string, newPw: string) => {
@@ -3013,24 +2122,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
     const auditEntry = buildAuditEntry('PASSWORD_RESET', userId, 'Admin reset user password');
     commitLocalState({ users: nextUsers }, [auditEntry]);
-
-    await commitFirestoreOps([
-      {
-        type: 'update',
-        ref: doc(db, 'staff_users', userId),
-        data: {
-          password: clampStr(newPw, 128),
-          mustChange: true,
-          updatedAtStr: now,
-          updatedAt: serverTimestamp(),
-        },
-      },
-      {
-        type: 'set',
-        ref: doc(db, 'audit_log', auditEntry.auditId),
-        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-      },
-    ], 'staff_users');
+    await syncToServer(['users', 'auditLog']);
   };
 
   const toggleUserActive = async (userId: string, active: boolean) => {
@@ -3044,23 +2136,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
     const auditEntry = buildAuditEntry(active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', userId, '');
     commitLocalState({ users: nextUsers }, [auditEntry]);
-
-    await commitFirestoreOps([
-      {
-        type: 'update',
-        ref: doc(db, 'staff_users', userId),
-        data: {
-          active: Boolean(active),
-          updatedAtStr: now,
-          updatedAt: serverTimestamp(),
-        },
-      },
-      {
-        type: 'set',
-        ref: doc(db, 'audit_log', auditEntry.auditId),
-        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-      },
-    ], 'staff_users');
+    await syncToServer(['users', 'auditLog']);
   };
 
   const reconcileStock = () => {
@@ -3106,7 +2182,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const nextSeq = curState.ledger.reduce((m, l) => Math.max(m, l.seq || 0), 0) + 1;
     const existingLedgerIds = curState.ledger.map(l => l.ledgerId);
     const newEntries: StockLedgerEntry[] = [];
-    const ops: BatchOp[] = [];
 
     curState.products.forEach((p, idx) => {
       const s = curState.stock[p.productId] || { godown: 0, normal: 0, ac: 0 };
@@ -3134,11 +2209,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             businessDate: today
           };
           newEntries.push(entry);
-          ops.push({
-            type: 'set',
-            ref: doc(db, 'ledger', entry.ledgerId),
-            data: toFirestoreLedgerEntry(entry, memberEmailsRef.current, true),
-          });
         }
       });
     });
@@ -3146,12 +2216,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (newEntries.length > 0) {
       const auditEntry = buildAuditEntry('LEDGER_SYNC', 'OPENING-SYNC', `Synced ${newEntries.length} lines from physical stock`);
       commitLocalState({ ledger: [...newEntries, ...curState.ledger] }, [auditEntry]);
-      ops.push({
-        type: 'set',
-        ref: doc(db, 'audit_log', auditEntry.auditId),
-        data: toFirestoreAuditEntry(auditEntry, memberEmailsRef.current, true),
-      });
-      await commitFirestoreOps(ops, 'ledger');
+      await syncToServer(['ledger', 'auditLog']);
     }
 
     return newEntries.length;
@@ -3183,32 +2248,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCurrentUser(INITIAL_USERS[0]);
     localStorage.setItem('mm_user', JSON.stringify(INITIAL_USERS[0]));
 
-    const fbEmail = (firebaseUser?.email || '').trim().toLowerCase();
-    const isOwner = isBootstrappedAdminEmail(fbEmail);
-    const ops: BatchOp[] = [];
-    const colsToClear = ['purchases', 'requests', 'transfers', 'daily_sales', 'operations', 'ledger', 'audit_log'];
-    for (const colName of colsToClear) {
-      try {
-        const qRef = isOwner
-          ? collection(db, colName)
-          : query(collection(db, colName), where('memberEmails', 'array-contains', fbEmail));
-        const snap = await getDocs(qRef);
-        snap.docs.forEach(d => ops.push({ type: 'delete', ref: doc(db, colName, d.id) }));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.LIST, colName);
-      }
-    }
-    const members = memberEmailsRef.current;
-    INITIAL_PRODUCTS.forEach(p => {
-      const s = freshStock[p.productId] || { godown: 0, normal: 0, ac: 0 };
-      ops.push({ type: 'set', ref: doc(db, 'stock', p.productId), data: toFirestoreStockLevel(p.productId, s, members, true) });
-    });
-    ops.push({
-      type: 'update',
-      ref: doc(db, 'workspace_meta', 'main'),
-      data: { suppliers: INITIAL_SUPPLIERS, updatedAt: serverTimestamp() },
-    });
-    await commitFirestoreOps(ops, 'reset_opening');
+    await syncToServer(
+      ['users', 'products', 'stock', 'suppliers', 'dropdownOptions', 'purchases', 'requests', 'transfers', 'dailySales', 'operations', 'ledger', 'auditLog'],
+      undefined,
+      true
+    );
   };
 
   return (
@@ -3230,17 +2274,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         suppliers,
         dropdownOptions,
         pendingCount,
-
-        firebaseUser,
-        isFirebaseAuthReady,
-        cloudAccessStatus,
-        cloudError,
-        cloudMembers,
-        signInWithGoogle,
-        signOutGoogle,
-        retryCloudConnection,
-        authorizeCloudEmail,
-        revokeCloudEmail,
 
         login,
         logout,

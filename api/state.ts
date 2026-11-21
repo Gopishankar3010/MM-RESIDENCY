@@ -28,9 +28,19 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ success: false, error: 'Invalid state' });
     }
 
+    const {
+      _baseVersion: _bv,
+      _dirtySlices: _ds,
+      _deletedIds: _di,
+      _clientId: _cid,
+      _resetRequested: _rr,
+      ...payload
+    } = incoming;
+
     const version = (vercelCachedState?._version || 0) + 1;
     vercelCachedState = {
-      ...incoming,
+      ...(vercelCachedState && !_rr ? vercelCachedState : {}),
+      ...payload,
       _version: version,
       updatedAt: new Date().toISOString()
     };

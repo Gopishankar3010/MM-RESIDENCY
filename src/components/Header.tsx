@@ -16,7 +16,6 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void; onNavigate?: (t
     theme,
     toggleTheme,
     logout,
-    firebaseUser,
     syncStatus,
     lastSyncTime,
     triggerManualSync,
@@ -107,7 +106,7 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void; onNavigate?: (t
         <button
           type="button"
           onClick={triggerManualSync}
-          title={`Live Firebase Cloud Sync (${firebaseUser?.email || 'Connected'}): ${syncStatus === 'synced' ? 'All devices synchronized in real time' : syncStatus === 'syncing' ? 'Syncing...' : 'Offline'} · Last sync: ${lastSyncTime}. Click to refresh.`}
+          title={`Live Server Sync: ${syncStatus === 'synced' ? 'All devices synchronized in real time' : syncStatus === 'syncing' ? 'Syncing...' : 'Offline'} · Last sync: ${lastSyncTime}. Click to refresh.`}
           className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-all cursor-pointer ${
             syncStatus === 'synced'
               ? 'border-emerald-600/40 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/50'
@@ -118,7 +117,7 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void; onNavigate?: (t
         >
           <RefreshCw className={`h-3 w-3 ${syncStatus === 'syncing' ? 'animate-spin text-amber-300' : 'text-emerald-400'}`} />
           <span className="hidden sm:inline font-mono text-[10px]">
-            {syncStatus === 'synced' ? 'Cloud Live' : syncStatus === 'syncing' ? 'Syncing...' : 'Offline'}
+            {syncStatus === 'synced' ? 'Server Live' : syncStatus === 'syncing' ? 'Syncing...' : 'Offline'}
           </span>
         </button>
 
@@ -234,7 +233,7 @@ export const Header: React.FC<{ onOpenPasswordModal: () => void; onNavigate?: (t
                 </div>
 
                 <div className="border-t border-slate-800 p-2.5 bg-slate-950/60 flex items-center justify-between gap-2">
-                  <span className="text-[10px] text-slate-400">Live Firebase Cloud Sync active</span>
+                  <span className="text-[10px] text-slate-400">Live Multi-Device Server Sync active</span>
                   {onNavigate && (
                     <button
                       type="button"

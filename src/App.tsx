@@ -27,11 +27,11 @@ import { UsersView } from './views/UsersView';
 import { AuditView } from './views/AuditView';
 
 const MainLayout: React.FC = () => {
-  const { currentUser, cloudAccessStatus, latestRequestAlert, dismissRequestAlert } = useStock();
+  const { currentUser, latestRequestAlert, dismissRequestAlert } = useStock();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState<boolean>(false);
 
-  if (!currentUser || cloudAccessStatus !== 'connected') {
+  if (!currentUser) {
     return <LoginView />;
   }
 
