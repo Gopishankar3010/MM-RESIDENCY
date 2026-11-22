@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, User as FirebaseUser } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -11,6 +11,19 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
+googleProvider.addScope('email');
+
+/** Resolve the Google email consistently, including provider data when the top-level
+ * Firebase User.email field is temporarily unavailable during auth-state hydration. */
+export function getGoogleAccountEmail(user: FirebaseUser | null | undefined): string {
+  if (!user) return '';
+  const directEmail = (user.email || '').trim();
+  if (directEmail) return directEmail.toLowerCase();
+  const googleProviderEmail = user.providerData
+    ?.find((provider) => provider.providerId === 'google.com' && !!provider.email)
+    ?.email;
+  return (googleProviderEmail || '').trim().toLowerCase();
+}
 
 export enum OperationType {
   CREATE = 'create',

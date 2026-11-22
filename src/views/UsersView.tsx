@@ -6,7 +6,7 @@ import {
   XCircle, Search, Power, Printer, Cloud, Trash2, MailPlus
 } from 'lucide-react';
 import { matchesSearchQuery } from '../data/initialData';
-import { BOOTSTRAPPED_ADMIN_EMAIL } from '../firebase';
+import { BOOTSTRAPPED_ADMIN_EMAIL, getGoogleAccountEmail } from '../firebase';
 
 export const UsersView: React.FC = () => {
   const {
@@ -43,7 +43,7 @@ export const UsersView: React.FC = () => {
   const [isSavingCloudMember, setIsSavingCloudMember] = useState(false);
 
   const isCloudOwner =
-    (firebaseUser?.email || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    getGoogleAccountEmail(firebaseUser) === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
 
   if (currentUser?.role !== 'ADMIN') {
     return (
@@ -349,7 +349,7 @@ export const UsersView: React.FC = () => {
             </p>
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 px-3 py-1 text-xs font-mono text-emerald-700 dark:text-emerald-300 shrink-0">
-            Connected: {firebaseUser?.email || '—'}
+            Connected: {getGoogleAccountEmail(firebaseUser) || 'Email unavailable'}
           </span>
         </div>
 

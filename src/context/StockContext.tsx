@@ -21,6 +21,7 @@ import {
   BOOTSTRAPPED_ADMIN_EMAIL,
   db,
   googleProvider,
+  getGoogleAccountEmail,
   handleFirestoreError,
   OperationType,
 } from '../firebase';
@@ -766,8 +767,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    const email = (firebaseUser.email || '').trim().toLowerCase();
-    const isOwner = email === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+    let email = getGoogleAccountEmail(firebaseUser);
+    let isOwner = email === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
     let cancelled = false;
     const unsubs: (() => void)[] = [];
 
@@ -777,6 +778,19 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setSyncStatus('syncing');
 
       try {
+        // Refresh the Firebase ID token before evaluating workspace access so the
+        // email/email_verified claims used by Firestore Rules are current.
+        const tokenResult = await firebaseUser.getIdTokenResult(true);
+        const tokenEmail = String(tokenResult.claims.email || '').trim().toLowerCase();
+        const resolvedEmail = email || tokenEmail;
+        if (!resolvedEmail) {
+          throw new Error('Google sign-in completed, but Firebase did not return an email address. Sign out, choose the intended Google account, and sign in again.');
+        }
+        if (tokenResult.claims.email_verified !== true) {
+          throw new Error(`The Google account ${resolvedEmail} is not marked as email-verified by Firebase. Verify the Google account and sign in again.`);
+        }
+        email = resolvedEmail;
+        isOwner = email === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
         if (isOwner) {
           // Ensure owner UID exists in /admins
           const adminDocRef = doc(db, 'admins', firebaseUser.uid);
@@ -1098,8 +1112,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       } catch (err: any) {
         if (!cancelled) {
-          setCloudAccessStatus('offline');
-          setCloudError(err?.message || 'Unable to connect to cloud sync database.');
+          const message = err?.code === 'permission-denied'
+            ? `Firebase denied access for ${email || 'the signed-in Google account'}. Confirm that this exact email is authorized in User Management → Cloud Sync Devices and that the latest Firestore Rules are published.`
+            : (err?.message || 'Unable to connect to cloud sync database.');
+          setCloudAccessStatus(err?.code === 'permission-denied' ? 'unauthorized' : 'offline');
+          setCloudError(message);
           setSyncStatus('offline');
         }
       }
@@ -1137,8 +1154,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Authorize another Google email (e.g. friend's or staff's Gmail) for multi-device sync
   const authorizeCloudEmail = async (rawEmail: string, label: string, role: 'ADMIN' | 'STAFF') => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    if (!firebaseUser?.email) throw new Error('Connect Google Cloud Sync first.');
-    const fbEmail = firebaseUser.email.trim().toLowerCase();
+    const fbEmail = getGoogleAccountEmail(firebaseUser);
+    if (!fbEmail) throw new Error('Connect Google Cloud Sync with a Google account that provides an email address first.');
     const isOwner = fbEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
     if (!isOwner) {
       throw new Error(`Only the Primary Shop Owner (${BOOTSTRAPPED_ADMIN_EMAIL}) can add or remove Cloud Sync Google accounts.`);
@@ -1220,8 +1237,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const revokeCloudEmail = async (memberId: string, rawEmail: string) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
-    if (!firebaseUser?.email) throw new Error('Connect Google Cloud Sync first.');
-    const fbEmail = firebaseUser.email.trim().toLowerCase();
+    const fbEmail = getGoogleAccountEmail(firebaseUser);
+    if (!fbEmail) throw new Error('Connect Google Cloud Sync with a Google account that provides an email address first.');
     const isOwner = fbEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
     if (!isOwner) {
       throw new Error(`Only the Primary Shop Owner (${BOOTSTRAPPED_ADMIN_EMAIL}) can add or remove Cloud Sync Google accounts.`);
@@ -3132,7 +3149,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCurrentUser(INITIAL_USERS[0]);
     localStorage.setItem('mm_user', JSON.stringify(INITIAL_USERS[0]));
 
-    const fbEmail = (firebaseUser?.email || '').trim().toLowerCase();
+    const fbEmail = getGoogleAccountEmail(firebaseUser);
     const isOwner = fbEmail === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
     const ops: BatchOp[] = [];
     const colsToClear = ['purchases', 'requests', 'transfers', 'daily_sales', 'operations', 'ledger', 'audit_log'];
