@@ -1,11 +1,19 @@
 import {
+  collection,
+  deleteDoc,
   doc,
-  writeBatch,
+  Firestore,
+  getDoc,
+  getDocs,
+  onSnapshot,
   serverTimestamp,
-  DocumentReference,
-  increment,
+  setDoc,
+  Unsubscribe,
+  updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType, BOOTSTRAPPED_ADMIN_EMAIL } from '../firebase';
+import type { User as FirebaseAuthUser } from 'firebase/auth';
+import { auth } from '../firebase';
 import {
   AuditLogEntry,
   DailyOperation,
@@ -19,6 +27,75 @@ import {
   User,
 } from '../types';
 
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+export interface WorkspaceSnapshot {
+  users: User[];
+  products: Product[];
+  stock: Record<string, { godown: number; normal: number; ac: number }>;
+  purchases: PurchaseBatch[];
+  requests: StockRequestItem[];
+  transfers: StockTransfer[];
+  dailySales: DailySalesReport[];
+  operations: DailyOperation[];
+  ledger: StockLedgerEntry[];
+  auditLog: AuditLogEntry[];
+  suppliers: string[];
+  dropdownOptions: DropdownOption[];
+}
+
+export type KnownDocsMap = Map<string, Set<string>>;
+
 export interface CloudMemberRecord {
   memberId: string;
   email: string;
@@ -29,52 +106,15 @@ export interface CloudMemberRecord {
   updatedAt?: any;
 }
 
-export interface WorkspaceMetaRecord {
-  metaId: string;
-  bootstrapped: boolean;
-  openingEpoch: string;
-  catalogVersion: string;
-  ownerEmail: string;
-  memberEmails: string[];
-  suppliers: string[];
-}
+export const BOOTSTRAPPED_OWNER_EMAIL = 'gopishankarsegar@ptuniv.edu.in';
 
-export type BatchOp =
-  | { type: 'set'; ref: DocumentReference; data: Record<string, any> }
-  | { type: 'update'; ref: DocumentReference; data: Record<string, any> }
-  | { type: 'delete'; ref: DocumentReference };
+export const DEFAULT_ADMIN_EMAILS = [
+  BOOTSTRAPPED_OWNER_EMAIL,
+  'madhumithame1008@gmail.com',
+];
 
-export function clampStr(val: any, maxLen: number): string {
-  const s = String(val ?? '');
-  return s.length > maxLen ? s.slice(0, maxLen) : s;
-}
-
-export function stripUndefinedDeep<T>(obj: T): T {
-  if (Array.isArray(obj)) {
-    return obj.map((item) => stripUndefinedDeep(item)) as unknown as T;
-  }
-  if (obj && typeof obj === 'object' && !(obj instanceof Date)) {
-    const out: Record<string, any> = {};
-    for (const [k, v] of Object.entries(obj as Record<string, any>)) {
-      if (v !== undefined) {
-        out[k] = stripUndefinedDeep(v);
-      }
-    }
-    return out as T;
-  }
-  return obj;
-}
-
-export function sanitizeEmailList(emails: string[]): string[] {
-  const set = new Set<string>([BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase()]);
-  for (const e of emails) {
-    const clean = String(e || '').trim().toLowerCase();
-    if (clean && clean.length >= 5 && clean.length <= 160 && clean.includes('@')) {
-      set.add(clean);
-    }
-    if (set.size >= 25) break;
-  }
-  return Array.from(set);
+export function isBootstrappedAdminEmail(email: string): boolean {
+  return DEFAULT_ADMIN_EMAILS.includes(email.trim().toLowerCase());
 }
 
 export function makeSafeMemberId(email: string): string {
@@ -86,484 +126,1725 @@ export function makeSafeMemberId(email: string): string {
   return (`mbr_${clean}`).slice(0, 120);
 }
 
-export async function commitFirestoreOps(ops: BatchOp[], pathLabel: string): Promise<void> {
-  if (!ops.length) return;
-  const CHUNK_SIZE = 380;
-  try {
-    for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
-      const chunk = ops.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-      for (const op of chunk) {
-        if (op.type === 'set') {
-          batch.set(op.ref, op.data);
-        } else if (op.type === 'update') {
-          batch.update(op.ref, op.data);
-        } else {
-          batch.delete(op.ref);
-        }
-      }
-      await batch.commit();
+export function sanitizeEmailList(emails: string[]): string[] {
+  const set = new Set<string>(DEFAULT_ADMIN_EMAILS.map((e) => e.toLowerCase()));
+  for (const e of emails) {
+    const clean = String(e || '').trim().toLowerCase();
+    if (clean && clean.length >= 5 && clean.length <= 160 && clean.includes('@')) {
+      set.add(clean);
     }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, pathLabel);
+    if (set.size >= 25) break;
+  }
+  return Array.from(set);
+}
+
+function sanitizeStr(val: unknown, maxLen: number, fallback = ''): string {
+  const s = typeof val === 'string' ? val : val == null ? fallback : String(val);
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
+function nonEmptyStr(val: unknown, maxLen: number, fallback: string): string {
+  const s = sanitizeStr(val, maxLen, fallback).trim();
+  return s.length > 0 ? s : fallback;
+}
+
+function nonNegNum(val: unknown, fallback = 0): number {
+  const n = Number(val);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function anyNum(val: unknown, fallback = 0): number {
+  const n = Number(val);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeStoredMemberEmails(raw: unknown): string[] {
+  const arr = Array.isArray(raw)
+    ? raw
+        .filter((e): e is string => typeof e === 'string')
+        .map((e) => e.trim().toLowerCase())
+        .filter((e) => e.length >= 5 && e.length <= 160 && e.includes('@'))
+    : [];
+  const merged = Array.from(new Set([...DEFAULT_ADMIN_EMAILS.map((e) => e.toLowerCase()), ...arr])).slice(0, 25);
+  return merged;
+}
+
+function normalizeMemberEmails(raw: unknown, fallbackEmail: string): string[] {
+  const email = (fallbackEmail || BOOTSTRAPPED_OWNER_EMAIL).trim().toLowerCase();
+  const arr = Array.isArray(raw)
+    ? raw
+        .filter((e): e is string => typeof e === 'string')
+        .map((e) => e.trim().toLowerCase())
+        .filter((e) => e.length >= 5 && e.length <= 160 && e.includes('@'))
+    : [];
+  const merged = Array.from(new Set([...DEFAULT_ADMIN_EMAILS, email, ...arr])).slice(0, 25);
+  return merged.length > 0 ? merged : [email];
+}
+
+function getCallerEmail(fbUser: FirebaseAuthUser | null): string {
+  const email =
+    fbUser?.email ||
+    fbUser?.providerData?.find((p) => p?.email)?.email ||
+    BOOTSTRAPPED_OWNER_EMAIL;
+  return email.trim();
+}
+
+function isOwnerAccount(email: string): boolean {
+  return isBootstrappedAdminEmail(email);
+}
+
+function stripUndefined<T extends Record<string, any>>(obj: T): T {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out as T;
+}
+
+// =========================================================
+// SERIALIZERS (Strict conformity to firestore.rules & blueprint)
+// =========================================================
+
+function toStaffUserDoc(u: User, memberEmails: string[], existingCreatedAt?: any) {
+  const docData: Record<string, any> = {
+    userId: nonEmptyStr(u.userId, 64, 'USR-000001'),
+    username: nonEmptyStr(u.username, 64, 'user'),
+    fullName: nonEmptyStr(u.fullName, 120, 'Staff User'),
+    role: u.role === 'ADMIN' || u.role === 'AC' ? u.role : 'NORMAL',
+    active: Boolean(u.active),
+    mustChange: Boolean(u.mustChange),
+    password: nonEmptyStr(u.password, 128, '1234'),
+    createdAtStr: sanitizeStr(u.createdAt, 40, '2026-01-01 09:00:00'),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (u.counter === 'NORMAL' || u.counter === 'AC' || u.counter === '') {
+    docData.counter = u.counter;
+  }
+  if (u.updatedAt) {
+    docData.updatedAtStr = sanitizeStr(u.updatedAt, 40);
+  }
+  return docData;
+}
+
+function fromStaffUserDoc(d: Record<string, any>): User {
+  return stripUndefined({
+    userId: d.userId,
+    username: d.username,
+    fullName: d.fullName,
+    role: d.role,
+    counter: d.counter || undefined,
+    active: Boolean(d.active),
+    mustChange: Boolean(d.mustChange),
+    password: d.password,
+    createdAt: d.createdAtStr || '2026-01-01 09:00:00',
+    updatedAt: d.updatedAtStr || undefined,
+  });
+}
+
+function toProductDoc(p: Product, memberEmails: string[], existingCreatedAt?: any) {
+  const docData: Record<string, any> = {
+    productId: nonEmptyStr(p.productId, 64, 'PRD-000001'),
+    name: nonEmptyStr(p.name, 140, 'Unnamed Product'),
+    category: nonEmptyStr(p.category, 80, 'Others'),
+    sizeML: nonNegNum(p.sizeML, 750),
+    casePack: Math.max(1, nonNegNum(p.casePack, 12)),
+    sellingPrice: nonNegNum(p.sellingPrice, 0),
+    active: Boolean(p.active),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (p.updatedAt) docData.updatedAtStr = sanitizeStr(p.updatedAt, 40);
+  if (p.updatedBy) docData.updatedBy = sanitizeStr(p.updatedBy, 80);
+  return docData;
+}
+
+function fromProductDoc(d: Record<string, any>): Product {
+  return stripUndefined({
+    productId: d.productId,
+    name: d.name,
+    category: d.category,
+    sizeML: Number(d.sizeML || 0),
+    casePack: Number(d.casePack || 12),
+    sellingPrice: Number(d.sellingPrice || 0),
+    active: Boolean(d.active),
+    updatedAt: d.updatedAtStr || undefined,
+    updatedBy: d.updatedBy || undefined,
+  });
+}
+
+function toStockDoc(
+  productId: string,
+  level: { godown: number; normal: number; ac: number },
+  memberEmails: string[],
+  existingCreatedAt?: any
+) {
+  return {
+    productId: nonEmptyStr(productId, 64, 'PRD-000001'),
+    godown: nonNegNum(level.godown, 0),
+    normal: nonNegNum(level.normal, 0),
+    ac: nonNegNum(level.ac, 0),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function toPurchaseDoc(b: PurchaseBatch, memberEmails: string[], existingCreatedAt?: any) {
+  const docData: Record<string, any> = {
+    batchId: nonEmptyStr(b.batchId, 64, 'PUR-000001'),
+    supplier: nonEmptyStr(b.supplier, 160, 'Supplier'),
+    date: nonEmptyStr(b.date, 20, '2026-01-01'),
+    billDate: nonEmptyStr(b.billDate, 20, '2026-01-01'),
+    invoiceNo: nonEmptyStr(b.invoiceNo, 80, 'INV'),
+    status: b.status || 'Pending',
+    lines: Array.isArray(b.lines) ? b.lines.slice(0, 200) : [],
+    totalQty: nonNegNum(b.totalQty, 0),
+    grossTotal: nonNegNum(b.grossTotal, 0),
+    sedTotal: nonNegNum(b.sedTotal, 0),
+    discountTotal: nonNegNum(b.discountTotal, 0),
+    tcsTotal: nonNegNum(b.tcsTotal, 0),
+    netTotal: nonNegNum(b.netTotal, 0),
+    createdBy: nonEmptyStr(b.createdBy, 80, 'staff'),
+    createdAtStr: nonEmptyStr(b.createdAt, 40, '2026-01-01 00:00:00'),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (b.permitNumber !== undefined) docData.permitNumber = sanitizeStr(b.permitNumber, 80);
+  if (b.documentNumber !== undefined) docData.documentNumber = sanitizeStr(b.documentNumber, 80);
+  if (b.reviewedBy !== undefined) docData.reviewedBy = sanitizeStr(b.reviewedBy, 80);
+  if (b.reviewedAt !== undefined) docData.reviewedAtStr = sanitizeStr(b.reviewedAt, 40);
+  if (b.remark !== undefined) docData.remark = sanitizeStr(b.remark, 300);
+  return docData;
+}
+
+function fromPurchaseDoc(d: Record<string, any>): PurchaseBatch {
+  return stripUndefined({
+    batchId: d.batchId,
+    supplier: d.supplier,
+    date: d.date,
+    billDate: d.billDate,
+    invoiceNo: d.invoiceNo,
+    permitNumber: d.permitNumber,
+    documentNumber: d.documentNumber,
+    status: d.status,
+    lines: Array.isArray(d.lines) ? d.lines : [],
+    totalQty: Number(d.totalQty || 0),
+    grossTotal: Number(d.grossTotal || 0),
+    sedTotal: Number(d.sedTotal || 0),
+    discountTotal: Number(d.discountTotal || 0),
+    tcsTotal: Number(d.tcsTotal || 0),
+    netTotal: Number(d.netTotal || 0),
+    createdBy: d.createdBy,
+    createdAt: d.createdAtStr || '',
+    reviewedBy: d.reviewedBy,
+    reviewedAt: d.reviewedAtStr,
+    remark: d.remark,
+  });
+}
+
+function toRequestDoc(r: StockRequestItem, memberEmails: string[], existingCreatedAt?: any) {
+  const docData: Record<string, any> = {
+    requestId: nonEmptyStr(r.requestId, 64, 'REQ-000001'),
+    counter: r.counter === 'AC' ? 'AC' : 'NORMAL',
+    productId: nonEmptyStr(r.productId, 64, 'PRD-000001'),
+    productName: nonEmptyStr(r.productName, 160, 'Product'),
+    category: nonEmptyStr(r.category, 80, 'Others'),
+    sizeML: nonNegNum(r.sizeML, 750),
+    casePack: Math.max(1, nonNegNum(r.casePack, 12)),
+    qty: nonNegNum(r.qty, 0),
+    enteredQty: nonNegNum(r.enteredQty, 0),
+    unit: r.unit === 'CASE' || r.unit === 'MIXED' ? r.unit : 'BOTTLE',
+    reason: sanitizeStr(r.reason, 240, ''),
+    status: r.status || 'Pending',
+    date: nonEmptyStr(r.date, 20, '2026-01-01'),
+    createdBy: nonEmptyStr(r.createdBy, 80, 'staff'),
+    createdAtStr: nonEmptyStr(r.createdAt, 40, '2026-01-01 00:00:00'),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (r.reviewedBy !== undefined) docData.reviewedBy = sanitizeStr(r.reviewedBy, 80);
+  if (r.reviewedAt !== undefined) docData.reviewedAtStr = sanitizeStr(r.reviewedAt, 40);
+  if (r.remark !== undefined) docData.remark = sanitizeStr(r.remark, 300);
+  return docData;
+}
+
+function fromRequestDoc(d: Record<string, any>): StockRequestItem {
+  return stripUndefined({
+    requestId: d.requestId,
+    counter: d.counter,
+    productId: d.productId,
+    productName: d.productName,
+    category: d.category,
+    sizeML: Number(d.sizeML || 0),
+    casePack: Number(d.casePack || 12),
+    qty: Number(d.qty || 0),
+    enteredQty: Number(d.enteredQty || 0),
+    unit: d.unit,
+    reason: d.reason || '',
+    status: d.status,
+    date: d.date,
+    createdBy: d.createdBy,
+    createdAt: d.createdAtStr || '',
+    reviewedBy: d.reviewedBy,
+    reviewedAt: d.reviewedAtStr,
+    remark: d.remark,
+  });
+}
+
+function toTransferDoc(t: StockTransfer, memberEmails: string[], existingCreatedAt?: any) {
+  const docData: Record<string, any> = {
+    transferId: nonEmptyStr(t.transferId, 64, 'TRF-000001'),
+    type: t.type === 'COUNTER_TO_COUNTER' ? 'COUNTER_TO_COUNTER' : 'GODOWN_TO_COUNTER',
+    fromLoc: t.fromLoc,
+    toLoc: t.toLoc,
+    productId: nonEmptyStr(t.productId, 64, 'PRD-000001'),
+    productName: nonEmptyStr(t.productName, 160, 'Product'),
+    casePack: Math.max(1, nonNegNum(t.casePack, 12)),
+    qty: nonNegNum(t.qty, 0),
+    status: t.status || 'Pending',
+    createdBy: nonEmptyStr(t.createdBy, 80, 'staff'),
+    createdAtStr: nonEmptyStr(t.createdAt, 40, '2026-01-01 00:00:00'),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (t.enteredQty !== undefined) docData.enteredQty = nonNegNum(t.enteredQty, 0);
+  if (t.unit === 'CASE' || t.unit === 'BOTTLE') docData.unit = t.unit;
+  if (t.note !== undefined) docData.note = sanitizeStr(t.note, 240);
+  if (t.reviewedBy !== undefined) docData.reviewedBy = sanitizeStr(t.reviewedBy, 80);
+  if (t.reviewedAt !== undefined) docData.reviewedAtStr = sanitizeStr(t.reviewedAt, 40);
+  if (t.remark !== undefined) docData.remark = sanitizeStr(t.remark, 300);
+  return docData;
+}
+
+function fromTransferDoc(d: Record<string, any>): StockTransfer {
+  return stripUndefined({
+    transferId: d.transferId,
+    type: d.type,
+    fromLoc: d.fromLoc,
+    toLoc: d.toLoc,
+    productId: d.productId,
+    productName: d.productName,
+    casePack: Number(d.casePack || 12),
+    qty: Number(d.qty || 0),
+    enteredQty: d.enteredQty !== undefined ? Number(d.enteredQty) : undefined,
+    unit: d.unit,
+    note: d.note,
+    status: d.status,
+    createdBy: d.createdBy,
+    createdAt: d.createdAtStr || '',
+    reviewedBy: d.reviewedBy,
+    reviewedAt: d.reviewedAtStr,
+    remark: d.remark,
+  });
+}
+
+function toDailySalesDoc(r: DailySalesReport, memberEmails: string[], existingCreatedAt?: any) {
+  const docData: Record<string, any> = {
+    reportId: nonEmptyStr(r.reportId, 64, 'RPT-000001'),
+    date: nonEmptyStr(r.date, 20, '2026-01-01'),
+    counter: r.counter === 'AC' ? 'AC' : 'NORMAL',
+    status: r.status || 'Approved',
+    totalSoldQty: nonNegNum(r.totalSoldQty, 0),
+    totalSalesValue: nonNegNum(r.totalSalesValue, 0),
+    recordedAmount: anyNum(r.recordedAmount, 0),
+    cashAmount: nonNegNum(r.cashAmount, 0),
+    upiAmount: nonNegNum(r.upiAmount, 0),
+    cardAmount: nonNegNum(r.cardAmount, 0),
+    cashierName: sanitizeStr(r.cashierName, 100, ''),
+    helperName: sanitizeStr(r.helperName, 100, ''),
+    paymentDifference: anyNum(r.paymentDifference, 0),
+    cutoffSeq: anyNum(r.cutoffSeq, 0),
+    submittedBy: nonEmptyStr(r.submittedBy, 80, 'staff'),
+    submittedAtStr: nonEmptyStr(r.submittedAt, 40, '2026-01-01 00:00:00'),
+    lines: Array.isArray(r.lines) ? r.lines.slice(0, 300) : [],
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (r.acCharges !== undefined) docData.acCharges = anyNum(r.acCharges, 0);
+  if (r.paymentExplanation !== undefined) docData.paymentExplanation = sanitizeStr(r.paymentExplanation, 300);
+  if (r.reviewedBy !== undefined) docData.reviewedBy = sanitizeStr(r.reviewedBy, 80);
+  if (r.reviewedAt !== undefined) docData.reviewedAtStr = sanitizeStr(r.reviewedAt, 40);
+  if (r.remark !== undefined) docData.remark = sanitizeStr(r.remark, 300);
+  if (r.editedBy !== undefined) docData.editedBy = sanitizeStr(r.editedBy, 80);
+  if (r.editedAt !== undefined) docData.editedAtStr = sanitizeStr(r.editedAt, 40);
+  return docData;
+}
+
+function fromDailySalesDoc(d: Record<string, any>): DailySalesReport {
+  return stripUndefined({
+    reportId: d.reportId,
+    date: d.date,
+    counter: d.counter,
+    status: d.status,
+    totalSoldQty: Number(d.totalSoldQty || 0),
+    totalSalesValue: Number(d.totalSalesValue || 0),
+    recordedAmount: Number(d.recordedAmount || 0),
+    cashAmount: Number(d.cashAmount || 0),
+    upiAmount: Number(d.upiAmount || 0),
+    cardAmount: Number(d.cardAmount || 0),
+    acCharges: d.acCharges !== undefined ? Number(d.acCharges) : undefined,
+    cashierName: d.cashierName || '',
+    helperName: d.helperName || '',
+    paymentDifference: Number(d.paymentDifference || 0),
+    paymentExplanation: d.paymentExplanation,
+    cutoffSeq: Number(d.cutoffSeq || 0),
+    submittedBy: d.submittedBy,
+    submittedAt: d.submittedAtStr || '',
+    reviewedBy: d.reviewedBy,
+    reviewedAt: d.reviewedAtStr,
+    remark: d.remark,
+    editedBy: d.editedBy,
+    editedAt: d.editedAtStr,
+    lines: Array.isArray(d.lines) ? d.lines : [],
+  });
+}
+
+function toOperationDoc(op: DailyOperation, memberEmails: string[], existingCreatedAt?: any) {
+  const docData: Record<string, any> = {
+    operationId: nonEmptyStr(op.operationId, 64, 'OPR-000001'),
+    type: op.type,
+    date: nonEmptyStr(op.date, 20, '2026-01-01'),
+    name: nonEmptyStr(op.name, 160, 'Entry'),
+    amount: anyNum(op.amount, 0),
+    status: op.status || 'Pending',
+    createdBy: nonEmptyStr(op.createdBy, 80, 'staff'),
+    createdAtStr: nonEmptyStr(op.createdAt, 40, '2026-01-01 00:00:00'),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (op.payment === 'Cash' || op.payment === 'UPI' || op.payment === 'Card') {
+    docData.payment = op.payment;
+  }
+  if (op.roomNo !== undefined) docData.roomNo = anyNum(op.roomNo, 0);
+  if (op.location === 'GODOWN' || op.location === 'NORMAL' || op.location === 'AC') {
+    docData.location = op.location;
+  }
+  if (op.productId !== undefined) docData.productId = sanitizeStr(op.productId, 64);
+  if (op.productName !== undefined) docData.productName = sanitizeStr(op.productName, 160);
+  if (op.qty !== undefined) docData.qty = anyNum(op.qty, 0);
+  if (op.reason !== undefined) docData.reason = sanitizeStr(op.reason, 240);
+  if (op.reviewedBy !== undefined) docData.reviewedBy = sanitizeStr(op.reviewedBy, 80);
+  if (op.reviewedAt !== undefined) docData.reviewedAtStr = sanitizeStr(op.reviewedAt, 40);
+  if (op.reviewRemark !== undefined) docData.reviewRemark = sanitizeStr(op.reviewRemark, 300);
+  return docData;
+}
+
+function fromOperationDoc(d: Record<string, any>): DailyOperation {
+  return stripUndefined({
+    operationId: d.operationId,
+    type: d.type,
+    date: d.date,
+    name: d.name,
+    amount: Number(d.amount || 0),
+    payment: d.payment || undefined,
+    roomNo: d.roomNo !== undefined ? Number(d.roomNo) : undefined,
+    location: d.location || undefined,
+    productId: d.productId,
+    productName: d.productName,
+    qty: d.qty !== undefined ? Number(d.qty) : undefined,
+    reason: d.reason,
+    status: d.status,
+    createdBy: d.createdBy,
+    createdAt: d.createdAtStr || '',
+    reviewedBy: d.reviewedBy,
+    reviewedAt: d.reviewedAtStr,
+    reviewRemark: d.reviewRemark,
+  });
+}
+
+function toLedgerDoc(l: StockLedgerEntry, memberEmails: string[], existingCreatedAt?: any) {
+  const docData: Record<string, any> = {
+    seq: anyNum(l.seq, 0),
+    ledgerId: nonEmptyStr(l.ledgerId, 64, 'LED-000001'),
+    timestampStr: nonEmptyStr(l.timestamp, 40, '2026-01-01 00:00:00'),
+    location: l.location,
+    productId: nonEmptyStr(l.productId, 64, 'PRD-000001'),
+    delta: anyNum(l.delta, 0),
+    balanceAfter: nonNegNum(l.balanceAfter, 0),
+    refType: l.refType,
+    refId: nonEmptyStr(l.refId, 80, 'REF'),
+    approvedBy: nonEmptyStr(l.approvedBy, 80, 'admin'),
+    businessDate: nonEmptyStr(l.businessDate, 20, '2026-01-01'),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (l.productName !== undefined) docData.productName = sanitizeStr(l.productName, 160);
+  return docData;
+}
+
+function fromLedgerDoc(d: Record<string, any>): StockLedgerEntry {
+  return stripUndefined({
+    seq: Number(d.seq || 0),
+    ledgerId: d.ledgerId,
+    timestamp: d.timestampStr || '',
+    location: d.location,
+    productId: d.productId,
+    productName: d.productName,
+    delta: Number(d.delta || 0),
+    balanceAfter: Number(d.balanceAfter || 0),
+    refType: d.refType,
+    refId: d.refId,
+    approvedBy: d.approvedBy,
+    businessDate: d.businessDate,
+  });
+}
+
+function toAuditDoc(a: AuditLogEntry, memberEmails: string[], existingCreatedAt?: any) {
+  return {
+    auditId: nonEmptyStr(a.auditId, 64, 'AUD-000001'),
+    timestampStr: nonEmptyStr(a.timestamp, 40, '2026-01-01 00:00:00'),
+    userId: sanitizeStr(a.userId, 64, ''),
+    username: nonEmptyStr(a.username, 80, 'system'),
+    role: nonEmptyStr(a.role, 32, 'SYSTEM'),
+    action: nonEmptyStr(a.action, 80, 'ACTION'),
+    refId: sanitizeStr(a.refId, 80, ''),
+    details: sanitizeStr(a.details, 500, ''),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function fromAuditDoc(d: Record<string, any>): AuditLogEntry {
+  return {
+    auditId: d.auditId,
+    timestamp: d.timestampStr || '',
+    userId: d.userId || '',
+    username: d.username,
+    role: d.role,
+    action: d.action,
+    refId: d.refId || '',
+    details: d.details || '',
+  };
+}
+
+function toDropdownDoc(o: DropdownOption, memberEmails: string[], existingCreatedAt?: any) {
+  return {
+    optionId: nonEmptyStr(o.optionId, 64, 'OPT-001'),
+    type: o.type === 'WAGE' ? 'WAGE' : 'EXPENSE',
+    value: nonEmptyStr(o.value, 140, 'Option'),
+    active: Boolean(o.active),
+    createdAtStr: sanitizeStr(o.createdAt, 40, '2026-01-01'),
+    memberEmails,
+    createdAt: existingCreatedAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function fromDropdownDoc(d: Record<string, any>): DropdownOption {
+  return {
+    optionId: d.optionId,
+    type: d.type,
+    value: d.value,
+    active: Boolean(d.active),
+    createdAt: d.createdAtStr || '2026-01-01',
+  };
+}
+
+// =========================================================
+// BOOTSTRAP & BATCHED SEEDING
+// =========================================================
+
+async function commitOperationsInChunks(
+  db: Firestore,
+  ops: Array<{ type: 'set' | 'update' | 'delete'; path: string; id: string; data?: Record<string, any> }>
+): Promise<void> {
+  const CHUNK_SIZE = 200;
+  for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
+    const chunk = ops.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
+    for (const op of chunk) {
+      const ref = doc(db, op.path, op.id);
+      if (op.type === 'delete') {
+        batch.delete(ref);
+      } else if (op.type === 'update' && op.data) {
+        batch.update(ref, op.data);
+      } else if (op.data) {
+        batch.set(ref, op.data);
+      }
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, chunk[0]?.path || 'workspace');
+    }
   }
 }
 
-export function buildStockIncrementOp(
-  productId: string,
-  deltas: { godown?: number; normal?: number; ac?: number }
-): BatchOp | null {
-  const updateData: Record<string, any> = {};
-  if (deltas.godown) updateData.godown = increment(deltas.godown);
-  if (deltas.normal) updateData.normal = increment(deltas.normal);
-  if (deltas.ac) updateData.ac = increment(deltas.ac);
-  if (Object.keys(updateData).length === 0) return null;
-  updateData.updatedAt = serverTimestamp();
-  return {
-    type: 'update',
-    ref: doc(db, 'stock', productId),
-    data: updateData,
+async function ensureDefaultCloudMembers(db: Firestore, addedByEmail: string): Promise<void> {
+  for (const adminEmail of DEFAULT_ADMIN_EMAILS) {
+    const memberId = makeSafeMemberId(adminEmail);
+    const ref = doc(db, 'cloud_members', memberId);
+    try {
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        await setDoc(ref, {
+          memberId,
+          email: adminEmail.toLowerCase(),
+          label: adminEmail.toLowerCase() === BOOTSTRAPPED_OWNER_EMAIL.toLowerCase() ? 'Primary Owner' : 'Cloud Admin',
+          role: 'ADMIN',
+          addedBy: sanitizeStr(addedByEmail, 160, BOOTSTRAPPED_OWNER_EMAIL),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch {
+      // Non-fatal if already exists or concurrent write
+    }
+  }
+}
+
+export async function fetchCloudMembersList(
+  db: Firestore,
+  callerEmail: string,
+  memberEmails: string[]
+): Promise<CloudMemberRecord[]> {
+  const callerLower = callerEmail.trim().toLowerCase();
+  if (isBootstrappedAdminEmail(callerLower)) {
+    try {
+      const snap = await getDocs(collection(db, 'cloud_members'));
+      const list = snap.docs
+        .map((d) => d.data() as CloudMemberRecord)
+        .sort((a, b) => a.email.localeCompare(b.email));
+      if (list.length > 0) return list;
+    } catch {
+      // Fall back to per-member getDoc reads below
+    }
+  }
+
+  const emails = sanitizeEmailList(memberEmails);
+  const results = await Promise.all(
+    emails.map(async (em) => {
+      const memberId = makeSafeMemberId(em);
+      try {
+        const snap = await getDoc(doc(db, 'cloud_members', memberId));
+        if (snap.exists()) {
+          return snap.data() as CloudMemberRecord;
+        }
+      } catch {
+        // Non-admin staff can only read their own cloud_members doc
+      }
+      if (em === callerLower || isBootstrappedAdminEmail(em)) {
+        return {
+          memberId,
+          email: em,
+          label: em === BOOTSTRAPPED_OWNER_EMAIL.toLowerCase() ? 'Primary Owner' : isBootstrappedAdminEmail(em) ? 'Cloud Admin' : 'Authorized Staff',
+          role: isBootstrappedAdminEmail(em) ? 'ADMIN' : 'STAFF',
+          addedBy: BOOTSTRAPPED_OWNER_EMAIL,
+        } as CloudMemberRecord;
+      }
+      return null;
+    })
+  );
+
+  return results
+    .filter((item): item is CloudMemberRecord => Boolean(item))
+    .sort((a, b) => a.email.localeCompare(b.email));
+}
+
+export async function authorizeCloudEmailInFirestore(
+  db: Firestore,
+  callerEmail: string,
+  rawEmail: string,
+  label: string,
+  role: 'ADMIN' | 'STAFF',
+  currentMemberEmails: string[]
+): Promise<string[]> {
+  const cleanEmail = rawEmail.trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes('@') || cleanEmail.length < 5 || cleanEmail.length > 160) {
+    throw new Error('Enter a valid Google email address.');
+  }
+
+  const existingNormalized = sanitizeEmailList(currentMemberEmails);
+  if (!existingNormalized.includes(cleanEmail) && existingNormalized.length >= 25) {
+    throw new Error('Maximum limit of 25 authorized Google emails reached.');
+  }
+
+  const nextMembers = sanitizeEmailList([...existingNormalized, cleanEmail]);
+  const memberId = makeSafeMemberId(cleanEmail);
+  const memberRef = doc(db, 'cloud_members', memberId);
+
+  try {
+    const existingMember = await getDoc(memberRef);
+    if (existingMember.exists()) {
+      await updateDoc(memberRef, {
+        label: nonEmptyStr(label, 80, cleanEmail),
+        role,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(memberRef, {
+        memberId,
+        email: cleanEmail,
+        label: nonEmptyStr(label, 80, cleanEmail),
+        role,
+        addedBy: nonEmptyStr(callerEmail, 160, BOOTSTRAPPED_OWNER_EMAIL),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    await updateDoc(doc(db, 'workspace_meta', 'main'), {
+      memberEmails: nextMembers,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `cloud_members/${memberId}`);
+  }
+
+  const cols = [
+    'staff_users',
+    'products',
+    'stock',
+    'purchases',
+    'requests',
+    'transfers',
+    'daily_sales',
+    'operations',
+    'ledger',
+    'audit_log',
+    'dropdown_options',
+  ];
+  const ops: Array<{ type: 'set' | 'update' | 'delete'; path: string; id: string; data?: Record<string, any> }> = [];
+  for (const colName of cols) {
+    try {
+      const snap = await getDocs(collection(db, colName));
+      snap.docs.forEach((d) => {
+        ops.push({
+          type: 'update',
+          path: colName,
+          id: d.id,
+          data: {
+            memberEmails: nextMembers,
+            updatedAt: serverTimestamp(),
+          },
+        });
+      });
+    } catch {
+      // Non-fatal if collection empty or restricted
+    }
+  }
+  if (ops.length > 0) {
+    await commitOperationsInChunks(db, ops);
+  }
+
+  return nextMembers;
+}
+
+export async function revokeCloudEmailInFirestore(
+  db: Firestore,
+  memberId: string,
+  rawEmail: string,
+  currentMemberEmails: string[]
+): Promise<string[]> {
+  const cleanEmail = rawEmail.trim().toLowerCase();
+  if (isBootstrappedAdminEmail(cleanEmail)) {
+    throw new Error('Cannot remove a primary owner or built-in admin account.');
+  }
+
+  const nextMembers = sanitizeEmailList(currentMemberEmails.filter((e) => e.toLowerCase() !== cleanEmail));
+  try {
+    await deleteDoc(doc(db, 'cloud_members', memberId));
+    await updateDoc(doc(db, 'workspace_meta', 'main'), {
+      memberEmails: nextMembers,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `cloud_members/${memberId}`);
+  }
+
+  const cols = [
+    'staff_users',
+    'products',
+    'stock',
+    'purchases',
+    'requests',
+    'transfers',
+    'daily_sales',
+    'operations',
+    'ledger',
+    'audit_log',
+    'dropdown_options',
+  ];
+  const ops: Array<{ type: 'set' | 'update' | 'delete'; path: string; id: string; data?: Record<string, any> }> = [];
+  for (const colName of cols) {
+    try {
+      const snap = await getDocs(collection(db, colName));
+      snap.docs.forEach((d) => {
+        ops.push({
+          type: 'update',
+          path: colName,
+          id: d.id,
+          data: {
+            memberEmails: nextMembers,
+            updatedAt: serverTimestamp(),
+          },
+        });
+      });
+    } catch {
+      // Non-fatal
+    }
+  }
+  if (ops.length > 0) {
+    await commitOperationsInChunks(db, ops);
+  }
+
+  return nextMembers;
+}
+
+export async function ensureWorkspaceBootstrapped(
+  db: Firestore,
+  fbUser: FirebaseAuthUser,
+  seedSnapshot: WorkspaceSnapshot,
+  openingEpoch: string,
+  catalogVersion: string,
+  verifiedEmail?: string
+): Promise<{ memberEmails: string[]; cloudMembers: CloudMemberRecord[] }> {
+  const callerEmail = (verifiedEmail || getCallerEmail(fbUser)).trim();
+  const callerLower = callerEmail.toLowerCase();
+  const isBootstrapped = isBootstrappedAdminEmail(callerLower);
+
+  // If bootstrapped owner, ensure /admins/{uid} doc exists
+  if (isBootstrapped) {
+    try {
+      const adminRef = doc(db, 'admins', fbUser.uid);
+      const adminSnap = await getDoc(adminRef);
+      if (!adminSnap.exists()) {
+        await setDoc(adminRef, {
+          uid: fbUser.uid,
+          email: callerLower,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch {
+      // Non-fatal: isBootstrappedAdmin() in firestore.rules already grants admin rights
+    }
+  }
+
+  let metaSnap;
+  try {
+    metaSnap = await getDoc(doc(db, 'workspace_meta', 'main'));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, 'workspace_meta/main');
+  }
+
+  if (metaSnap && metaSnap.exists() && metaSnap.data()?.bootstrapped) {
+    const storedMembers = normalizeStoredMemberEmails(metaSnap.data()?.memberEmails);
+    if (!isBootstrapped && !storedMembers.includes(callerLower)) {
+      throw new Error(
+        `UNAUTHORIZED_MEMBER: Google account "${callerLower}" is not authorized yet. Ask a Shop Admin or Cloud Admin to add "${callerLower}" in User Management → Authorized Cloud Emails.`
+      );
+    }
+
+    if (isBootstrapped) {
+      await ensureDefaultCloudMembers(db, callerLower);
+    } else {
+      // If this verified user is listed as ADMIN in cloud_members, ensure /admins/{uid} exists
+      try {
+        const myMemberSnap = await getDoc(doc(db, 'cloud_members', makeSafeMemberId(callerLower)));
+        if (myMemberSnap.exists() && myMemberSnap.data()?.role === 'ADMIN') {
+          const adminRef = doc(db, 'admins', fbUser.uid);
+          const adminSnap = await getDoc(adminRef);
+          if (!adminSnap.exists()) {
+            await setDoc(adminRef, {
+              uid: fbUser.uid,
+              email: callerLower,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      } catch {
+        // Non-fatal for STAFF members
+      }
+    }
+
+    const cloudMembers = await fetchCloudMembersList(db, callerLower, storedMembers);
+    return { memberEmails: storedMembers, cloudMembers };
+  }
+
+  if (!isBootstrapped) {
+    throw new Error(
+      `UNAUTHORIZED_MEMBER: Shop cloud database has not been initialized by the owner (${BOOTSTRAPPED_OWNER_EMAIL}) yet. Please have the owner sign in once first.`
+    );
+  }
+
+  const memberEmails = sanitizeEmailList(DEFAULT_ADMIN_EMAILS);
+  const ops: Array<{ type: 'set' | 'update' | 'delete'; path: string; id: string; data?: Record<string, any> }> = [
+    {
+      type: 'set',
+      path: 'workspace_meta',
+      id: 'main',
+      data: {
+        metaId: 'main',
+        bootstrapped: true,
+        openingEpoch: nonEmptyStr(openingEpoch, 64, '2026-11-20-opening-v1'),
+        catalogVersion: nonEmptyStr(catalogVersion, 64, '2026-11-20-opening-v1'),
+        ownerEmail: callerLower,
+        memberEmails,
+        suppliers: seedSnapshot.suppliers.slice(0, 100),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+    },
+  ];
+
+  seedSnapshot.users.forEach((u) => {
+    ops.push({ type: 'set', path: 'staff_users', id: u.userId, data: toStaffUserDoc(u, memberEmails) });
+  });
+  seedSnapshot.products.forEach((p) => {
+    ops.push({ type: 'set', path: 'products', id: p.productId, data: toProductDoc(p, memberEmails) });
+  });
+  Object.entries(seedSnapshot.stock).forEach(([pid, lvl]) => {
+    ops.push({ type: 'set', path: 'stock', id: pid, data: toStockDoc(pid, lvl, memberEmails) });
+  });
+  seedSnapshot.dropdownOptions.forEach((o) => {
+    ops.push({ type: 'set', path: 'dropdown_options', id: o.optionId, data: toDropdownDoc(o, memberEmails) });
+  });
+  seedSnapshot.purchases.forEach((b) => {
+    ops.push({ type: 'set', path: 'purchases', id: b.batchId, data: toPurchaseDoc(b, memberEmails) });
+  });
+  seedSnapshot.requests.forEach((r) => {
+    ops.push({ type: 'set', path: 'requests', id: r.requestId, data: toRequestDoc(r, memberEmails) });
+  });
+  seedSnapshot.transfers.forEach((t) => {
+    ops.push({ type: 'set', path: 'transfers', id: t.transferId, data: toTransferDoc(t, memberEmails) });
+  });
+  seedSnapshot.dailySales.forEach((s) => {
+    ops.push({ type: 'set', path: 'daily_sales', id: s.reportId, data: toDailySalesDoc(s, memberEmails) });
+  });
+  seedSnapshot.operations.forEach((op) => {
+    ops.push({ type: 'set', path: 'operations', id: op.operationId, data: toOperationDoc(op, memberEmails) });
+  });
+  seedSnapshot.ledger.forEach((l) => {
+    ops.push({ type: 'set', path: 'ledger', id: l.ledgerId, data: toLedgerDoc(l, memberEmails) });
+  });
+  seedSnapshot.auditLog.forEach((a) => {
+    ops.push({ type: 'set', path: 'audit_log', id: a.auditId, data: toAuditDoc(a, memberEmails) });
+  });
+
+  await commitOperationsInChunks(db, ops);
+  await ensureDefaultCloudMembers(db, callerLower);
+  const cloudMembers = await fetchCloudMembersList(db, callerLower, memberEmails);
+  return { memberEmails, cloudMembers };
+}
+
+// =========================================================
+// REAL-TIME FIRESTORE SUBSCRIPTIONS
+// =========================================================
+
+export function subscribeWorkspaceCollections(
+  db: Firestore,
+  fbUser: FirebaseAuthUser,
+  knownDocs: KnownDocsMap,
+  onSliceUpdate: (partial: Partial<WorkspaceSnapshot>, memberEmails?: string[], cloudMembers?: CloudMemberRecord[]) => void,
+  onSyncError: (errMsg: string) => void,
+  verifiedEmail?: string
+): Unsubscribe {
+  const callerEmail = (verifiedEmail || getCallerEmail(fbUser)).trim();
+  const callerLower = callerEmail.toLowerCase();
+  const isBootstrapped = isBootstrappedAdminEmail(callerLower);
+  const scopedQuery = (colName: string) => collection(db, colName);
+
+  const markIds = (colName: string, ids: string[]) => {
+    knownDocs.set(colName, new Set(ids));
+  };
+
+  const unsubs: Unsubscribe[] = [];
+
+  const handleErr = (colName: string) => (err: unknown) => {
+    try {
+      handleFirestoreError(err, OperationType.LIST, colName);
+    } catch (wrapped: any) {
+      onSyncError(wrapped?.message || String(err));
+    }
+  };
+
+  // workspace_meta/main (single doc read/listen tracks live memberEmails + suppliers)
+  unsubs.push(
+    onSnapshot(
+      doc(db, 'workspace_meta', 'main'),
+      async (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          const storedMembers = normalizeStoredMemberEmails(data?.memberEmails);
+          if (!isBootstrapped && !storedMembers.includes(callerLower)) {
+            onSyncError(
+              `UNAUTHORIZED_MEMBER: Access for "${callerLower}" was removed. Ask a Shop Admin or Cloud Admin to re-authorize it in User Management.`
+            );
+            return;
+          }
+          const updatedCloudMembers = await fetchCloudMembersList(db, callerLower, storedMembers);
+          if (Array.isArray(data?.suppliers)) {
+            onSliceUpdate({ suppliers: data.suppliers }, storedMembers, updatedCloudMembers);
+          } else {
+            onSliceUpdate({}, storedMembers, updatedCloudMembers);
+          }
+        }
+      },
+      handleErr('workspace_meta/main')
+    )
+  );
+
+  // cloud_members live listener for bootstrapped admins (or own doc for others)
+  if (isBootstrapped) {
+    unsubs.push(
+      onSnapshot(
+        collection(db, 'cloud_members'),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => d.data() as CloudMemberRecord)
+            .sort((a, b) => a.email.localeCompare(b.email));
+          onSliceUpdate({}, undefined, list);
+        },
+        () => {
+          // Non-fatal fallback handled via workspace_meta refresh
+        }
+      )
+    );
+  }
+
+  // staff_users
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('staff_users'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: User[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromStaffUserDoc(d.data()));
+        });
+        markIds('staff_users', ids);
+        onSliceUpdate({ users: items });
+      },
+      handleErr('staff_users')
+    )
+  );
+
+  // products
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('products'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: Product[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromProductDoc(d.data()));
+        });
+        markIds('products', ids);
+        onSliceUpdate({ products: items });
+      },
+      handleErr('products')
+    )
+  );
+
+  // stock
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('stock'),
+      (snap) => {
+        const ids: string[] = [];
+        const map: Record<string, { godown: number; normal: number; ac: number }> = {};
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          const data = d.data();
+          const pid = data.productId || d.id;
+          map[pid] = {
+            godown: Number(data.godown || 0),
+            normal: Number(data.normal || 0),
+            ac: Number(data.ac || 0),
+          };
+        });
+        markIds('stock', ids);
+        onSliceUpdate({ stock: map });
+      },
+      handleErr('stock')
+    )
+  );
+
+  // purchases
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('purchases'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: PurchaseBatch[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromPurchaseDoc(d.data()));
+        });
+        markIds('purchases', ids);
+        onSliceUpdate({ purchases: items });
+      },
+      handleErr('purchases')
+    )
+  );
+
+  // requests
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('requests'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: StockRequestItem[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromRequestDoc(d.data()));
+        });
+        markIds('requests', ids);
+        onSliceUpdate({ requests: items });
+      },
+      handleErr('requests')
+    )
+  );
+
+  // transfers
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('transfers'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: StockTransfer[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromTransferDoc(d.data()));
+        });
+        markIds('transfers', ids);
+        onSliceUpdate({ transfers: items });
+      },
+      handleErr('transfers')
+    )
+  );
+
+  // daily_sales
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('daily_sales'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: DailySalesReport[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromDailySalesDoc(d.data()));
+        });
+        markIds('daily_sales', ids);
+        onSliceUpdate({ dailySales: items });
+      },
+      handleErr('daily_sales')
+    )
+  );
+
+  // operations
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('operations'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: DailyOperation[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromOperationDoc(d.data()));
+        });
+        markIds('operations', ids);
+        onSliceUpdate({ operations: items });
+      },
+      handleErr('operations')
+    )
+  );
+
+  // ledger
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('ledger'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: StockLedgerEntry[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromLedgerDoc(d.data()));
+        });
+        markIds('ledger', ids);
+        onSliceUpdate({ ledger: items });
+      },
+      handleErr('ledger')
+    )
+  );
+
+  // audit_log
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('audit_log'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: AuditLogEntry[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromAuditDoc(d.data()));
+        });
+        markIds('audit_log', ids);
+        onSliceUpdate({ auditLog: items });
+      },
+      handleErr('audit_log')
+    )
+  );
+
+  // dropdown_options
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('dropdown_options'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: DropdownOption[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromDropdownDoc(d.data()));
+        });
+        markIds('dropdown_options', ids);
+        onSliceUpdate({ dropdownOptions: items });
+      },
+      handleErr('dropdown_options')
+    )
+  );
+
+  return () => {
+    unsubs.forEach((u) => {
+      try {
+        u();
+      } catch {
+        // Ignore cleanup errors
+      }
+    });
   };
 }
 
-export function toFirestoreStaffUser(u: User, memberEmails: string[], isCreate = true): Record<string, any> {
-  const base: Record<string, any> = {
-    userId: clampStr(u.userId, 64),
-    username: clampStr(u.username, 64),
-    fullName: clampStr(u.fullName, 120),
-    role: u.role,
-    active: Boolean(u.active),
-    mustChange: Boolean(u.mustChange),
-    password: clampStr(u.password || 'changeme123', 128),
-    createdAtStr: clampStr(u.createdAt || '', 40),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
+// Manual pull for Retry / Sync button
+export async function fetchAllCollectionsFromFirestore(
+  db: Firestore,
+  fbUser: FirebaseAuthUser,
+  knownDocs: KnownDocsMap,
+  verifiedEmail?: string
+): Promise<Partial<WorkspaceSnapshot>> {
+  const result: Partial<WorkspaceSnapshot> = {};
+
+  const readCol = async <T,>(colName: string, mapper: (d: Record<string, any>) => T): Promise<T[]> => {
+    try {
+      const snap = await getDocs(collection(db, colName));
+      knownDocs.set(colName, new Set(snap.docs.map((d) => d.id)));
+      return snap.docs.map((d) => mapper(d.data()));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, colName);
+    }
   };
-  if (u.counter === 'NORMAL' || u.counter === 'AC') base.counter = u.counter;
-  if (u.updatedAt) base.updatedAtStr = clampStr(u.updatedAt, 40);
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
+
+  try {
+    const metaSnap = await getDoc(doc(db, 'workspace_meta', 'main'));
+    if (metaSnap.exists() && Array.isArray(metaSnap.data()?.suppliers)) {
+      result.suppliers = metaSnap.data().suppliers;
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, 'workspace_meta/main');
+  }
+
+  const [
+    users,
+    products,
+    stockArr,
+    purchases,
+    requests,
+    transfers,
+    dailySales,
+    operations,
+    ledger,
+    auditLog,
+    dropdownOptions,
+  ] = await Promise.all([
+    readCol('staff_users', fromStaffUserDoc),
+    readCol('products', fromProductDoc),
+    readCol('stock', (d) => ({ id: d.productId, data: d })),
+    readCol('purchases', fromPurchaseDoc),
+    readCol('requests', fromRequestDoc),
+    readCol('transfers', fromTransferDoc),
+    readCol('daily_sales', fromDailySalesDoc),
+    readCol('operations', fromOperationDoc),
+    readCol('ledger', fromLedgerDoc),
+    readCol('audit_log', fromAuditDoc),
+    readCol('dropdown_options', fromDropdownDoc),
+  ]);
+
+  const stockMap: Record<string, { godown: number; normal: number; ac: number }> = {};
+  stockArr.forEach((entry: any) => {
+    if (entry?.id) {
+      stockMap[entry.id] = {
+        godown: Number(entry.data?.godown || 0),
+        normal: Number(entry.data?.normal || 0),
+        ac: Number(entry.data?.ac || 0),
+      };
+    }
+  });
+
+  result.users = users;
+  result.products = products;
+  result.stock = stockMap;
+  result.purchases = purchases;
+  result.requests = requests;
+  result.transfers = transfers;
+  result.dailySales = dailySales;
+  result.operations = operations;
+  result.ledger = ledger;
+  result.auditLog = auditLog;
+  result.dropdownOptions = dropdownOptions;
+  return result;
 }
 
-export function fromFirestoreStaffUser(data: any): User {
-  return {
-    userId: data.userId,
-    username: data.username,
-    fullName: data.fullName,
-    role: data.role,
-    counter: data.counter || undefined,
-    active: Boolean(data.active),
-    mustChange: Boolean(data.mustChange),
-    password: data.password,
-    createdAt: data.createdAtStr || '',
-    updatedAt: data.updatedAtStr || undefined,
-  };
-}
+// =========================================================
+// GRANULAR SLICE SYNC (Rule-compliant creates, updates, deletes)
+// =========================================================
 
-export function toFirestoreProduct(p: Product, memberEmails: string[], isCreate = true): Record<string, any> {
-  const base: Record<string, any> = {
-    productId: clampStr(p.productId, 64),
-    name: clampStr(p.name, 140),
-    category: clampStr(p.category, 80),
-    sizeML: Math.max(0, Number(p.sizeML) || 0),
-    casePack: Math.max(1, Number(p.casePack) || 1),
-    sellingPrice: Math.max(0, Number(p.sellingPrice) || 0),
-    active: Boolean(p.active),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (p.updatedAt) base.updatedAtStr = clampStr(p.updatedAt, 40);
-  if (p.updatedBy) base.updatedBy = clampStr(p.updatedBy, 80);
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
+export async function syncSlicesToFirestore(
+  db: Firestore,
+  fbUser: FirebaseAuthUser,
+  knownDocs: KnownDocsMap,
+  prevSnapshot: WorkspaceSnapshot,
+  nextSnapshot: WorkspaceSnapshot,
+  dirtySlices: string[],
+  deletedIds?: Record<string, string[]>,
+  isReset = false,
+  activeMemberEmails?: string[]
+): Promise<void> {
+  const callerEmail = getCallerEmail(fbUser);
+  const memberEmails = normalizeMemberEmails(
+    activeMemberEmails && activeMemberEmails.length > 0 ? activeMemberEmails : DEFAULT_ADMIN_EMAILS,
+    callerEmail
+  );
+  const dirty = new Set(dirtySlices);
 
-export function fromFirestoreProduct(data: any): Product {
-  return {
-    productId: data.productId,
-    name: data.name,
-    category: data.category,
-    sizeML: Number(data.sizeML) || 0,
-    casePack: Number(data.casePack) || 1,
-    sellingPrice: Number(data.sellingPrice) || 0,
-    active: data.active !== false,
-    updatedAt: data.updatedAtStr || undefined,
-    updatedBy: data.updatedBy || undefined,
+  const ensureSet = (col: string): Set<string> => {
+    let s = knownDocs.get(col);
+    if (!s) {
+      s = new Set();
+      knownDocs.set(col, s);
+    }
+    return s;
   };
-}
 
-export function toFirestoreStockLevel(
-  productId: string,
-  val: { godown: number; normal: number; ac: number },
-  memberEmails: string[],
-  isCreate = true
-): Record<string, any> {
-  const base: Record<string, any> = {
-    productId: clampStr(productId, 64),
-    godown: Math.max(0, Number(val.godown) || 0),
-    normal: Math.max(0, Number(val.normal) || 0),
-    ac: Math.max(0, Number(val.ac) || 0),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
+  if (isReset) {
+    // Delete transactional collections cleanly, then reset opening state
+    const colsToClear = ['purchases', 'requests', 'transfers', 'daily_sales', 'operations', 'ledger', 'audit_log'];
+    const deleteOps: Array<{ type: 'set' | 'delete'; path: string; id: string }> = [];
+    for (const colName of colsToClear) {
+      try {
+        const snap = await getDocs(collection(db, colName));
+        snap.docs.forEach((d) => deleteOps.push({ type: 'delete', path: colName, id: d.id }));
+        knownDocs.set(colName, new Set());
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, colName);
+      }
+    }
+    if (deleteOps.length > 0) {
+      await commitOperationsInChunks(db, deleteOps);
+    }
+    // Reset stock & suppliers
+    const stockKnown = ensureSet('stock');
+    for (const [pid, lvl] of Object.entries(nextSnapshot.stock)) {
+      const ref = doc(db, 'stock', pid);
+      try {
+        if (stockKnown.has(pid)) {
+          await updateDoc(ref, {
+            godown: nonNegNum(lvl.godown, 0),
+            normal: nonNegNum(lvl.normal, 0),
+            ac: nonNegNum(lvl.ac, 0),
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(ref, toStockDoc(pid, lvl, memberEmails));
+          stockKnown.add(pid);
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `stock/${pid}`);
+      }
+    }
+    try {
+      await updateDoc(doc(db, 'workspace_meta', 'main'), {
+        suppliers: nextSnapshot.suppliers.slice(0, 100),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'workspace_meta/main');
+    }
+  }
 
-export function toFirestorePurchaseBatch(b: PurchaseBatch, memberEmails: string[], isCreate = true): Record<string, any> {
-  const safeLines = stripUndefinedDeep((b.lines || []).slice(0, 200));
-  const base: Record<string, any> = {
-    batchId: clampStr(b.batchId, 64),
-    supplier: clampStr(b.supplier, 160),
-    date: clampStr(b.date, 20),
-    billDate: clampStr(b.billDate, 20),
-    invoiceNo: clampStr(b.invoiceNo, 80),
-    permitNumber: clampStr(b.permitNumber || 'N/A', 80),
-    documentNumber: clampStr(b.documentNumber || 'N/A', 80),
-    status: b.status,
-    lines: safeLines,
-    totalQty: Math.max(0, Number(b.totalQty) || 0),
-    grossTotal: Math.max(0, Number(b.grossTotal) || 0),
-    sedTotal: Math.max(0, Number(b.sedTotal) || 0),
-    discountTotal: Math.max(0, Number(b.discountTotal) || 0),
-    tcsTotal: Math.max(0, Number(b.tcsTotal) || 0),
-    netTotal: Math.max(0, Number(b.netTotal) || 0),
-    createdBy: clampStr(b.createdBy || 'admin', 80),
-    createdAtStr: clampStr(b.createdAt || new Date().toISOString(), 40),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (b.reviewedBy) base.reviewedBy = clampStr(b.reviewedBy, 80);
-  if (b.reviewedAt) base.reviewedAtStr = clampStr(b.reviewedAt, 40);
-  if (b.remark !== undefined) base.remark = clampStr(b.remark, 300);
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
+  // 1. suppliers
+  if (dirty.has('suppliers')) {
+    try {
+      await updateDoc(doc(db, 'workspace_meta', 'main'), {
+        suppliers: nextSnapshot.suppliers.slice(0, 100),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'workspace_meta/main');
+    }
+  }
 
-export function fromFirestorePurchaseBatch(data: any): PurchaseBatch {
-  return {
-    batchId: data.batchId,
-    supplier: data.supplier,
-    date: data.date,
-    billDate: data.billDate,
-    invoiceNo: data.invoiceNo,
-    permitNumber: data.permitNumber,
-    documentNumber: data.documentNumber,
-    status: data.status,
-    lines: Array.isArray(data.lines) ? data.lines : [],
-    totalQty: Number(data.totalQty) || 0,
-    grossTotal: Number(data.grossTotal) || 0,
-    sedTotal: Number(data.sedTotal) || 0,
-    discountTotal: Number(data.discountTotal) || 0,
-    tcsTotal: Number(data.tcsTotal) || 0,
-    netTotal: Number(data.netTotal) || 0,
-    createdBy: data.createdBy,
-    createdAt: data.createdAtStr || '',
-    reviewedBy: data.reviewedBy,
-    reviewedAt: data.reviewedAtStr,
-    remark: data.remark,
-  };
-}
+  // 2. users -> staff_users
+  if (dirty.has('users')) {
+    const known = ensureSet('staff_users');
+    const prevMap = new Map(prevSnapshot.users.map((u) => [u.userId, u]));
+    for (const u of nextSnapshot.users) {
+      const prev = prevMap.get(u.userId);
+      const path = `staff_users/${u.userId}`;
+      try {
+        if (!known.has(u.userId)) {
+          await setDoc(doc(db, 'staff_users', u.userId), toStaffUserDoc(u, memberEmails));
+          known.add(u.userId);
+        } else if (
+          !prev ||
+          prev.password !== u.password ||
+          prev.mustChange !== u.mustChange ||
+          prev.active !== u.active ||
+          prev.updatedAt !== u.updatedAt
+        ) {
+          const patch: Record<string, any> = { updatedAt: serverTimestamp() };
+          if (!prev || prev.password !== u.password) patch.password = nonEmptyStr(u.password, 128, '1234');
+          if (!prev || prev.mustChange !== u.mustChange) patch.mustChange = Boolean(u.mustChange);
+          if (!prev || prev.active !== u.active) patch.active = Boolean(u.active);
+          if (u.updatedAt) patch.updatedAtStr = sanitizeStr(u.updatedAt, 40);
+          await updateDoc(doc(db, 'staff_users', u.userId), patch);
+        }
+      } catch (err) {
+        handleFirestoreError(err, known.has(u.userId) ? OperationType.UPDATE : OperationType.CREATE, path);
+      }
+    }
+  }
 
-export function toFirestoreStockRequest(r: StockRequestItem, memberEmails: string[], isCreate = true): Record<string, any> {
-  const base: Record<string, any> = {
-    requestId: clampStr(r.requestId, 64),
-    counter: r.counter,
-    productId: clampStr(r.productId, 64),
-    productName: clampStr(r.productName, 160),
-    category: clampStr(r.category, 80),
-    sizeML: Math.max(0, Number(r.sizeML) || 0),
-    casePack: Math.max(1, Number(r.casePack) || 1),
-    qty: Math.max(0, Number(r.qty) || 0),
-    enteredQty: Math.max(0, Number(r.enteredQty) || 0),
-    unit: r.unit,
-    reason: clampStr(r.reason || '', 240),
-    status: r.status,
-    date: clampStr(r.date, 20),
-    createdBy: clampStr(r.createdBy || 'staff', 80),
-    createdAtStr: clampStr(r.createdAt || '', 40),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (r.reviewedBy) base.reviewedBy = clampStr(r.reviewedBy, 80);
-  if (r.reviewedAt) base.reviewedAtStr = clampStr(r.reviewedAt, 40);
-  if (r.remark !== undefined) base.remark = clampStr(r.remark, 300);
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
+  // 3. products -> products
+  if (dirty.has('products')) {
+    const known = ensureSet('products');
+    const prevMap = new Map(prevSnapshot.products.map((p) => [p.productId, p]));
+    for (const p of nextSnapshot.products) {
+      const prev = prevMap.get(p.productId);
+      const path = `products/${p.productId}`;
+      try {
+        if (!known.has(p.productId)) {
+          await setDoc(doc(db, 'products', p.productId), toProductDoc(p, memberEmails));
+          known.add(p.productId);
+        } else if (
+          !prev ||
+          prev.name !== p.name ||
+          prev.category !== p.category ||
+          prev.sizeML !== p.sizeML ||
+          prev.casePack !== p.casePack ||
+          prev.sellingPrice !== p.sellingPrice ||
+          prev.active !== p.active ||
+          prev.updatedAt !== p.updatedAt
+        ) {
+          const patch: Record<string, any> = {
+            name: nonEmptyStr(p.name, 140, 'Unnamed Product'),
+            category: nonEmptyStr(p.category, 80, 'Others'),
+            sizeML: nonNegNum(p.sizeML, 750),
+            casePack: Math.max(1, nonNegNum(p.casePack, 12)),
+            sellingPrice: nonNegNum(p.sellingPrice, 0),
+            active: Boolean(p.active),
+            updatedAt: serverTimestamp(),
+          };
+          if (p.updatedAt !== undefined) patch.updatedAtStr = sanitizeStr(p.updatedAt, 40);
+          if (p.updatedBy !== undefined) patch.updatedBy = sanitizeStr(p.updatedBy, 80);
+          await updateDoc(doc(db, 'products', p.productId), patch);
+        }
+      } catch (err) {
+        handleFirestoreError(err, known.has(p.productId) ? OperationType.UPDATE : OperationType.CREATE, path);
+      }
+    }
+  }
 
-export function fromFirestoreStockRequest(data: any): StockRequestItem {
-  return {
-    requestId: data.requestId,
-    counter: data.counter,
-    productId: data.productId,
-    productName: data.productName,
-    category: data.category,
-    sizeML: Number(data.sizeML) || 0,
-    casePack: Number(data.casePack) || 1,
-    qty: Number(data.qty) || 0,
-    enteredQty: Number(data.enteredQty) || 0,
-    unit: data.unit,
-    reason: data.reason || '',
-    status: data.status,
-    date: data.date,
-    createdBy: data.createdBy,
-    createdAt: data.createdAtStr || '',
-    reviewedBy: data.reviewedBy,
-    reviewedAt: data.reviewedAtStr,
-    remark: data.remark,
-  };
-}
+  // 4. stock -> stock
+  if (dirty.has('stock')) {
+    const known = ensureSet('stock');
+    for (const [pid, lvl] of Object.entries(nextSnapshot.stock)) {
+      const prev = prevSnapshot.stock[pid];
+      if (
+        !known.has(pid) ||
+        !prev ||
+        prev.godown !== lvl.godown ||
+        prev.normal !== lvl.normal ||
+        prev.ac !== lvl.ac
+      ) {
+        const path = `stock/${pid}`;
+        try {
+          if (!known.has(pid)) {
+            await setDoc(doc(db, 'stock', pid), toStockDoc(pid, lvl, memberEmails));
+            known.add(pid);
+          } else {
+            await updateDoc(doc(db, 'stock', pid), {
+              godown: nonNegNum(lvl.godown, 0),
+              normal: nonNegNum(lvl.normal, 0),
+              ac: nonNegNum(lvl.ac, 0),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } catch (err) {
+          handleFirestoreError(err, known.has(pid) ? OperationType.UPDATE : OperationType.CREATE, path);
+        }
+      }
+    }
+  }
 
-export function toFirestoreStockTransfer(t: StockTransfer, memberEmails: string[], isCreate = true): Record<string, any> {
-  const base: Record<string, any> = {
-    transferId: clampStr(t.transferId, 64),
-    type: t.type,
-    fromLoc: t.fromLoc,
-    toLoc: t.toLoc,
-    productId: clampStr(t.productId, 64),
-    productName: clampStr(t.productName, 160),
-    casePack: Math.max(1, Number(t.casePack) || 1),
-    qty: Math.max(0, Number(t.qty) || 0),
-    status: t.status,
-    createdBy: clampStr(t.createdBy || 'admin', 80),
-    createdAtStr: clampStr(t.createdAt || '', 40),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (t.enteredQty !== undefined) base.enteredQty = Number(t.enteredQty) || 0;
-  if (t.unit) base.unit = t.unit;
-  if (t.note !== undefined) base.note = clampStr(t.note, 240);
-  if (t.reviewedBy) base.reviewedBy = clampStr(t.reviewedBy, 80);
-  if (t.reviewedAt) base.reviewedAtStr = clampStr(t.reviewedAt, 40);
-  if (t.remark !== undefined) base.remark = clampStr(t.remark, 300);
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
+  // 5. purchases -> purchases
+  if (dirty.has('purchases') || (deletedIds?.purchases && deletedIds.purchases.length > 0)) {
+    const known = ensureSet('purchases');
+    for (const delId of deletedIds?.purchases || []) {
+      try {
+        await deleteDoc(doc(db, 'purchases', delId));
+        known.delete(delId);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `purchases/${delId}`);
+      }
+    }
+    const prevMap = new Map(prevSnapshot.purchases.map((b) => [b.batchId, b]));
+    for (const b of nextSnapshot.purchases) {
+      const prev = prevMap.get(b.batchId);
+      const path = `purchases/${b.batchId}`;
+      try {
+        if (!known.has(b.batchId)) {
+          await setDoc(doc(db, 'purchases', b.batchId), toPurchaseDoc(b, memberEmails));
+          known.add(b.batchId);
+        } else if (!prev || JSON.stringify(prev) !== JSON.stringify(b)) {
+          if (prev && prev.status === 'Pending' && b.status !== 'Pending') {
+            await updateDoc(doc(db, 'purchases', b.batchId), {
+              status: b.status,
+              reviewedBy: sanitizeStr(b.reviewedBy, 80, ''),
+              reviewedAtStr: sanitizeStr(b.reviewedAt, 40, ''),
+              remark: sanitizeStr(b.remark, 300, ''),
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            await updateDoc(doc(db, 'purchases', b.batchId), {
+              date: nonEmptyStr(b.date, 20, '2026-01-01'),
+              billDate: nonEmptyStr(b.billDate, 20, '2026-01-01'),
+              supplier: nonEmptyStr(b.supplier, 160, 'Supplier'),
+              invoiceNo: nonEmptyStr(b.invoiceNo, 80, 'INV'),
+              lines: Array.isArray(b.lines) ? b.lines.slice(0, 200) : [],
+              totalQty: nonNegNum(b.totalQty, 0),
+              netTotal: nonNegNum(b.netTotal, 0),
+              remark: sanitizeStr(b.remark, 300, ''),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      } catch (err) {
+        handleFirestoreError(err, known.has(b.batchId) ? OperationType.UPDATE : OperationType.CREATE, path);
+      }
+    }
+  }
 
-export function fromFirestoreStockTransfer(data: any): StockTransfer {
-  return {
-    transferId: data.transferId,
-    type: data.type,
-    fromLoc: data.fromLoc,
-    toLoc: data.toLoc,
-    productId: data.productId,
-    productName: data.productName,
-    casePack: Number(data.casePack) || 1,
-    qty: Number(data.qty) || 0,
-    enteredQty: data.enteredQty,
-    unit: data.unit,
-    note: data.note,
-    status: data.status,
-    createdBy: data.createdBy,
-    createdAt: data.createdAtStr || '',
-    reviewedBy: data.reviewedBy,
-    reviewedAt: data.reviewedAtStr,
-    remark: data.remark,
-  };
-}
+  // 6. requests -> requests
+  if (dirty.has('requests')) {
+    const known = ensureSet('requests');
+    const prevMap = new Map(prevSnapshot.requests.map((r) => [r.requestId, r]));
+    for (const r of nextSnapshot.requests) {
+      const prev = prevMap.get(r.requestId);
+      const path = `requests/${r.requestId}`;
+      try {
+        if (!known.has(r.requestId)) {
+          await setDoc(doc(db, 'requests', r.requestId), toRequestDoc(r, memberEmails));
+          known.add(r.requestId);
+        } else if (prev && prev.status === 'Pending' && r.status !== 'Pending') {
+          await updateDoc(doc(db, 'requests', r.requestId), {
+            status: r.status,
+            reviewedBy: sanitizeStr(r.reviewedBy, 80, ''),
+            reviewedAtStr: sanitizeStr(r.reviewedAt, 40, ''),
+            remark: sanitizeStr(r.remark, 300, ''),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        handleFirestoreError(err, known.has(r.requestId) ? OperationType.UPDATE : OperationType.CREATE, path);
+      }
+    }
+  }
 
-export function toFirestoreDailySalesReport(r: DailySalesReport, memberEmails: string[], isCreate = true): Record<string, any> {
-  const safeLines = stripUndefinedDeep((r.lines || []).slice(0, 300));
-  const base: Record<string, any> = {
-    reportId: clampStr(r.reportId, 64),
-    date: clampStr(r.date, 20),
-    counter: r.counter,
-    status: r.status,
-    totalSoldQty: Math.max(0, Number(r.totalSoldQty) || 0),
-    totalSalesValue: Math.max(0, Number(r.totalSalesValue) || 0),
-    recordedAmount: Number(r.recordedAmount) || 0,
-    cashAmount: Math.max(0, Number(r.cashAmount) || 0),
-    upiAmount: Math.max(0, Number(r.upiAmount) || 0),
-    cardAmount: Math.max(0, Number(r.cardAmount) || 0),
-    cashierName: clampStr(r.cashierName || '', 100),
-    helperName: clampStr(r.helperName || '', 100),
-    paymentDifference: Number(r.paymentDifference) || 0,
-    cutoffSeq: Number(r.cutoffSeq) || 0,
-    submittedBy: clampStr(r.submittedBy || 'staff', 80),
-    submittedAtStr: clampStr(r.submittedAt || '', 40),
-    lines: safeLines,
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (r.acCharges !== undefined) base.acCharges = Number(r.acCharges) || 0;
-  if (r.paymentExplanation !== undefined) base.paymentExplanation = clampStr(r.paymentExplanation, 300);
-  if (r.reviewedBy) base.reviewedBy = clampStr(r.reviewedBy, 80);
-  if (r.reviewedAt) base.reviewedAtStr = clampStr(r.reviewedAt, 40);
-  if (r.remark !== undefined) base.remark = clampStr(r.remark, 300);
-  if (r.editedBy) base.editedBy = clampStr(r.editedBy, 80);
-  if (r.editedAt) base.editedAtStr = clampStr(r.editedAt, 40);
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
+  // 7. transfers -> transfers
+  if (dirty.has('transfers')) {
+    const known = ensureSet('transfers');
+    const prevMap = new Map(prevSnapshot.transfers.map((t) => [t.transferId, t]));
+    for (const t of nextSnapshot.transfers) {
+      const prev = prevMap.get(t.transferId);
+      const path = `transfers/${t.transferId}`;
+      try {
+        if (!known.has(t.transferId)) {
+          await setDoc(doc(db, 'transfers', t.transferId), toTransferDoc(t, memberEmails));
+          known.add(t.transferId);
+        } else if (prev && prev.status === 'Pending' && t.status !== 'Pending') {
+          await updateDoc(doc(db, 'transfers', t.transferId), {
+            status: t.status,
+            reviewedBy: sanitizeStr(t.reviewedBy, 80, ''),
+            reviewedAtStr: sanitizeStr(t.reviewedAt, 40, ''),
+            remark: sanitizeStr(t.remark, 300, ''),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        handleFirestoreError(err, known.has(t.transferId) ? OperationType.UPDATE : OperationType.CREATE, path);
+      }
+    }
+  }
 
-export function fromFirestoreDailySalesReport(data: any): DailySalesReport {
-  return {
-    reportId: data.reportId,
-    date: data.date,
-    counter: data.counter,
-    status: data.status === 'Pending' ? 'Approved' : data.status,
-    totalSoldQty: Number(data.totalSoldQty) || 0,
-    totalSalesValue: Number(data.totalSalesValue) || 0,
-    recordedAmount: Number(data.recordedAmount) || 0,
-    cashAmount: Number(data.cashAmount) || 0,
-    upiAmount: Number(data.upiAmount) || 0,
-    cardAmount: Number(data.cardAmount) || 0,
-    acCharges: data.acCharges,
-    cashierName: data.cashierName || '',
-    helperName: data.helperName || '',
-    paymentDifference: Number(data.paymentDifference) || 0,
-    paymentExplanation: data.paymentExplanation,
-    cutoffSeq: Number(data.cutoffSeq) || 0,
-    submittedBy: data.submittedBy,
-    submittedAt: data.submittedAtStr || '',
-    reviewedBy: data.reviewedBy || (data.status === 'Pending' ? 'Auto-Approved' : undefined),
-    reviewedAt: data.reviewedAtStr,
-    remark: data.remark,
-    editedBy: data.editedBy,
-    editedAt: data.editedAtStr,
-    lines: Array.isArray(data.lines) ? data.lines : [],
-  };
-}
+  // 8. dailySales -> daily_sales
+  if (dirty.has('dailySales') || (deletedIds?.dailySales && deletedIds.dailySales.length > 0)) {
+    const known = ensureSet('daily_sales');
+    for (const delId of deletedIds?.dailySales || []) {
+      try {
+        await deleteDoc(doc(db, 'daily_sales', delId));
+        known.delete(delId);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `daily_sales/${delId}`);
+      }
+    }
+    const prevMap = new Map(prevSnapshot.dailySales.map((r) => [r.reportId, r]));
+    for (const r of nextSnapshot.dailySales) {
+      const prev = prevMap.get(r.reportId);
+      const path = `daily_sales/${r.reportId}`;
+      try {
+        if (!known.has(r.reportId)) {
+          await setDoc(doc(db, 'daily_sales', r.reportId), toDailySalesDoc(r, memberEmails));
+          known.add(r.reportId);
+        } else if (!prev || JSON.stringify(prev) !== JSON.stringify(r)) {
+          if (
+            prev &&
+            prev.status === 'Pending' &&
+            r.status !== 'Pending' &&
+            prev.totalSoldQty === r.totalSoldQty &&
+            prev.recordedAmount === r.recordedAmount
+          ) {
+            await updateDoc(doc(db, 'daily_sales', r.reportId), {
+              status: r.status,
+              reviewedBy: sanitizeStr(r.reviewedBy, 80, ''),
+              reviewedAtStr: sanitizeStr(r.reviewedAt, 40, ''),
+              remark: sanitizeStr(r.remark, 300, ''),
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            const patch: Record<string, any> = {
+              totalSoldQty: nonNegNum(r.totalSoldQty, 0),
+              totalSalesValue: nonNegNum(r.totalSalesValue, 0),
+              recordedAmount: anyNum(r.recordedAmount, 0),
+              lines: Array.isArray(r.lines) ? r.lines.slice(0, 300) : [],
+              remark: sanitizeStr(r.remark, 300, ''),
+              updatedAt: serverTimestamp(),
+            };
+            if (r.editedBy !== undefined) patch.editedBy = sanitizeStr(r.editedBy, 80);
+            if (r.editedAt !== undefined) patch.editedAtStr = sanitizeStr(r.editedAt, 40);
+            await updateDoc(doc(db, 'daily_sales', r.reportId), patch);
+          }
+        }
+      } catch (err) {
+        handleFirestoreError(err, known.has(r.reportId) ? OperationType.UPDATE : OperationType.CREATE, path);
+      }
+    }
+  }
 
-export function toFirestoreDailyOperation(o: DailyOperation, memberEmails: string[], isCreate = true): Record<string, any> {
-  const base: Record<string, any> = {
-    operationId: clampStr(o.operationId, 64),
-    type: o.type,
-    date: clampStr(o.date, 20),
-    name: clampStr(o.name, 160),
-    amount: Number(o.amount) || 0,
-    status: o.status,
-    createdBy: clampStr(o.createdBy || 'staff', 80),
-    createdAtStr: clampStr(o.createdAt || '', 40),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (o.payment) base.payment = o.payment;
-  if (o.roomNo !== undefined) base.roomNo = Number(o.roomNo) || 0;
-  if (o.location) base.location = o.location;
-  if (o.productId) base.productId = clampStr(o.productId, 64);
-  if (o.productName) base.productName = clampStr(o.productName, 160);
-  if (o.qty !== undefined) base.qty = Number(o.qty) || 0;
-  if (o.reason !== undefined) base.reason = clampStr(o.reason, 240);
-  if (o.reviewedBy) base.reviewedBy = clampStr(o.reviewedBy, 80);
-  if (o.reviewedAt) base.reviewedAtStr = clampStr(o.reviewedAt, 40);
-  if (o.reviewRemark !== undefined) base.reviewRemark = clampStr(o.reviewRemark, 300);
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
+  // 9. operations -> operations
+  if (dirty.has('operations') || (deletedIds?.operations && deletedIds.operations.length > 0)) {
+    const known = ensureSet('operations');
+    for (const delId of deletedIds?.operations || []) {
+      try {
+        await deleteDoc(doc(db, 'operations', delId));
+        known.delete(delId);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `operations/${delId}`);
+      }
+    }
+    const prevMap = new Map(prevSnapshot.operations.map((o) => [o.operationId, o]));
+    for (const o of nextSnapshot.operations) {
+      const prev = prevMap.get(o.operationId);
+      const path = `operations/${o.operationId}`;
+      try {
+        if (!known.has(o.operationId)) {
+          await setDoc(doc(db, 'operations', o.operationId), toOperationDoc(o, memberEmails));
+          known.add(o.operationId);
+        } else if (prev && prev.status === 'Pending' && o.status !== 'Pending') {
+          await updateDoc(doc(db, 'operations', o.operationId), {
+            status: o.status,
+            reviewedBy: sanitizeStr(o.reviewedBy, 80, ''),
+            reviewedAtStr: sanitizeStr(o.reviewedAt, 40, ''),
+            reviewRemark: sanitizeStr(o.reviewRemark, 300, ''),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        handleFirestoreError(err, known.has(o.operationId) ? OperationType.UPDATE : OperationType.CREATE, path);
+      }
+    }
+  }
 
-export function fromFirestoreDailyOperation(data: any): DailyOperation {
-  return {
-    operationId: data.operationId,
-    type: data.type,
-    date: data.date,
-    name: data.name,
-    amount: Number(data.amount) || 0,
-    payment: data.payment,
-    roomNo: data.roomNo,
-    location: data.location,
-    productId: data.productId,
-    productName: data.productName,
-    qty: data.qty,
-    reason: data.reason,
-    status: data.status,
-    createdBy: data.createdBy,
-    createdAt: data.createdAtStr || '',
-    reviewedBy: data.reviewedBy,
-    reviewedAt: data.reviewedAtStr,
-    reviewRemark: data.reviewRemark,
-  };
-}
+  // 10. ledger -> ledger (append-only)
+  if (dirty.has('ledger')) {
+    const known = ensureSet('ledger');
+    const newEntries = nextSnapshot.ledger.filter((l) => !known.has(l.ledgerId));
+    if (newEntries.length > 0) {
+      await commitOperationsInChunks(
+        db,
+        newEntries.map((l) => ({
+          type: 'set',
+          path: 'ledger',
+          id: l.ledgerId,
+          data: toLedgerDoc(l, memberEmails),
+        }))
+      );
+      newEntries.forEach((l) => known.add(l.ledgerId));
+    }
+  }
 
-export function toFirestoreLedgerEntry(l: StockLedgerEntry, memberEmails: string[], isCreate = true): Record<string, any> {
-  const base: Record<string, any> = {
-    seq: Number(l.seq) || 0,
-    ledgerId: clampStr(l.ledgerId, 64),
-    timestampStr: clampStr(l.timestamp, 40),
-    location: l.location,
-    productId: clampStr(l.productId, 64),
-    delta: Number(l.delta) || 0,
-    balanceAfter: Math.max(0, Number(l.balanceAfter) || 0),
-    refType: l.refType,
-    refId: clampStr(l.refId, 80),
-    approvedBy: clampStr(l.approvedBy || 'system', 80),
-    businessDate: clampStr(l.businessDate, 20),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (l.productName) base.productName = clampStr(l.productName, 160);
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
+  // 11. auditLog -> audit_log (append-only)
+  if (dirty.has('auditLog')) {
+    const known = ensureSet('audit_log');
+    const newEntries = nextSnapshot.auditLog.filter((a) => !known.has(a.auditId));
+    if (newEntries.length > 0) {
+      await commitOperationsInChunks(
+        db,
+        newEntries.map((a) => ({
+          type: 'set',
+          path: 'audit_log',
+          id: a.auditId,
+          data: toAuditDoc(a, memberEmails),
+        }))
+      );
+      newEntries.forEach((a) => known.add(a.auditId));
+    }
+  }
 
-export function fromFirestoreLedgerEntry(data: any): StockLedgerEntry {
-  return {
-    seq: Number(data.seq) || 0,
-    ledgerId: data.ledgerId,
-    timestamp: data.timestampStr || '',
-    location: data.location,
-    productId: data.productId,
-    productName: data.productName,
-    delta: Number(data.delta) || 0,
-    balanceAfter: Number(data.balanceAfter) || 0,
-    refType: data.refType,
-    refId: data.refId,
-    approvedBy: data.approvedBy,
-    businessDate: data.businessDate,
-  };
-}
-
-export function toFirestoreAuditEntry(a: AuditLogEntry, memberEmails: string[], isCreate = true): Record<string, any> {
-  const base: Record<string, any> = {
-    auditId: clampStr(a.auditId, 64),
-    timestampStr: clampStr(a.timestamp, 40),
-    userId: clampStr(a.userId || '-', 64),
-    username: clampStr(a.username || 'system', 80),
-    role: clampStr(a.role || 'SYSTEM', 32),
-    action: clampStr(a.action, 80),
-    refId: clampStr(a.refId || '', 80),
-    details: clampStr(a.details || '', 500),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
-
-export function fromFirestoreAuditEntry(data: any): AuditLogEntry {
-  return {
-    auditId: data.auditId,
-    timestamp: data.timestampStr || '',
-    userId: data.userId,
-    username: data.username,
-    role: data.role,
-    action: data.action,
-    refId: data.refId,
-    details: data.details,
-  };
-}
-
-export function toFirestoreDropdownOption(d: DropdownOption, memberEmails: string[], isCreate = true): Record<string, any> {
-  const base: Record<string, any> = {
-    optionId: clampStr(d.optionId, 64),
-    type: d.type,
-    value: clampStr(d.value, 140),
-    active: Boolean(d.active),
-    createdAtStr: clampStr(d.createdAt || '', 40),
-    memberEmails: sanitizeEmailList(memberEmails),
-    updatedAt: serverTimestamp(),
-  };
-  if (isCreate) base.createdAt = serverTimestamp();
-  return base;
-}
-
-export function fromFirestoreDropdownOption(data: any): DropdownOption {
-  return {
-    optionId: data.optionId,
-    type: data.type,
-    value: data.value,
-    active: data.active !== false,
-    createdAt: data.createdAtStr || '',
-  };
+  // 12. dropdownOptions -> dropdown_options
+  if (dirty.has('dropdownOptions')) {
+    const known = ensureSet('dropdown_options');
+    const prevMap = new Map(prevSnapshot.dropdownOptions.map((o) => [o.optionId, o]));
+    for (const o of nextSnapshot.dropdownOptions) {
+      const prev = prevMap.get(o.optionId);
+      const path = `dropdown_options/${o.optionId}`;
+      try {
+        if (!known.has(o.optionId)) {
+          await setDoc(doc(db, 'dropdown_options', o.optionId), toDropdownDoc(o, memberEmails));
+          known.add(o.optionId);
+        } else if (!prev || prev.active !== o.active || prev.value !== o.value) {
+          await updateDoc(doc(db, 'dropdown_options', o.optionId), {
+            active: Boolean(o.active),
+            value: nonEmptyStr(o.value, 140, 'Option'),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        handleFirestoreError(err, known.has(o.optionId) ? OperationType.UPDATE : OperationType.CREATE, path);
+      }
+    }
+  }
 }

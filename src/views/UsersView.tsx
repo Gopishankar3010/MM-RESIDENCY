@@ -3,10 +3,10 @@ import { useStock } from '../context/StockContext';
 import { User, Role } from '../types';
 import { 
   Users, UserPlus, KeyRound, Shield, CheckCircle2, 
-  XCircle, Search, Power, Printer, Cloud, Trash2, MailPlus
+  XCircle, Search, Power, Printer, Cloud, MailPlus, Trash2
 } from 'lucide-react';
 import { matchesSearchQuery } from '../data/initialData';
-import { BOOTSTRAPPED_ADMIN_EMAIL, getGoogleAccountEmail } from '../firebase';
+import { isBootstrappedAdminEmail } from '../utils/firestoreSync';
 
 export const UsersView: React.FC = () => {
   const {
@@ -17,6 +17,7 @@ export const UsersView: React.FC = () => {
     toggleUserActive,
     firebaseUser,
     cloudMembers,
+    isCloudAdmin,
     authorizeCloudEmail,
     revokeCloudEmail,
   } = useStock();
@@ -36,14 +37,11 @@ export const UsersView: React.FC = () => {
   const [resetUserId, setResetUserId] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
 
-  // Cloud Sync Member Authorization State
+  // Cloud Google Email Authorization State
   const [cloudEmailInput, setCloudEmailInput] = useState('');
   const [cloudLabelInput, setCloudLabelInput] = useState('');
-  const [cloudRoleInput, setCloudRoleInput] = useState<'ADMIN' | 'STAFF'>('ADMIN');
+  const [cloudRoleInput, setCloudRoleInput] = useState<'STAFF' | 'ADMIN'>('STAFF');
   const [isSavingCloudMember, setIsSavingCloudMember] = useState(false);
-
-  const isCloudOwner =
-    getGoogleAccountEmail(firebaseUser) === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
 
   if (currentUser?.role !== 'ADMIN') {
     return (
@@ -134,19 +132,22 @@ export const UsersView: React.FC = () => {
   const handleAuthorizeEmail = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!cloudEmailInput.trim()) {
-      setError('Enter a Google email address to authorize.');
+    setSuccess('');
+    const clean = cloudEmailInput.trim().toLowerCase();
+    if (!clean || !clean.includes('@')) {
+      setError('Enter a valid Google email address to authorize.');
       return;
     }
     try {
       setIsSavingCloudMember(true);
-      await authorizeCloudEmail(cloudEmailInput.trim(), cloudLabelInput.trim(), cloudRoleInput);
-      setSuccess(`Authorized ${cloudEmailInput.trim().toLowerCase()} for live Multi-Device Cloud Sync.`);
+      await authorizeCloudEmail(clean, cloudLabelInput.trim() || clean, cloudRoleInput);
       setCloudEmailInput('');
       setCloudLabelInput('');
-      setTimeout(() => setSuccess(''), 5000);
+      setCloudRoleInput('STAFF');
+      setSuccess(`Authorized ${clean} for Google sign-in and live cloud sync.`);
+      setTimeout(() => setSuccess(''), 4000);
     } catch (err: any) {
-      setError(err?.message || 'Failed to authorize cloud email.');
+      setError(err?.message || 'Failed to authorize Google email.');
     } finally {
       setIsSavingCloudMember(false);
     }
@@ -154,13 +155,14 @@ export const UsersView: React.FC = () => {
 
   const handleRevokeEmail = async (memberId: string, email: string) => {
     setError('');
+    setSuccess('');
     try {
       setIsSavingCloudMember(true);
       await revokeCloudEmail(memberId, email);
-      setSuccess(`Removed cloud sync access for ${email}.`);
+      setSuccess(`Removed Google cloud access for ${email}.`);
       setTimeout(() => setSuccess(''), 4000);
     } catch (err: any) {
-      setError(err?.message || 'Failed to remove cloud email.');
+      setError(err?.message || 'Failed to remove Google email.');
     } finally {
       setIsSavingCloudMember(false);
     }
@@ -334,70 +336,70 @@ export const UsersView: React.FC = () => {
         </div>
       </div>
 
-      {/* Authorized Multi-Device Cloud Emails (Google Sync) */}
-      <div className="no-print bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      {/* Authorized Multi-Device Google Accounts */}
+      <div className="no-print bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
               <Cloud className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               <h2 className="text-lg font-black text-stone-900 dark:text-stone-100">
-                Authorized Multi-Device Cloud Emails (Google Sync)
+                Authorized Staff Google Accounts
               </h2>
             </div>
-            <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
-              Anyone signing in on another computer or phone with an authorized Google email shares the live Firebase cloud database in real time.
+            <p className="text-xs text-stone-500 dark:text-stone-400 mt-1 leading-relaxed">
+              Add staff or partner Google emails below so they can sign in on another computer or phone with their own verified Google account, then enter their Staff User ID and Password.
             </p>
           </div>
-          <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 px-3 py-1 text-xs font-mono text-emerald-700 dark:text-emerald-300 shrink-0">
-            Connected: {getGoogleAccountEmail(firebaseUser) || 'Email unavailable'}
-          </span>
+          <div className="text-xs font-mono tabular-nums text-stone-600 dark:text-stone-300 shrink-0">
+            Connected: {firebaseUser?.email || '—'}
+          </div>
         </div>
 
-        {isCloudOwner ? (
-          <form onSubmit={handleAuthorizeEmail} className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-stone-50 dark:bg-stone-950/60 p-4 rounded-xl border border-stone-200 dark:border-stone-800">
+        {isCloudAdmin ? (
+          <form onSubmit={handleAuthorizeEmail} className="grid grid-cols-1 md:grid-cols-12 gap-3 pt-2 border-t border-stone-100 dark:border-stone-800">
             <div className="md:col-span-5">
-              <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
-                Friend / Staff Google Email
+              <label className="block text-[11px] font-bold text-stone-500 dark:text-stone-400 mb-1">
+                Staff / Partner Google Email
               </label>
               <input
                 type="email"
                 required
-                placeholder="e.g. friendname@gmail.com"
+                placeholder="e.g. staffname@gmail.com"
                 value={cloudEmailInput}
                 onChange={(e) => setCloudEmailInput(e.target.value)}
-                className="w-full bg-white dark:bg-stone-900 px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-700 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                className="w-full bg-stone-50 dark:bg-stone-950 px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-700 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
               />
             </div>
             <div className="md:col-span-3">
-              <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
+              <label className="block text-[11px] font-bold text-stone-500 dark:text-stone-400 mb-1">
                 Device / Person Label
               </label>
               <input
                 type="text"
-                placeholder="e.g. Partner Laptop"
+                placeholder="e.g. AC Counter Tablet"
                 value={cloudLabelInput}
                 onChange={(e) => setCloudLabelInput(e.target.value)}
-                className="w-full bg-white dark:bg-stone-900 px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-700 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                className="w-full bg-stone-50 dark:bg-stone-950 px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-700 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
-                Access Level
+              <label className="block text-[11px] font-bold text-stone-500 dark:text-stone-400 mb-1">
+                Cloud Role
               </label>
               <select
                 value={cloudRoleInput}
-                onChange={(e) => setCloudRoleInput(e.target.value as 'ADMIN' | 'STAFF')}
-                className="w-full bg-white dark:bg-stone-900 px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-700 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                onChange={(e) => setCloudRoleInput(e.target.value as 'STAFF' | 'ADMIN')}
+                className="w-full bg-stone-50 dark:bg-stone-950 px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-700 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
               >
-                <option value="ADMIN">Admin</option>
                 <option value="STAFF">Counter Staff</option>
+                <option value="ADMIN">Cloud Admin</option>
               </select>
             </div>
             <div className="md:col-span-2 flex items-end">
               <button
                 type="submit"
                 disabled={isSavingCloudMember}
-                className="w-full flex items-center justify-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                className="w-full flex items-center justify-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
               >
                 <MailPlus className="w-4 h-4" />
                 <span>{isSavingCloudMember ? 'Saving...' : 'Authorize'}</span>
@@ -405,56 +407,52 @@ export const UsersView: React.FC = () => {
             </div>
           </form>
         ) : (
-          <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
-            Only the Primary Owner Google account (<span className="font-mono font-bold">{BOOTSTRAPPED_ADMIN_EMAIL}</span>) can authorize or remove multi-device Google emails.
+          <div className="pt-2 border-t border-stone-100 dark:border-stone-800 text-xs text-amber-700 dark:text-amber-300">
+            Only the Primary Owner or an approved Cloud Admin can add or remove authorized Google accounts.
           </div>
         )}
 
-        <div className="overflow-x-auto border border-stone-200 dark:border-stone-800 rounded-xl">
+        <div className="overflow-x-auto border-t border-stone-200 dark:border-stone-800">
           <table className="w-full text-left text-xs">
-            <thead className="bg-stone-50 dark:bg-stone-950/50 text-stone-500 dark:text-stone-400 font-bold border-b border-stone-200 dark:border-stone-800">
+            <thead className="text-stone-500 dark:text-stone-400 font-bold border-b border-stone-200 dark:border-stone-800">
               <tr>
-                <th className="py-2.5 px-4">Google Email</th>
-                <th className="py-2.5 px-4">Device / Label</th>
-                <th className="py-2.5 px-4">Cloud Role</th>
-                <th className="py-2.5 px-4 text-right">Action</th>
+                <th className="py-3 pr-4">Google Email</th>
+                <th className="py-3 px-4">Device / Label</th>
+                <th className="py-3 px-4">Cloud Access</th>
+                <th className="py-3 pl-4 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
               {cloudMembers.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-4 px-4 text-center text-stone-400">
-                    Primary owner ({BOOTSTRAPPED_ADMIN_EMAIL}) is synced. Add additional Google accounts above if your friend uses a separate Gmail.
+                  <td colSpan={4} className="py-5 text-center text-stone-400">
+                    No authorized staff Google accounts found yet. Add an email above to grant device access.
                   </td>
                 </tr>
               ) : (
                 cloudMembers.map((m) => {
-                  const isOwnerRow = m.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+                  const isProtectedAdmin = isBootstrappedAdminEmail(m.email);
                   return (
                     <tr key={m.memberId} className="hover:bg-stone-50/50 dark:hover:bg-stone-800/40">
-                      <td className="py-2.5 px-4 font-mono font-semibold text-stone-900 dark:text-stone-100">
+                      <td className="py-3 pr-4 font-mono tabular-nums font-semibold text-stone-900 dark:text-stone-100">
                         {m.email}
                       </td>
-                      <td className="py-2.5 px-4 text-stone-600 dark:text-stone-300">{m.label}</td>
-                      <td className="py-2.5 px-4">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          m.role === 'ADMIN'
-                            ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
-                            : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
-                        }`}>
-                          {isOwnerRow ? 'OWNER ADMIN' : m.role}
+                      <td className="py-3 px-4 text-stone-600 dark:text-stone-300">{m.label || '—'}</td>
+                      <td className="py-3 px-4 font-semibold">
+                        <span className={m.role === 'ADMIN' ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300'}>
+                          {isProtectedAdmin ? 'Primary Admin' : m.role === 'ADMIN' ? 'Cloud Admin' : 'Counter Staff'}
                         </span>
                       </td>
-                      <td className="py-2.5 px-4 text-right">
-                        {isOwnerRow ? (
-                          <span className="text-[11px] font-semibold text-stone-400">Primary Owner</span>
+                      <td className="py-3 pl-4 text-right">
+                        {isProtectedAdmin ? (
+                          <span className="text-[11px] font-medium text-stone-400">Protected</span>
                         ) : (
                           <button
                             type="button"
-                            disabled={!isCloudOwner || isSavingCloudMember}
+                            disabled={!isCloudAdmin || isSavingCloudMember}
                             onClick={() => handleRevokeEmail(m.memberId, m.email)}
-                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 disabled:opacity-40 cursor-pointer font-semibold"
-                            title="Revoke cloud sync access"
+                            className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 disabled:opacity-40 cursor-pointer font-semibold"
+                            title="Revoke Google access"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                             <span>Remove</span>
