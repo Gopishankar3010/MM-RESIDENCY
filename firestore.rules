@@ -9,7 +9,7 @@ service cloud.firestore {
     }
 
     // =========================================================
-    // GLOBAL HARDENED PRIMITIVES
+    // GLOBAL HARDENED PRIMITIVES (Phase 3)
     // =========================================================
     function incoming() {
       return request.resource.data;
@@ -39,15 +39,21 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isVerified() && request.auth.token.email.lower() in [
-        'gopishankarsegar@ptuniv.edu.in',
-        'madhumithame1008@gmail.com'
-      ];
+      return isVerified() && request.auth.token.email == 'gopishankarsegar@ptuniv.edu.in';
     }
 
     function isAdmin() {
       return isBootstrappedAdmin()
         || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isWorkspaceMemberByMeta() {
+      return isBootstrappedAdmin()
+        || (
+          isVerified()
+          && exists(/databases/$(database)/documents/workspace_meta/main)
+          && request.auth.token.email in get(/databases/$(database)/documents/workspace_meta/main).data.memberEmails
+        );
     }
 
     function isValidMemberEmails(listVal) {
@@ -86,7 +92,7 @@ service cloud.firestore {
     }
 
     // =========================================================
-    // ENTITY VALIDATION BLUEPRINTS
+    // ENTITY VALIDATION BLUEPRINTS (Phase 2)
     // =========================================================
     function isValidCloudMember(data) {
       return data.keys().hasAll(['memberId', 'email', 'label', 'role', 'addedBy', 'createdAt', 'updatedAt'])
@@ -357,10 +363,7 @@ service cloud.firestore {
     }
 
     // =========================================================
-    // COLLECTION SECURITY RULES
-    // Any verified Google-authenticated user can connect to the
-    // Sign-In page and operate the shared workspace after signing
-    // in with a valid shop User ID & Password.
+    // COLLECTION SECURITY RULES (Phase 4)
     // =========================================================
 
     match /test/{docId} {
@@ -375,8 +378,8 @@ service cloud.firestore {
     }
 
     match /cloud_members/{memberId} {
-      allow get: if isValidId(memberId) && (isAdmin() || (isVerified() && existing().email == request.auth.token.email.lower()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && existing().email == request.auth.token.email.lower());
+      allow get: if isValidId(memberId) && (isAdmin() || (isVerified() && existing().email == request.auth.token.email));
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().email == request.auth.token.email);
       allow create: if isValidId(memberId)
         && isAdmin()
         && isValidCloudMember(incoming())
@@ -393,22 +396,21 @@ service cloud.firestore {
     }
 
     match /workspace_meta/{metaId} {
-      allow get: if isValidId(metaId) && metaId == 'main' && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(metaId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(metaId)
         && metaId == 'main'
-        && isVerified()
+        && isAdmin()
         && isValidWorkspaceMeta(incoming())
         && incoming().metaId == metaId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(metaId)
-        && isVerified()
         && isValidWorkspaceMeta(incoming())
         && incoming().metaId == existing().metaId
         && incoming().ownerEmail == existing().ownerEmail
         && hasUpdateTimestamps(incoming())
         && (
-          incoming().diff(existing()).affectedKeys().hasOnly(['suppliers', 'updatedAt']) ||
+          (isWorkspaceMemberByMeta() && incoming().diff(existing()).affectedKeys().hasOnly(['suppliers', 'updatedAt'])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['bootstrapped', 'openingEpoch', 'catalogVersion', 'suppliers', 'memberEmails', 'updatedAt']))
         );
@@ -416,232 +418,229 @@ service cloud.firestore {
     }
 
     match /staff_users/{userId} {
-      allow get: if isValidId(userId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(userId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(userId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidStaffUser(incoming())
         && incoming().userId == userId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(userId)
-        && isVerified()
         && isValidStaffUser(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().userId == existing().userId
         && hasUpdateTimestamps(incoming())
         && (
+          isAdmin() ||
           incoming().diff(existing()).affectedKeys().hasOnly(['password', 'mustChange', 'updatedAtStr', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAtStr', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['active', 'password', 'mustChange', 'updatedAtStr', 'updatedAt']) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
         );
       allow delete: if isValidId(userId) && isAdmin();
     }
 
     match /products/{productId} {
-      allow get: if isValidId(productId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(productId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(productId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidProduct(incoming())
         && incoming().productId == productId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(productId)
-        && isVerified()
         && isValidProduct(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().productId == existing().productId
         && hasUpdateTimestamps(incoming())
         && (
+          isAdmin() ||
           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'category', 'sizeML', 'casePack', 'sellingPrice', 'active', 'updatedAtStr', 'updatedBy', 'updatedAt']) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
         );
       allow delete: if isValidId(productId) && isAdmin();
     }
 
     match /stock/{productId} {
-      allow get: if isValidId(productId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(productId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(productId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidStockLevel(incoming())
         && incoming().productId == productId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(productId)
-        && isVerified()
         && isValidStockLevel(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().productId == existing().productId
         && hasUpdateTimestamps(incoming())
         && (
+          isAdmin() ||
           incoming().diff(existing()).affectedKeys().hasOnly(['godown', 'normal', 'ac', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['godown', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['normal', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['ac', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['godown', 'normal', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['godown', 'ac', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['normal', 'ac', 'updatedAt']) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
         );
       allow delete: if isValidId(productId) && isAdmin();
     }
 
     match /purchases/{batchId} {
-      allow get: if isValidId(batchId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(batchId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(batchId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidPurchaseBatch(incoming())
         && incoming().batchId == batchId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(batchId)
-        && isVerified()
         && isValidPurchaseBatch(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().batchId == existing().batchId
         && incoming().createdBy == existing().createdBy
         && incoming().createdAtStr == existing().createdAtStr
         && hasUpdateTimestamps(incoming())
         && (
+          isAdmin() ||
           (existing().status == 'Pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'remark', 'updatedAt'])) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['date', 'billDate', 'supplier', 'invoiceNo', 'lines', 'totalQty', 'netTotal', 'remark', 'updatedAt']) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
         );
-      allow delete: if isValidId(batchId) && isVerified();
+      allow delete: if isValidId(batchId) && isWorkspaceMemberByMeta();
     }
 
     match /requests/{requestId} {
-      allow get: if isValidId(requestId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(requestId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(requestId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidStockRequest(incoming())
         && incoming().requestId == requestId
         && incoming().status == 'Pending'
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(requestId)
-        && isVerified()
         && isValidStockRequest(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().requestId == existing().requestId
         && incoming().createdBy == existing().createdBy
         && hasUpdateTimestamps(incoming())
         && (
+          isAdmin() ||
           (existing().status == 'Pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'remark', 'updatedAt'])) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
         );
-      allow delete: if isValidId(requestId) && isVerified();
+      allow delete: if isValidId(requestId) && isAdmin();
     }
 
     match /transfers/{transferId} {
-      allow get: if isValidId(transferId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(transferId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(transferId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidStockTransfer(incoming())
         && incoming().transferId == transferId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(transferId)
-        && isVerified()
         && isValidStockTransfer(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().transferId == existing().transferId
         && hasUpdateTimestamps(incoming())
         && (
-          (existing().status == 'Pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'remark', 'updatedAt'])) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
         );
-      allow delete: if isValidId(transferId) && isVerified();
+      allow delete: if isValidId(transferId) && isAdmin();
     }
 
     match /daily_sales/{reportId} {
-      allow get: if isValidId(reportId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(reportId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(reportId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidDailySalesReport(incoming())
         && incoming().reportId == reportId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(reportId)
-        && isVerified()
         && isValidDailySalesReport(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().reportId == existing().reportId
         && hasUpdateTimestamps(incoming())
         && (
+          isAdmin() ||
           incoming().diff(existing()).affectedKeys().hasOnly(['totalSoldQty', 'totalSalesValue', 'recordedAmount', 'cashAmount', 'upiAmount', 'cardAmount', 'acCharges', 'cashierName', 'helperName', 'paymentDifference', 'paymentExplanation', 'remark', 'editedBy', 'editedAtStr', 'lines', 'status', 'reviewedBy', 'reviewedAtStr', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['totalSoldQty', 'totalSalesValue', 'recordedAmount', 'lines', 'editedBy', 'editedAtStr', 'remark', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'remark', 'updatedAt']) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
         );
-      allow delete: if isValidId(reportId) && isVerified();
+      allow delete: if isValidId(reportId) && isWorkspaceMemberByMeta();
     }
 
     match /operations/{operationId} {
-      allow get: if isValidId(operationId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(operationId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(operationId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidDailyOperation(incoming())
         && incoming().operationId == operationId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(operationId)
-        && isVerified()
         && isValidDailyOperation(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().operationId == existing().operationId
         && hasUpdateTimestamps(incoming())
         && (
+          isAdmin() ||
           (existing().status == 'Pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'reviewRemark', 'updatedAt'])) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
         );
-      allow delete: if isValidId(operationId) && isVerified();
+      allow delete: if isValidId(operationId) && isWorkspaceMemberByMeta();
     }
 
     match /ledger/{ledgerId} {
-      allow get: if isValidId(ledgerId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(ledgerId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(ledgerId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidStockLedgerEntry(incoming())
         && incoming().ledgerId == ledgerId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(ledgerId)
-        && isVerified()
         && isValidStockLedgerEntry(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().ledgerId == existing().ledgerId
         && hasUpdateTimestamps(incoming())
-        && isAdmin()
         && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']);
-      allow delete: if isValidId(ledgerId) && isVerified();
+      allow delete: if isValidId(ledgerId) && isAdmin();
     }
 
     match /audit_log/{auditId} {
-      allow get: if isValidId(auditId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(auditId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(auditId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidAuditLogEntry(incoming())
         && incoming().auditId == auditId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(auditId)
-        && isVerified()
         && isValidAuditLogEntry(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().auditId == existing().auditId
         && hasUpdateTimestamps(incoming())
-        && isAdmin()
         && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']);
-      allow delete: if isValidId(auditId) && isVerified();
+      allow delete: if isValidId(auditId) && isAdmin();
     }
 
     match /dropdown_options/{optionId} {
-      allow get: if isValidId(optionId) && isVerified();
-      allow list: if isVerified();
+      allow get: if isValidId(optionId) && (isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails));
+      allow list: if isBootstrappedAdmin() || (isVerified() && request.auth.token.email in existing().memberEmails);
       allow create: if isValidId(optionId)
-        && isVerified()
+        && isWorkspaceMemberByMeta()
         && isValidDropdownOption(incoming())
         && incoming().optionId == optionId
         && hasCreateTimestamps(incoming());
       allow update: if isValidId(optionId)
-        && isVerified()
         && isValidDropdownOption(incoming())
+        && isWorkspaceMemberByMeta()
         && incoming().optionId == existing().optionId
         && hasUpdateTimestamps(incoming())
         && (
+          isAdmin() ||
           incoming().diff(existing()).affectedKeys().hasOnly(['active', 'value', 'updatedAt']) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])
         );
       allow delete: if isValidId(optionId) && isAdmin();
     }

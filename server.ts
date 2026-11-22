@@ -15,8 +15,8 @@ app.use(express.json({ limit: '50mb' }));
 // Persistent server data directory
 const DATA_DIR = path.join(__dirname, 'server-data');
 const DATA_FILE = path.join(DATA_DIR, 'store.json');
-const BACKUP_FILE = path.join(DATA_DIR, 'store.bak.json');
 
+// Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -25,28 +25,22 @@ if (!fs.existsSync(DATA_DIR)) {
   }
 }
 
-// In-memory state cache backed by persistent file on disk
+// In-memory state cache backed by persistent file
 let cachedState: any = null;
-for (const candidate of [DATA_FILE, BACKUP_FILE]) {
-  if (cachedState) break;
-  if (fs.existsSync(candidate)) {
-    try {
-      const raw = fs.readFileSync(candidate, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
-        if (!parsed._version) parsed._version = 1;
-        cachedState = parsed;
-        console.log(
-          `[Store] Loaded state from ${path.basename(candidate)} (v${parsed._version}, ${parsed?.purchases?.length || 0} purchases, ${parsed?.dailySales?.length || 0} sales reports, ${parsed?.requests?.length || 0} requests).`
-        );
-      }
-    } catch (err) {
-      console.error(`[Store] Failed to read ${path.basename(candidate)}:`, err);
+if (fs.existsSync(DATA_FILE)) {
+  try {
+    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+    cachedState = JSON.parse(raw);
+    if (cachedState && typeof cachedState === 'object' && !cachedState._version) {
+      cachedState._version = 1;
     }
+    console.log(`[Store] Loaded persistent state with ${cachedState?.dailySales?.length || 0} sales reports, ${cachedState?.requests?.length || 0} requests.`);
+  } catch (err) {
+    console.error('[Store] Failed to read initial store.json:', err);
   }
 }
 
-// Connected SSE clients for instant cross-device push updates
+// Connected SSE clients for instant cross-device notifications
 const sseClients = new Set<express.Response>();
 
 function broadcastSSE(event: string, data: any) {
@@ -79,13 +73,7 @@ app.get('/api/events', (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
 
-  res.write(
-    `event: connected\ndata: ${JSON.stringify({
-      version: cachedState ? cachedState._version || 1 : 0,
-      updatedAt: cachedState?.updatedAt || null,
-      serverTime: new Date().toISOString(),
-    })}\n\n`
-  );
+  res.write(`event: connected\ndata: ${JSON.stringify({ version: cachedState ? (cachedState._version || 1) : 0, updatedAt: cachedState?.updatedAt || null, serverTime: new Date().toISOString() })}\n\n`);
   sseClients.add(res);
 
   const heartbeat = setInterval(() => {
@@ -103,21 +91,21 @@ app.get('/api/events', (req, res) => {
   });
 });
 
-// GET /api/version - Lightweight version check for multi-device polling fallback
-app.get('/api/version', (_req, res) => {
+// GET /api/version - Ultra-lightweight version check so multi-device polling stays instant
+app.get('/api/version', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   return res.json({
     success: true,
-    version: cachedState ? cachedState._version || 1 : 0,
+    version: cachedState ? (cachedState._version || 1) : 0,
     updatedAt: cachedState?.updatedAt || null,
-    serverTime: new Date().toISOString(),
+    serverTime: new Date().toISOString()
   });
 });
 
 // GET /api/state - Return synchronized state to any device (never cached)
-app.get('/api/state', (_req, res) => {
+app.get('/api/state', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -127,7 +115,7 @@ app.get('/api/state', (_req, res) => {
       data: cachedState,
       serverTime: new Date().toISOString(),
       version: cachedState._version || 1,
-      updatedAt: cachedState.updatedAt || null,
+      updatedAt: cachedState.updatedAt || null
     });
   }
   return res.json({
@@ -135,7 +123,7 @@ app.get('/api/state', (_req, res) => {
     data: null,
     serverTime: new Date().toISOString(),
     version: 0,
-    updatedAt: null,
+    updatedAt: null
   });
 });
 
@@ -143,33 +131,28 @@ function persistStateAtomically(stateObj: any) {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
-  const serialized = JSON.stringify(stateObj, null, 2);
   const tmpFile = `${DATA_FILE}.tmp`;
-  fs.writeFileSync(tmpFile, serialized, 'utf-8');
+  fs.writeFileSync(tmpFile, JSON.stringify(stateObj, null, 2), 'utf-8');
   fs.renameSync(tmpFile, DATA_FILE);
-  try {
-    fs.writeFileSync(BACKUP_FILE, serialized, 'utf-8');
-  } catch {
-    // Non-fatal backup write
-  }
 }
 
 function mergeServerUsers(existingUsers: any[], incomingUsers: any[]) {
   const byKey = new Map<string, any>();
   const keyOf = (u: any) => String(u?.userId || u?.username || '').toLowerCase();
 
-  (Array.isArray(existingUsers) ? existingUsers : []).forEach((u) => {
+  (Array.isArray(existingUsers) ? existingUsers : []).forEach(u => {
     const k = keyOf(u);
     if (k) byKey.set(k, u);
   });
 
-  (Array.isArray(incomingUsers) ? incomingUsers : []).forEach((u) => {
+  (Array.isArray(incomingUsers) ? incomingUsers : []).forEach(u => {
     const k = keyOf(u);
     if (!k) return;
     const prev = byKey.get(k);
     if (!prev) {
       byKey.set(k, u);
     } else {
+      // Keep whichever version has a newer updatedAt or prefer incoming for explicit edits
       const prevTs = String(prev.updatedAt || '');
       const incTs = String(u.updatedAt || '');
       if (!prevTs || incTs >= prevTs) {
@@ -184,10 +167,7 @@ function mergeServerUsers(existingUsers: any[], incomingUsers: any[]) {
 function mergeByIdDesc(existingArr: any[], incomingArr: any[], idField: string): any[] {
   const seen = new Set<string>();
   const out: any[] = [];
-  for (const item of [
-    ...(Array.isArray(incomingArr) ? incomingArr : []),
-    ...(Array.isArray(existingArr) ? existingArr : []),
-  ]) {
+  for (const item of [...(Array.isArray(incomingArr) ? incomingArr : []), ...(Array.isArray(existingArr) ? existingArr : [])]) {
     const id = String(item?.[idField] || '');
     if (!id || seen.has(id)) continue;
     seen.add(id);
@@ -196,64 +176,7 @@ function mergeByIdDesc(existingArr: any[], incomingArr: any[], idField: string):
   return out;
 }
 
-function getRecordStamp(rec: any): string {
-  return String(
-    rec?.editedAt || rec?.reviewedAt || rec?.updatedAt || rec?.submittedAt || rec?.createdAt || ''
-  );
-}
-
-function mergeRecordsById(
-  existingArr: any[],
-  incomingArr: any[],
-  idField: string,
-  deletedIds?: string[]
-): any[] {
-  const deletedSet = new Set((deletedIds || []).map((x) => String(x)));
-  const byId = new Map<string, any>();
-
-  (Array.isArray(existingArr) ? existingArr : []).forEach((item) => {
-    const id = String(item?.[idField] || '');
-    if (!id || deletedSet.has(id)) return;
-    byId.set(id, item);
-  });
-
-  (Array.isArray(incomingArr) ? incomingArr : []).forEach((item) => {
-    const id = String(item?.[idField] || '');
-    if (!id || deletedSet.has(id)) return;
-    const prev = byId.get(id);
-    if (!prev) {
-      byId.set(id, item);
-      return;
-    }
-    // Prefer reviewed/non-pending status over Pending when stamps match or race
-    if (prev.status === 'Pending' && item.status && item.status !== 'Pending') {
-      byId.set(id, item);
-      return;
-    }
-    if (item.status === 'Pending' && prev.status && prev.status !== 'Pending') {
-      return;
-    }
-    const prevStamp = getRecordStamp(prev);
-    const incStamp = getRecordStamp(item);
-    if (!prevStamp || incStamp >= prevStamp) {
-      byId.set(id, item);
-    }
-  });
-
-  return Array.from(byId.values());
-}
-
-const SLICE_ID_FIELDS: Record<string, string> = {
-  purchases: 'batchId',
-  requests: 'requestId',
-  transfers: 'transferId',
-  dailySales: 'reportId',
-  operations: 'operationId',
-  products: 'productId',
-  dropdownOptions: 'optionId',
-};
-
-// POST /api/state - Save updated state from any device and persist atomically to disk
+// POST /api/state - Save updated state from any device and persist to disk
 app.post('/api/state', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   try {
@@ -264,28 +187,24 @@ app.post('/api/state', (req, res) => {
 
     const prevPendingIds = new Set<string>(
       Array.isArray(cachedState?.requests)
-        ? cachedState.requests
-            .filter((r: any) => r?.status === 'Pending')
-            .map((r: any) => String(r.requestId))
+        ? cachedState.requests.filter((r: any) => r?.status === 'Pending').map((r: any) => String(r.requestId))
         : []
     );
 
     const version = (cachedState?._version || 0) + 1;
     const updatedAt = new Date().toISOString();
 
-    const { _resetRequested, _baseVersion, _dirtySlices, _deletedIds, _clientId, ...cleanIncoming } =
-      incoming;
+    const { _resetRequested, _baseVersion, _dirtySlices, _clientId, ...cleanIncoming } = incoming;
 
+    // Never allow a stale payload to wipe existing system users unless explicit sample reset requested
     const safeUsers = _resetRequested
-      ? Array.isArray(cleanIncoming.users)
-        ? cleanIncoming.users
-        : []
+      ? (Array.isArray(cleanIncoming.users) ? cleanIncoming.users : [])
       : Array.isArray(cachedState?.users) && cachedState.users.length > 0
       ? mergeServerUsers(cachedState.users, cleanIncoming.users)
-      : Array.isArray(cleanIncoming.users)
-      ? cleanIncoming.users
-      : [];
+      : (Array.isArray(cleanIncoming.users) ? cleanIncoming.users : []);
 
+    // If another device committed a newer version since this client's last pull,
+    // merge only this client's dirty slices onto cachedState instead of wiping other devices' changes.
     let mergedConflict = false;
     let nextStateBody: any;
     const hasConcurrentUpdate =
@@ -305,20 +224,9 @@ app.post('/api/state', (req, res) => {
         if (slice === 'users') {
           nextStateBody.users = safeUsers;
         } else if (slice === 'auditLog') {
-          nextStateBody.auditLog = mergeByIdDesc(
-            cachedState.auditLog,
-            cleanIncoming.auditLog,
-            'auditId'
-          );
+          nextStateBody.auditLog = mergeByIdDesc(cachedState.auditLog, cleanIncoming.auditLog, 'auditId');
         } else if (slice === 'ledger') {
           nextStateBody.ledger = mergeByIdDesc(cachedState.ledger, cleanIncoming.ledger, 'ledgerId');
-        } else if (SLICE_ID_FIELDS[slice]) {
-          nextStateBody[slice] = mergeRecordsById(
-            cachedState[slice],
-            cleanIncoming[slice],
-            SLICE_ID_FIELDS[slice],
-            _deletedIds?.[slice]
-          );
         } else if (cleanIncoming[slice] !== undefined) {
           nextStateBody[slice] = cleanIncoming[slice];
         }
@@ -329,22 +237,21 @@ app.post('/api/state', (req, res) => {
     } else {
       nextStateBody = {
         ...cleanIncoming,
-        users: safeUsers,
+        users: safeUsers
       };
     }
 
     const newPendingRequests = Array.isArray(nextStateBody.requests)
-      ? nextStateBody.requests.filter(
-          (r: any) => r?.status === 'Pending' && !prevPendingIds.has(String(r.requestId))
-        )
+      ? nextStateBody.requests.filter((r: any) => r?.status === 'Pending' && !prevPendingIds.has(String(r.requestId)))
       : [];
 
     cachedState = {
       ...nextStateBody,
       _version: version,
-      updatedAt,
+      updatedAt
     };
 
+    // Atomically persist to disk before returning HTTP 200 so saves are guaranteed durable
     persistStateAtomically(cachedState);
 
     broadcastSSE('state_updated', { version, updatedAt, clientId: _clientId || null });
@@ -353,7 +260,7 @@ app.post('/api/state', (req, res) => {
         version,
         updatedAt,
         count: newPendingRequests.length,
-        requests: newPendingRequests,
+        requests: newPendingRequests
       });
     }
 
@@ -362,7 +269,7 @@ app.post('/api/state', (req, res) => {
       version,
       updatedAt,
       merged: mergedConflict,
-      data: mergedConflict ? cachedState : undefined,
+      data: mergedConflict ? cachedState : undefined
     });
   } catch (err: any) {
     console.error('[Store] POST /api/state error:', err);
@@ -371,14 +278,14 @@ app.post('/api/state', (req, res) => {
 });
 
 // GET /api/health
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     status: 'ok',
     uptime: process.uptime(),
     serverTime: new Date().toISOString(),
     hasData: !!cachedState,
-    version: cachedState?._version || 0,
+    version: cachedState?._version || 0
   });
 });
 
@@ -386,27 +293,27 @@ async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
 
   if (!isProd) {
+    // Development mode: Vite middleware attached to Express
     const { createServer } = await import('vite');
     const vite = await createServer({
       server: {
         middlewareMode: true,
-        hmr: process.env.DISABLE_HMR !== 'true',
+        hmr: process.env.DISABLE_HMR !== 'true'
       },
-      appType: 'spa',
+      appType: 'spa'
     });
     app.use(vite.middlewares);
   } else {
+    // Production mode: Serve built bundle from dist/
     const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
+    app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(
-      `[MM Residency] Server started on http://0.0.0.0:${PORT} (${isProd ? 'production' : 'development'})`
-    );
+    console.log(`[MM Residency] Server started on http://0.0.0.0:${PORT} (${isProd ? 'production' : 'development'})`);
   });
 }
 

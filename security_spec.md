@@ -3,10 +3,10 @@
 ## 1. Data Invariants
 1. **Default-Deny Catch-All**: All unspecified Firestore paths return `PERMISSION_DENIED`.
 2. **Verified Identity**: No read or write (except `/test/connection` probe) succeeds without `request.auth != null && request.auth.token.email_verified == true`.
-3. **Workspace Membership**: Only the bootstrapped admins (`gopishankarsegar@ptuniv.edu.in`, `madhumithame1008@gmail.com`) or verified Google accounts listed in `resource.data.memberEmails` (list <= 25) can list or read shop workspace documents.
+3. **Workspace Membership**: Only the bootstrapped admin (`gopishankarsegar@ptuniv.edu.in`) or verified Google accounts listed in `resource.data.memberEmails` (list <= 25) can list or read shop workspace documents.
 4. **Immutable Ledger & Audit**: `ledger` and `audit_log` entries cannot be mutated once created (except `memberEmails` sync by admin when onboarding a new device email).
 5. **Temporal Integrity**: All writes require `createdAt == request.time` on creation and `updatedAt == request.time` + `createdAt == existing().createdAt` on update.
-6. **Admin Isolation**: Only the bootstrapped admins (`gopishankarsegar@ptuniv.edu.in`, `madhumithame1008@gmail.com`, verified) or documents in `/admins/{uid}` can manage `/cloud_members`, `/staff_users`, `/products`, `/purchases`, and approve/delete records.
+6. **Admin Isolation**: Only `gopishankarsegar@ptuniv.edu.in` (verified) or documents in `/admins/{uid}` can manage `/cloud_members`, `/staff_users`, `/products`, `/purchases`, and approve/delete records.
 7. **Strict Key & Size Enforcement**: Every collection enforces `keys().hasAll(...)`, `keys().hasOnly(...)`, `.size()` limits on all strings and bounded arrays (`memberEmails.size() <= 25`, `lines.size() <= 200`/`300`).
 
 ## 2. "Dirty Dozen" Attack Payloads (All Must Fail with PERMISSION_DENIED)
