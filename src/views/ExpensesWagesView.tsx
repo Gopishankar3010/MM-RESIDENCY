@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { DailyOperation } from '../types';
-import { Plus, Trash2, PlusCircle, Check, Printer, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, PlusCircle, Check, Printer, AlertTriangle, Settings2, X } from 'lucide-react';
+import { DropdownOption } from '../types';
 
 interface EntryRow {
   name: string;
@@ -16,7 +17,8 @@ export const ExpensesWagesView: React.FC = () => {
     dropdownOptions,
     saveDailyOperationsBatch,
     deleteDailyOperation,
-    addDropdownOption
+    addDropdownOption,
+    deleteDropdownOption
   } = useStock();
 
   // Tabular state for expenses
@@ -28,6 +30,10 @@ export const ExpensesWagesView: React.FC = () => {
   const [showAddOptionModal, setShowAddOptionModal] = useState<{ type: 'EXPENSE' | 'WAGE' } | null>(null);
   const [newOptionValue, setNewOptionValue] = useState('');
 
+  // Manage / remove unused dropdown options dialog
+  const [manageOptionsModal, setManageOptionsModal] = useState<{ type: 'EXPENSE' | 'WAGE' } | null>(null);
+  const [deletingOptionId, setDeletingOptionId] = useState<string | null>(null);
+
   // Delete operation confirmation dialog
   const [deleteOpTarget, setDeleteOpTarget] = useState<DailyOperation | null>(null);
   const [isDeletingOp, setIsDeletingOp] = useState(false);
@@ -36,6 +42,46 @@ export const ExpensesWagesView: React.FC = () => {
 
   const expenseOptions = dropdownOptions.filter(o => o.type === 'EXPENSE' && o.active);
   const wageOptions = dropdownOptions.filter(o => o.type === 'WAGE' && o.active);
+
+  const getOptionUsageCount = (type: 'EXPENSE' | 'WAGE', value: string): number => {
+    const clean = value.trim().toLowerCase();
+    return operations.filter(op => op.type === type && op.name.trim().toLowerCase() === clean).length;
+  };
+
+  const findUnusedOptionByValue = (type: 'EXPENSE' | 'WAGE', value: string): DropdownOption | undefined => {
+    const clean = value.trim().toLowerCase();
+    if (!clean) return undefined;
+    const pool = type === 'EXPENSE' ? expenseOptions : wageOptions;
+    const match = pool.find(o => o.value.trim().toLowerCase() === clean);
+    if (!match) return undefined;
+    return getOptionUsageCount(type, match.value) === 0 ? match : undefined;
+  };
+
+  const handleDeleteDropdownOption = async (opt: DropdownOption) => {
+    try {
+      setStatusMessage(null);
+      setDeletingOptionId(opt.optionId);
+      await deleteDropdownOption(opt.optionId);
+      const clean = opt.value.trim().toLowerCase();
+      if (opt.type === 'EXPENSE') {
+        setExpenseRows(prev =>
+          prev.map(r => (r.name.trim().toLowerCase() === clean ? { ...r, name: '' } : r))
+        );
+      } else {
+        setWageRows(prev =>
+          prev.map(r => (r.name.trim().toLowerCase() === clean ? { ...r, name: '' } : r))
+        );
+      }
+      setStatusMessage({
+        type: 'ok',
+        text: `Removed unused ${opt.type === 'EXPENSE' ? 'expense category' : 'employee name'} "${opt.value}" from dropdown.`
+      });
+    } catch (e: any) {
+      setStatusMessage({ type: 'err', text: e?.message || 'Failed to delete dropdown item.' });
+    } finally {
+      setDeletingOptionId(null);
+    }
+  };
 
   const formatCurrency = (val: number) => '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -161,13 +207,24 @@ export const ExpensesWagesView: React.FC = () => {
             <h2 className="text-sm font-bold text-slate-900 dark:text-white">Daily Operational Expenses</h2>
             <p className="text-xs text-slate-500">Add cleaning, ice, water, snacks, generator diesel or utility charges</p>
           </div>
-          <button
-            onClick={() => setShowAddOptionModal({ type: 'EXPENSE' })}
-            className="no-print flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-          >
-            <PlusCircle className="h-3.5 w-3.5 text-amber-500" />
-            <span>+ New Expense Category</span>
-          </button>
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setManageOptionsModal({ type: 'EXPENSE' })}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              <Settings2 className="h-3.5 w-3.5 text-slate-500" />
+              <span>Manage List</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAddOptionModal({ type: 'EXPENSE' })}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              <PlusCircle className="h-3.5 w-3.5 text-amber-500" />
+              <span>+ New Expense Category</span>
+            </button>
+          </div>
         </div>
 
         {/* Expenses Table Input */}
@@ -182,22 +239,38 @@ export const ExpensesWagesView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {expenseRows.map((row, idx) => (
+              {expenseRows.map((row, idx) => {
+                const unusedExpenseOpt = findUnusedOptionByValue('EXPENSE', row.name);
+                return (
                 <tr key={idx}>
                   <td className="py-2 px-3">
-                    <select
-                      value={row.name}
-                      onChange={e => {
-                        const val = e.target.value;
-                        setExpenseRows(prev => prev.map((r, i) => i === idx ? { ...r, name: val } : r));
-                      }}
-                      className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                    >
-                      <option value="">Select category...</option>
-                      {expenseOptions.map(o => (
-                        <option key={o.optionId} value={o.value}>{o.value}</option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={row.name}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setExpenseRows(prev => prev.map((r, i) => i === idx ? { ...r, name: val } : r));
+                        }}
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                      >
+                        <option value="">Select category...</option>
+                        {expenseOptions.map(o => (
+                          <option key={o.optionId} value={o.value}>{o.value}</option>
+                        ))}
+                      </select>
+                      {unusedExpenseOpt && (
+                        <button
+                          type="button"
+                          disabled={deletingOptionId === unusedExpenseOpt.optionId}
+                          title={`Delete unused "${unusedExpenseOpt.value}" from dropdown`}
+                          aria-label={`Delete unused ${unusedExpenseOpt.value}`}
+                          onClick={() => handleDeleteDropdownOption(unusedExpenseOpt)}
+                          className="no-print shrink-0 rounded-lg border border-red-200 bg-red-50 p-2 text-red-600 hover:bg-red-100 hover:text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-400 dark:hover:bg-red-950/70 transition-colors cursor-pointer disabled:opacity-40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td className="py-2 px-3">
                     <input
@@ -242,7 +315,8 @@ export const ExpensesWagesView: React.FC = () => {
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="border-t font-bold bg-slate-50 dark:bg-slate-800 dark:border-slate-700">
@@ -313,13 +387,24 @@ export const ExpensesWagesView: React.FC = () => {
             <h2 className="text-sm font-bold text-slate-900 dark:text-white">Daily Helper & Cashier Wages</h2>
             <p className="text-xs text-slate-500">Record daily wages paid out to counter staff and security personnel</p>
           </div>
-          <button
-            onClick={() => setShowAddOptionModal({ type: 'WAGE' })}
-            className="no-print flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-          >
-            <PlusCircle className="h-3.5 w-3.5 text-amber-500" />
-            <span>+ Add Employee Name</span>
-          </button>
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setManageOptionsModal({ type: 'WAGE' })}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              <Settings2 className="h-3.5 w-3.5 text-slate-500" />
+              <span>Manage List</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAddOptionModal({ type: 'WAGE' })}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              <PlusCircle className="h-3.5 w-3.5 text-amber-500" />
+              <span>+ Add Employee Name</span>
+            </button>
+          </div>
         </div>
 
         {/* Wages Table Input */}
@@ -334,22 +419,38 @@ export const ExpensesWagesView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {wageRows.map((row, idx) => (
+              {wageRows.map((row, idx) => {
+                const unusedWageOpt = findUnusedOptionByValue('WAGE', row.name);
+                return (
                 <tr key={idx}>
                   <td className="py-2 px-3">
-                    <select
-                      value={row.name}
-                      onChange={e => {
-                        const val = e.target.value;
-                        setWageRows(prev => prev.map((r, i) => i === idx ? { ...r, name: val } : r));
-                      }}
-                      className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                    >
-                      <option value="">Select employee...</option>
-                      {wageOptions.map(o => (
-                        <option key={o.optionId} value={o.value}>{o.value}</option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={row.name}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setWageRows(prev => prev.map((r, i) => i === idx ? { ...r, name: val } : r));
+                        }}
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                      >
+                        <option value="">Select employee...</option>
+                        {wageOptions.map(o => (
+                          <option key={o.optionId} value={o.value}>{o.value}</option>
+                        ))}
+                      </select>
+                      {unusedWageOpt && (
+                        <button
+                          type="button"
+                          disabled={deletingOptionId === unusedWageOpt.optionId}
+                          title={`Delete unused "${unusedWageOpt.value}" from dropdown`}
+                          aria-label={`Delete unused ${unusedWageOpt.value}`}
+                          onClick={() => handleDeleteDropdownOption(unusedWageOpt)}
+                          className="no-print shrink-0 rounded-lg border border-red-200 bg-red-50 p-2 text-red-600 hover:bg-red-100 hover:text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-400 dark:hover:bg-red-950/70 transition-colors cursor-pointer disabled:opacity-40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td className="py-2 px-3">
                     <input
@@ -394,7 +495,8 @@ export const ExpensesWagesView: React.FC = () => {
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="border-t font-bold bg-slate-50 dark:bg-slate-800 dark:border-slate-700">
@@ -492,6 +594,77 @@ export const ExpensesWagesView: React.FC = () => {
                 className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-40"
               >
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP MODAL: Manage / Delete Unused Dropdown Options */}
+      {manageOptionsModal && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {manageOptionsModal.type === 'EXPENSE' ? 'Manage Expense Categories' : 'Manage Employee Names'}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Names that are not in use can be deleted from the dropdown.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setManageOptionsModal(null)}
+                aria-label="Close modal"
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-72 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+              {(manageOptionsModal.type === 'EXPENSE' ? expenseOptions : wageOptions).length === 0 ? (
+                <div className="py-6 text-center text-xs text-slate-500">
+                  No active options in this dropdown.
+                </div>
+              ) : (
+                (manageOptionsModal.type === 'EXPENSE' ? expenseOptions : wageOptions).map(opt => {
+                  const usageCount = getOptionUsageCount(manageOptionsModal.type, opt.value);
+                  const isBusy = deletingOptionId === opt.optionId;
+                  return (
+                    <div key={opt.optionId} className="py-2.5 flex items-center justify-between gap-3 text-xs">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-900 dark:text-white truncate">{opt.value}</div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                          {usageCount > 0 ? `In use · ${usageCount} ${usageCount === 1 ? 'entry' : 'entries'}` : 'Not in use'}
+                        </div>
+                      </div>
+                      {usageCount === 0 && (
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          title={`Delete unused "${opt.value}"`}
+                          aria-label={`Delete unused ${opt.value}`}
+                          onClick={() => handleDeleteDropdownOption(opt)}
+                          className="shrink-0 rounded-md p-1.5 text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/40 transition-colors cursor-pointer disabled:opacity-40"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setManageOptionsModal(null)}
+                className="rounded-lg border border-slate-200 px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Done
               </button>
             </div>
           </div>

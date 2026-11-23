@@ -269,6 +269,12 @@ export const PurchasesView: React.FC = () => {
   const [deleteBatchTarget, setDeleteBatchTarget] = useState<PurchaseBatch | null>(null);
   const [isDeletingPurchase, setIsDeletingPurchase] = useState(false);
 
+  // Expanded purchase history rows (to inspect products & quantities)
+  const [expandedBatchIds, setExpandedBatchIds] = useState<Record<string, boolean>>({});
+  const toggleBatchExpanded = (batchId: string) => {
+    setExpandedBatchIds(prev => ({ ...prev, [batchId]: !prev[batchId] }));
+  };
+
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const formatCurrency = (val: number) =>
@@ -934,48 +940,143 @@ export const PurchasesView: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {purchases.map(p => (
-                      <tr key={p.batchId} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                        <td className="py-3 px-4 font-mono font-semibold">{p.date}</td>
-                        <td className="py-3 px-4 font-mono">{p.billDate}</td>
-                        <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
-                          <div className="flex items-center gap-2">
-                            <span>{p.supplier}</span>
-                            <button
-                              type="button"
-                              title={`Delete purchase batch ${p.batchId}`}
-                              onClick={() => setDeleteBatchTarget(p)}
-                              className="no-print rounded-md p-1 text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                        <td className="py-3 px-4 font-mono font-bold text-slate-700 dark:text-slate-300">{p.invoiceNo}</td>
-                        <td className="py-3 px-4 font-mono">
-                          {p.lines.length} items · {p.totalQty} btls
-                        </td>
-                        <td className="py-3 px-4 font-mono font-black text-right text-emerald-600">
-                          {formatCurrency(p.netTotal)}
-                        </td>
-                        <td className="py-3 px-4">
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                            p.status === 'Approved'
-                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                              : p.status === 'Pending'
-                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
-                              : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
-                          }`}>
-                            {p.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <span className="text-[11px] text-slate-500 font-mono">
-                            {p.batchId}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {purchases.map(p => {
+                      const isExpanded = !!expandedBatchIds[p.batchId];
+                      return (
+                        <React.Fragment key={p.batchId}>
+                          <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                            <td className="py-3 px-4 font-mono font-semibold tabular-nums">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleBatchExpanded(p.batchId)}
+                                  aria-expanded={isExpanded}
+                                  aria-label={
+                                    isExpanded
+                                      ? `Hide products and quantities for ${p.date}`
+                                      : `Show products and quantities for ${p.date}`
+                                  }
+                                  title={isExpanded ? 'Hide products & quantities' : 'Show products & quantities'}
+                                  className="no-print inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white transition-colors cursor-pointer"
+                                >
+                                  <ChevronDown
+                                    className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                                      isExpanded ? 'rotate-180 text-amber-600 dark:text-amber-400' : ''
+                                    }`}
+                                  />
+                                </button>
+                                <span>{p.date}</span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 font-mono tabular-nums">{p.billDate}</td>
+                            <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
+                              <div className="flex items-center gap-2">
+                                <span>{p.supplier}</span>
+                                <button
+                                  type="button"
+                                  title={`Delete purchase batch ${p.batchId}`}
+                                  onClick={() => setDeleteBatchTarget(p)}
+                                  className="no-print rounded-md p-1 text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 font-mono font-bold text-slate-700 dark:text-slate-300">{p.invoiceNo}</td>
+                            <td className="py-3 px-4 font-mono tabular-nums">
+                              {p.lines.length} items · {p.totalQty} btls
+                            </td>
+                            <td className="py-3 px-4 font-mono font-black tabular-nums text-right text-emerald-600">
+                              {formatCurrency(p.netTotal)}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                p.status === 'Approved'
+                                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                  : p.status === 'Pending'
+                                  ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                  : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                              }`}>
+                                {p.status}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <span className="text-[11px] text-slate-500 font-mono">
+                                {p.batchId}
+                              </span>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="bg-slate-50/80 dark:bg-slate-800/35">
+                              <td colSpan={8} className="px-4 py-3">
+                                <div className="rounded-lg border border-slate-200/80 bg-white dark:border-slate-700/80 dark:bg-slate-900/80 overflow-hidden">
+                                  <div className="flex items-center justify-between px-3 py-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50">
+                                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                                      Products &amp; Quantities ({p.lines.length} {p.lines.length === 1 ? 'item' : 'items'})
+                                    </span>
+                                    <span className="text-[11px] font-mono font-bold tabular-nums text-slate-700 dark:text-slate-200">
+                                      Total: {p.totalQty} bottles
+                                    </span>
+                                  </div>
+                                  {p.lines.length > 0 ? (
+                                    <table className="w-full text-left text-xs border-collapse">
+                                      <thead>
+                                        <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">
+                                          <th className="py-2 px-3 w-10">#</th>
+                                          <th className="py-2 px-3">Product</th>
+                                          <th className="py-2 px-3 text-right">Quantity</th>
+                                          <th className="py-2 px-3 text-right">Total Bottles</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                                        {p.lines.map((line, lineIdx) => {
+                                          const prod = productMap.get(line.productId);
+                                          const displayName =
+                                            line.productName ||
+                                            (prod ? `${prod.name} ${prod.sizeML}ml` : line.productId);
+                                          const unitLabel =
+                                            line.enteredQty && line.unit
+                                              ? `${line.enteredQty} ${
+                                                  line.unit === 'CASE'
+                                                    ? line.enteredQty === 1
+                                                      ? 'case'
+                                                      : 'cases'
+                                                    : line.enteredQty === 1
+                                                    ? 'bottle'
+                                                    : 'bottles'
+                                                }`
+                                              : `${line.qty} ${line.qty === 1 ? 'bottle' : 'bottles'}`;
+                                          return (
+                                            <tr key={line.id || `${p.batchId}-${line.productId}-${lineIdx}`}>
+                                              <td className="py-2 px-3 font-mono tabular-nums text-slate-400">
+                                                {lineIdx + 1}
+                                              </td>
+                                              <td className="py-2 px-3 font-semibold text-slate-900 dark:text-white">
+                                                {displayName}
+                                              </td>
+                                              <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                                                {unitLabel}
+                                              </td>
+                                              <td className="py-2 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white">
+                                                {line.qty} btls
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  ) : (
+                                    <div className="px-3 py-3 text-xs text-slate-400">
+                                      No product lines recorded for this batch.
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -117,14 +117,14 @@ export const StockView: React.FC = () => {
     const g = Math.floor(Number(editGodown));
     const n = Math.floor(Number(editNormal));
     const a = Math.floor(Number(editAc));
-    const p = Math.round((Number(editPrice) + Number.EPSILON) * 100) / 100;
+    const p = editPrice.trim() === '' ? NaN : Math.round((Number(editPrice) + Number.EPSILON) * 100) / 100;
 
     if (Number.isNaN(g) || Number.isNaN(n) || Number.isNaN(a) || g < 0 || n < 0 || a < 0) {
       setStatusMsg({ type: 'err', text: 'Stock quantities must be 0 or positive whole bottle counts.' });
       return;
     }
     if (Number.isNaN(p) || p < 0) {
-      setStatusMsg({ type: 'err', text: 'Selling price must be 0 or a positive amount.' });
+      setStatusMsg({ type: 'err', text: 'Enter a valid selling price (0 or greater).' });
       return;
     }
 

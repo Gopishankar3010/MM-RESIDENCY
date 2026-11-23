@@ -155,6 +155,7 @@ interface StockContextType {
   addSupplier: (name: string) => Promise<void>;
   deleteSupplier: (name: string) => Promise<void>;
   addDropdownOption: (type: 'EXPENSE' | 'WAGE', value: string) => Promise<void>;
+  deleteDropdownOption: (optionId: string) => Promise<void>;
   createUser: (user: { username: string; fullName: string; role: Role; password: string }) => Promise<void>;
   resetUserPassword: (userId: string, newPw: string) => Promise<void>;
   toggleUserActive: (userId: string, active: boolean) => Promise<void>;
@@ -212,10 +213,12 @@ function normCatalogKey(name: string, sizeML: number): string {
   return LEGACY_NAME_ALIASES[raw] || raw;
 }
 
-function mergeCatalogueWithDefaults(existing: Product[]): Product[] {
+function mergeCatalogueWithDefaults(existing: Product[], preserveExisting = true): Product[] {
   if (!Array.isArray(existing) || existing.length === 0) return INITIAL_PRODUCTS;
+  const existingById = new Map<string, Product>();
   const existingByKey = new Map<string, Product>();
   existing.forEach(p => {
+    if (p.productId) existingById.set(p.productId, p);
     existingByKey.set(normCatalogKey(p.name, p.sizeML), p);
   });
   const usedExistingIds = new Set<string>();
@@ -228,22 +231,36 @@ function mergeCatalogueWithDefaults(existing: Product[]): Product[] {
 
   INITIAL_PRODUCTS.forEach(def => {
     const defKey = normCatalogKey(def.name, def.sizeML);
+    const byId = existingById.get(def.productId);
     const byKey = existingByKey.get(defKey);
-    const byId =
-      Number(String(def.productId).replace(/\D/g, '')) <= 33
-        ? existing.find(p => p.productId === def.productId)
-        : undefined;
-    const match = byKey || byId;
+    const match = byId || byKey;
     if (match) {
       usedExistingIds.add(match.productId);
-      merged.push({
-        ...match,
-        name: def.name,
-        category: def.category,
-        sizeML: def.sizeML,
-        casePack: def.casePack,
-        sellingPrice: def.sellingPrice
-      });
+      const keepMatchValues = preserveExisting || Boolean(match.updatedAt || match.updatedBy);
+      if (keepMatchValues) {
+        merged.push({
+          ...def,
+          ...match,
+          name: match.name || def.name,
+          category: match.category || def.category,
+          sizeML: Number.isFinite(Number(match.sizeML)) ? Number(match.sizeML) : def.sizeML,
+          casePack: Number(match.casePack) >= 1 ? Number(match.casePack) : def.casePack,
+          sellingPrice:
+            match.sellingPrice !== undefined && match.sellingPrice !== null && Number.isFinite(Number(match.sellingPrice))
+              ? Number(match.sellingPrice)
+              : def.sellingPrice,
+          active: match.active !== undefined ? Boolean(match.active) : def.active,
+        });
+      } else {
+        merged.push({
+          ...match,
+          name: def.name,
+          category: def.category,
+          sizeML: def.sizeML,
+          casePack: def.casePack,
+          sellingPrice: def.sellingPrice
+        });
+      }
     } else {
       let pid = def.productId;
       if (takenIds.has(pid)) {
@@ -335,7 +352,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const parsed = JSON.parse(raw) as Product[];
     if (storedVer !== CATALOG_VERSION) {
       localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
-      return mergeCatalogueWithDefaults(parsed);
+      return mergeCatalogueWithDefaults(parsed, false);
     }
     return sortProductsCategoryWise(parsed);
   });
@@ -517,41 +534,56 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const applyServerSnapshot = React.useCallback((s: Partial<WorkspaceSnapshot>) => {
     if (!s || typeof s !== 'object') return;
 
-    const nextUsers = Array.isArray(s.users) && s.users.length > 0 ? s.users : latestRef.current.users;
-    const nextProducts =
+    const dirty = pendingDirtySlicesRef.current;
+
+    const serverUsers = Array.isArray(s.users) && s.users.length > 0 ? s.users : undefined;
+    const serverProducts =
       Array.isArray(s.products) && s.products.length > 0
-        ? mergeCatalogueWithDefaults(s.products)
-        : latestRef.current.products;
-    const nextStock =
+        ? mergeCatalogueWithDefaults(s.products, true)
+        : undefined;
+    const serverStock =
       s.stock && typeof s.stock === 'object' && Object.keys(s.stock).length > 0
         ? { ...buildInitialStockMap(), ...s.stock }
-        : latestRef.current.stock;
-    const nextPurchases = Array.isArray(s.purchases)
+        : undefined;
+    const serverPurchases = Array.isArray(s.purchases)
       ? [...s.purchases].sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || '') || String(b.batchId).localeCompare(String(a.batchId)))
-      : latestRef.current.purchases;
-    const nextRequests = Array.isArray(s.requests)
+      : undefined;
+    const serverRequests = Array.isArray(s.requests)
       ? [...s.requests].sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || '') || String(b.requestId).localeCompare(String(a.requestId)))
-      : latestRef.current.requests;
-    const nextTransfers = Array.isArray(s.transfers)
+      : undefined;
+    const serverTransfers = Array.isArray(s.transfers)
       ? [...s.transfers].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || String(b.transferId).localeCompare(String(a.transferId)))
-      : latestRef.current.transfers;
-    const nextDailySales = Array.isArray(s.dailySales)
+      : undefined;
+    const serverDailySales = Array.isArray(s.dailySales)
       ? [...s.dailySales].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.reportId).localeCompare(String(a.reportId)))
-      : latestRef.current.dailySales;
-    const nextOperations = Array.isArray(s.operations)
+      : undefined;
+    const serverOperations = Array.isArray(s.operations)
       ? [...s.operations].sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || '') || String(b.operationId).localeCompare(String(a.operationId)))
-      : latestRef.current.operations;
-    const nextLedger = Array.isArray(s.ledger)
+      : undefined;
+    const serverLedger = Array.isArray(s.ledger)
       ? [...s.ledger].sort((a, b) => (b.seq || 0) - (a.seq || 0) || String(b.ledgerId).localeCompare(String(a.ledgerId)))
-      : latestRef.current.ledger;
-    const nextAuditLog = Array.isArray(s.auditLog)
+      : undefined;
+    const serverAuditLog = Array.isArray(s.auditLog)
       ? [...s.auditLog].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '') || String(b.auditId).localeCompare(String(a.auditId)))
-      : latestRef.current.auditLog;
-    const nextSuppliers = Array.isArray(s.suppliers) && s.suppliers.length > 0 ? s.suppliers : latestRef.current.suppliers;
-    const nextDropdowns =
+      : undefined;
+    const serverSuppliers = Array.isArray(s.suppliers) && s.suppliers.length > 0 ? s.suppliers : undefined;
+    const serverDropdowns =
       Array.isArray(s.dropdownOptions) && s.dropdownOptions.length > 0
         ? s.dropdownOptions
-        : latestRef.current.dropdownOptions;
+        : undefined;
+
+    const nextUsers = !dirty.has('users') && serverUsers ? serverUsers : latestRef.current.users;
+    const nextProducts = !dirty.has('products') && serverProducts ? serverProducts : latestRef.current.products;
+    const nextStock = !dirty.has('stock') && serverStock ? serverStock : latestRef.current.stock;
+    const nextPurchases = !dirty.has('purchases') && serverPurchases ? serverPurchases : latestRef.current.purchases;
+    const nextRequests = !dirty.has('requests') && serverRequests ? serverRequests : latestRef.current.requests;
+    const nextTransfers = !dirty.has('transfers') && serverTransfers ? serverTransfers : latestRef.current.transfers;
+    const nextDailySales = !dirty.has('dailySales') && serverDailySales ? serverDailySales : latestRef.current.dailySales;
+    const nextOperations = !dirty.has('operations') && serverOperations ? serverOperations : latestRef.current.operations;
+    const nextLedger = !dirty.has('ledger') && serverLedger ? serverLedger : latestRef.current.ledger;
+    const nextAuditLog = !dirty.has('auditLog') && serverAuditLog ? serverAuditLog : latestRef.current.auditLog;
+    const nextSuppliers = !dirty.has('suppliers') && serverSuppliers ? serverSuppliers : latestRef.current.suppliers;
+    const nextDropdowns = !dirty.has('dropdownOptions') && serverDropdowns ? serverDropdowns : latestRef.current.dropdownOptions;
 
     if (!isServerHydratedRef.current && seenPendingIdsRef.current === null) {
       seenPendingIdsRef.current = new Set(
@@ -559,6 +591,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       );
     }
     isServerHydratedRef.current = true;
+
+    lastSyncedSnapshotRef.current = {
+      users: serverUsers ?? lastSyncedSnapshotRef.current.users,
+      products: serverProducts ?? lastSyncedSnapshotRef.current.products,
+      stock: serverStock ?? lastSyncedSnapshotRef.current.stock,
+      purchases: serverPurchases ?? lastSyncedSnapshotRef.current.purchases,
+      requests: serverRequests ?? lastSyncedSnapshotRef.current.requests,
+      transfers: serverTransfers ?? lastSyncedSnapshotRef.current.transfers,
+      dailySales: serverDailySales ?? lastSyncedSnapshotRef.current.dailySales,
+      operations: serverOperations ?? lastSyncedSnapshotRef.current.operations,
+      ledger: serverLedger ?? lastSyncedSnapshotRef.current.ledger,
+      auditLog: serverAuditLog ?? lastSyncedSnapshotRef.current.auditLog,
+      suppliers: serverSuppliers ?? lastSyncedSnapshotRef.current.suppliers,
+      dropdownOptions: serverDropdowns ?? lastSyncedSnapshotRef.current.dropdownOptions
+    };
 
     const mergedSnapshot: WorkspaceSnapshot = {
       users: nextUsers,
@@ -574,7 +621,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       suppliers: nextSuppliers,
       dropdownOptions: nextDropdowns
     };
-    lastSyncedSnapshotRef.current = mergedSnapshot;
 
     commitLocalState(mergedSnapshot);
     setSyncStatus('synced');
@@ -617,22 +663,33 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const task = syncChainRef.current
         .catch(() => undefined)
         .then(async () => {
-          const allDirty = Array.from(pendingDirtySlicesRef.current);
+          const allDirty = Array.from(new Set([...pendingDirtySlicesRef.current, ...dirtySlices]));
+          allDirty.forEach(s => pendingDirtySlicesRef.current.delete(s));
           const nextSnap = latestRef.current;
           const prevSnap = lastSyncedSnapshotRef.current;
-          await syncSlicesToFirestore(
-            db,
-            fbUser,
-            knownDocsRef.current,
-            prevSnap,
-            nextSnap,
-            allDirty.length > 0 ? allDirty : dirtySlices,
-            deletedIds,
-            isReset,
-            activeMemberEmailsRef.current
-          );
-          lastSyncedSnapshotRef.current = nextSnap;
-          pendingDirtySlicesRef.current.clear();
+          try {
+            await syncSlicesToFirestore(
+              db,
+              fbUser,
+              knownDocsRef.current,
+              prevSnap,
+              nextSnap,
+              allDirty,
+              deletedIds,
+              isReset,
+              activeMemberEmailsRef.current
+            );
+          } catch (err) {
+            allDirty.forEach(s => pendingDirtySlicesRef.current.add(s));
+            throw err;
+          }
+          const updatedSynced: WorkspaceSnapshot = { ...lastSyncedSnapshotRef.current };
+          allDirty.forEach((slice) => {
+            if (slice in nextSnap) {
+              (updatedSynced as any)[slice] = (nextSnap as any)[slice];
+            }
+          });
+          lastSyncedSnapshotRef.current = updatedSynced;
           setSyncStatus('synced');
           setLastSyncTime(new Date().toLocaleTimeString());
         })
@@ -2429,7 +2486,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const trimmed = value.trim();
     if (!trimmed) throw new Error('Value is required.');
     const curOpts = latestRef.current.dropdownOptions;
-    if (curOpts.some(o => o.type === type && o.value.toLowerCase() === trimmed.toLowerCase())) {
+    const existing = curOpts.find(o => o.type === type && o.value.toLowerCase() === trimmed.toLowerCase());
+    if (existing) {
+      if (existing.active) return;
+      const nextOpts = curOpts.map(o =>
+        o.optionId === existing.optionId ? { ...o, active: true, value: trimmed } : o
+      );
+      const auditEntry = buildAuditEntry('DROPDOWN_OPTION_RESTORED', existing.optionId, `${type} | ${trimmed}`);
+      commitLocalState({ dropdownOptions: nextOpts }, [auditEntry]);
+      await syncToServer(['dropdownOptions', 'auditLog']);
       return;
     }
     const optId = nextPrefixedId('OPT', curOpts.map(o => o.optionId), 3);
@@ -2442,6 +2507,27 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
     const auditEntry = buildAuditEntry('DROPDOWN_OPTION_ADDED', optId, `${type} | ${trimmed}`);
     commitLocalState({ dropdownOptions: [...curOpts, newOpt] }, [auditEntry]);
+    await syncToServer(['dropdownOptions', 'auditLog']);
+  };
+
+  const deleteDropdownOption = async (optionId: string) => {
+    const curOpts = latestRef.current.dropdownOptions;
+    const target = curOpts.find(o => o.optionId === optionId);
+    if (!target || !target.active) return;
+
+    const cleanName = target.value.trim().toLowerCase();
+    const inUse = latestRef.current.operations.some(
+      op => op.type === target.type && op.name.trim().toLowerCase() === cleanName
+    );
+    if (inUse) {
+      throw new Error(`"${target.value}" is already used in recorded entries and cannot be deleted.`);
+    }
+
+    const nextOpts = curOpts.map(o =>
+      o.optionId === optionId ? { ...o, active: false } : o
+    );
+    const auditEntry = buildAuditEntry('DROPDOWN_OPTION_REMOVED', optionId, `${target.type} | ${target.value}`);
+    commitLocalState({ dropdownOptions: nextOpts }, [auditEntry]);
     await syncToServer(['dropdownOptions', 'auditLog']);
   };
 
@@ -2717,6 +2803,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addSupplier,
         deleteSupplier,
         addDropdownOption,
+        deleteDropdownOption,
         createUser,
         resetUserPassword,
         toggleUserActive,

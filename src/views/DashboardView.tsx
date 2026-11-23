@@ -16,6 +16,7 @@ import {
   Printer,
   IndianRupee
 } from 'lucide-react';
+import { AdminProductInsightsCard } from '../components/AdminProductInsightsCard';
 
 export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
   const {
@@ -468,8 +469,18 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
         </div>
       </div>
 
-      {/* Row 3: Fast Moving Items & Operational Priorities */}
-      <div className="print-grid grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {/* Row 3: Admin Product Search & Insights alongside Fast-Moving Stock (or Fast-Moving + Priorities for staff) */}
+      <div className="print-grid grid grid-cols-1 gap-6 lg:grid-cols-2 items-stretch">
+        {isAdmin && (
+          <AdminProductInsightsCard
+            businessDate={businessDate}
+            stockItems={stockItems}
+            dailySales={dailySales}
+            purchases={purchases}
+            onNavigate={onNavigate}
+          />
+        )}
+
         {/* Fast-Moving Items */}
         <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
           <div className="flex items-center justify-between mb-4">
@@ -498,8 +509,8 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <div className="font-mono text-xs font-bold text-slate-900 dark:text-white">{item.sold} bottles</div>
-                    <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{formatCurrency(item.value)}</div>
+                    <div className="font-mono tabular-nums text-xs font-bold text-slate-900 dark:text-white">{item.sold} bottles</div>
+                    <div className="font-mono tabular-nums text-[11px] text-slate-500 dark:text-slate-400">{formatCurrency(item.value)}</div>
                   </div>
                 </div>
               ))}
@@ -511,46 +522,34 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
           )}
         </div>
 
-        {/* Operational Priorities & Shortcuts */}
-        <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-          <div className="mb-4">
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Operational Priorities & Quick Actions</h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Audit checkpoints and high-frequency tasks</p>
-          </div>
+        {/* Operational Priorities & Shortcuts (shown in Row 3 for non-admin staff) */}
+        {!isAdmin && (
+          <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="mb-4">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">Operational Priorities & Quick Actions</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Audit checkpoints and high-frequency tasks</p>
+            </div>
 
-          <div className="grid grid-cols-2 gap-2 text-xs mb-4">
-            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-800/30">
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">Pending Sales</span>
-              <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{pendingSalesCount}</div>
+            <div className="grid grid-cols-2 gap-2 text-xs mb-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-800/30">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">Pending Sales</span>
+                <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{pendingSalesCount}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-800/30">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">Pending Purchases</span>
+                <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{pendingPurchasesCount}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-800/30">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">Pending Requests</span>
+                <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{pendingRequestsCount}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-800/30">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">Zero Stock Products</span>
+                <div className="font-mono text-base font-bold text-red-600 dark:text-red-400">{zeroStockProducts}</div>
+              </div>
             </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-800/30">
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">Pending Purchases</span>
-              <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{pendingPurchasesCount}</div>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-800/30">
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">Pending Requests</span>
-              <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{pendingRequestsCount}</div>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-800/30">
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">Zero Stock Products</span>
-              <div className="font-mono text-base font-bold text-red-600 dark:text-red-400">{zeroStockProducts}</div>
-            </div>
-          </div>
 
-          {/* Quick buttons */}
-          <div className="no-print grid grid-cols-2 gap-2">
-            {isAdmin ? (
-              <button
-                onClick={() => onNavigate('approvals')}
-                className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                  <span>Approvals Queue</span>
-                </div>
-                <ArrowRight className="h-3 w-3 text-slate-400" />
-              </button>
-            ) : (
+            <div className="no-print grid grid-cols-2 gap-2">
               <button
                 onClick={() => onNavigate('sales')}
                 className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
@@ -561,11 +560,75 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
                 </div>
                 <ArrowRight className="h-3 w-3 text-slate-400" />
               </button>
-            )}
+
+              <button
+                onClick={() => onNavigate('transfers')}
+                className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <ArrowRightLeft className="h-4 w-4 text-purple-600" />
+                  <span>Transfer Stock</span>
+                </div>
+                <ArrowRight className="h-3 w-3 text-slate-400" />
+              </button>
+
+              <button
+                onClick={() => onNavigate('closing')}
+                className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-amber-600" />
+                  <span>Consolidated Day</span>
+                </div>
+                <ArrowRight className="h-3 w-3 text-slate-400" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Row 4 (Admin): Operational Priorities & Quick Actions */}
+      {isAdmin && (
+        <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-4">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Operational Priorities &amp; Quick Actions</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Audit checkpoints and high-frequency tasks</p>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 dark:border-slate-800 dark:bg-slate-800/30">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">Pending Sales</span>
+              <div className="font-mono tabular-nums text-base font-bold text-slate-900 dark:text-white">{pendingSalesCount}</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 dark:border-slate-800 dark:bg-slate-800/30">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">Pending Purchases</span>
+              <div className="font-mono tabular-nums text-base font-bold text-slate-900 dark:text-white">{pendingPurchasesCount}</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 dark:border-slate-800 dark:bg-slate-800/30">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">Pending Requests</span>
+              <div className="font-mono tabular-nums text-base font-bold text-slate-900 dark:text-white">{pendingRequestsCount}</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 dark:border-slate-800 dark:bg-slate-800/30">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">Zero Stock Products</span>
+              <div className="font-mono tabular-nums text-base font-bold text-red-600 dark:text-red-400">{zeroStockProducts}</div>
+            </div>
+          </div>
+
+          <div className="no-print grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <button
+              onClick={() => onNavigate('approvals')}
+              className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                <span>Approvals Queue</span>
+              </div>
+              <ArrowRight className="h-3 w-3 text-slate-400" />
+            </button>
 
             <button
               onClick={() => onNavigate('transfers')}
-              className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors"
+              className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-2">
                 <ArrowRightLeft className="h-4 w-4 text-purple-600" />
@@ -574,22 +637,20 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
               <ArrowRight className="h-3 w-3 text-slate-400" />
             </button>
 
-            {isAdmin && (
-              <button
-                onClick={() => onNavigate('purchases')}
-                className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <Truck className="h-4 w-4 text-blue-600" />
-                  <span>Record Purchase</span>
-                </div>
-                <ArrowRight className="h-3 w-3 text-slate-400" />
-              </button>
-            )}
+            <button
+              onClick={() => onNavigate('purchases')}
+              className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <Truck className="h-4 w-4 text-blue-600" />
+                <span>Record Purchase</span>
+              </div>
+              <ArrowRight className="h-3 w-3 text-slate-400" />
+            </button>
 
             <button
               onClick={() => onNavigate('closing')}
-              className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors"
+              className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5 text-xs font-semibold text-slate-800 hover:border-amber-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-2">
                 <Layers className="h-4 w-4 text-amber-600" />
@@ -599,7 +660,7 @@ export const DashboardView: React.FC<{ onNavigate: (tab: string) => void }> = ({
             </button>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
