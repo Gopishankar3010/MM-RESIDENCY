@@ -102,6 +102,7 @@ interface StockContextType {
 
   // Products & Stock Adjustments
   saveProduct: (p: Partial<Product> & { name: string; category: string; sizeML: number; casePack: number; sellingPrice: number }) => Promise<string>;
+  deleteProduct: (productId: string) => Promise<void>;
   adminAdjustStock: (data: { productId: string; godown: number; normal: number; ac: number; reason?: string }) => Promise<void>;
 
   // Purchases
@@ -119,7 +120,7 @@ interface StockContextType {
   reviewRequestGroup: (ids: string[], decision: 'APPROVE' | 'REJECT', remark?: string, skipShort?: boolean) => Promise<{ approved: number; rejected: number }>;
 
   // Transfers
-  submitTransfer: (data: { productId: string; qty: number; unit?: 'CASE' | 'BOTTLE'; to?: CounterLocation; note?: string }) => Promise<{ autoApproved: boolean }>;
+  submitTransfer: (data: { productId: string; qty: number; unit?: 'CASE' | 'BOTTLE'; to?: StockLocation; note?: string }) => Promise<{ autoApproved: boolean }>;
 
   // Daily Sales
   getReportFormLines: (counter: CounterLocation, date: string) => { lines: any[]; blockedMessage?: string; pendingGodownCount: number };
@@ -134,7 +135,20 @@ interface StockContextType {
     date: string; counter: CounterLocation; recordedAmount: number; reason: string;
     lines: { productId: string; sold: number }[];
   }) => Promise<string>;
-  adminEditReport: (reportId: string, data: { recordedAmount: number; reason: string; lines: { productId: string; closing?: number; sold?: number }[] }) => Promise<void>;
+  adminEditReport: (
+    reportId: string,
+    data: {
+      recordedAmount: number;
+      reason: string;
+      lines: { productId: string; closing?: number; sold?: number }[];
+      cashAmount?: number;
+      upiAmount?: number;
+      acCharges?: number;
+      cashierName?: string;
+      helperName?: string;
+      paymentExplanation?: string;
+    }
+  ) => Promise<void>;
   reviewDailySales: (reportId: string, decision: 'APPROVE' | 'REJECT', remark?: string) => Promise<void>;
   adminDeleteDailySales: (reportId: string, reason?: string) => Promise<void>;
 
@@ -168,9 +182,11 @@ const STORAGE_KEY = 'mm_residency_stock_v2_store';
 const CATALOG_VERSION = '2026-11-20-opening-v1';
 const OPENING_EPOCH = '2026-11-20-opening-v1';
 
-function buildInitialStockMap(): Record<string, { godown: number; normal: number; ac: number }> {
+function buildInitialStockMap(deletedIds: string[] = []): Record<string, { godown: number; normal: number; ac: number }> {
+  const deletedSet = new Set(deletedIds);
   const base: Record<string, { godown: number; normal: number; ac: number }> = {};
   INITIAL_PRODUCTS.forEach(p => {
+    if (deletedSet.has(p.productId)) return;
     const s = INITIAL_STOCK[p.productId];
     base[p.productId] = s ? { ...s } : { godown: 0, normal: 0, ac: 0 };
   });
@@ -184,6 +200,7 @@ function ensureOpeningEpochReset(): void {
       [
         '_products',
         '_stock',
+        '_deleted_products',
         '_purchases',
         '_requests',
         '_transfers',
@@ -213,23 +230,32 @@ function normCatalogKey(name: string, sizeML: number): string {
   return LEGACY_NAME_ALIASES[raw] || raw;
 }
 
-function mergeCatalogueWithDefaults(existing: Product[], preserveExisting = true): Product[] {
-  if (!Array.isArray(existing) || existing.length === 0) return INITIAL_PRODUCTS;
+function mergeCatalogueWithDefaults(
+  existing: Product[],
+  preserveExisting = true,
+  deletedIds: string[] = []
+): Product[] {
+  const deletedSet = new Set(deletedIds);
+  const availableDefaults = INITIAL_PRODUCTS.filter(p => !deletedSet.has(p.productId));
+  const filteredExisting = Array.isArray(existing)
+    ? existing.filter(p => p.productId && !deletedSet.has(p.productId))
+    : [];
+  if (filteredExisting.length === 0) return availableDefaults;
   const existingById = new Map<string, Product>();
   const existingByKey = new Map<string, Product>();
-  existing.forEach(p => {
+  filteredExisting.forEach(p => {
     if (p.productId) existingById.set(p.productId, p);
     existingByKey.set(normCatalogKey(p.name, p.sizeML), p);
   });
   const usedExistingIds = new Set<string>();
   const merged: Product[] = [];
-  const takenIds = new Set<string>(existing.map(p => p.productId));
-  let maxNum = existing.reduce(
+  const takenIds = new Set<string>([...filteredExisting.map(p => p.productId), ...deletedIds]);
+  let maxNum = filteredExisting.reduce(
     (m, p) => Math.max(m, Number(String(p.productId).replace(/\D/g, '')) || 0),
     INITIAL_PRODUCTS.length
   );
 
-  INITIAL_PRODUCTS.forEach(def => {
+  availableDefaults.forEach(def => {
     const defKey = normCatalogKey(def.name, def.sizeML);
     const byId = existingById.get(def.productId);
     const byKey = existingByKey.get(defKey);
@@ -272,7 +298,7 @@ function mergeCatalogueWithDefaults(existing: Product[], preserveExisting = true
     }
   });
 
-  existing.forEach(p => {
+  filteredExisting.forEach(p => {
     if (!usedExistingIds.has(p.productId)) {
       merged.push(p);
     }
@@ -342,29 +368,58 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return raw ? JSON.parse(raw) : INITIAL_USERS;
   });
 
+  const [deletedProductIds, setDeletedProductIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY + '_deleted_products');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [products, setProducts] = useState<Product[]>(() => {
+    let initDeleted: string[] = [];
+    try {
+      const rawDel = localStorage.getItem(STORAGE_KEY + '_deleted_products');
+      const parsedDel = rawDel ? JSON.parse(rawDel) : [];
+      if (Array.isArray(parsedDel)) initDeleted = parsedDel.filter((id): id is string => typeof id === 'string');
+    } catch {
+      initDeleted = [];
+    }
+    const delSet = new Set(initDeleted);
     const raw = localStorage.getItem(STORAGE_KEY + '_products');
     const storedVer = localStorage.getItem(STORAGE_KEY + '_catalog_version');
     if (!raw) {
       localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
-      return INITIAL_PRODUCTS;
+      return INITIAL_PRODUCTS.filter(p => !delSet.has(p.productId));
     }
-    const parsed = JSON.parse(raw) as Product[];
+    const parsed = (JSON.parse(raw) as Product[]).filter(p => !delSet.has(p.productId));
     if (storedVer !== CATALOG_VERSION) {
       localStorage.setItem(STORAGE_KEY + '_catalog_version', CATALOG_VERSION);
-      return mergeCatalogueWithDefaults(parsed, false);
+      return mergeCatalogueWithDefaults(parsed, false, initDeleted);
     }
     return sortProductsCategoryWise(parsed);
   });
 
   const [stock, setStock] = useState<Record<string, { godown: number; normal: number; ac: number }>>(() => {
+    let initDeleted: string[] = [];
+    try {
+      const rawDel = localStorage.getItem(STORAGE_KEY + '_deleted_products');
+      const parsedDel = rawDel ? JSON.parse(rawDel) : [];
+      if (Array.isArray(parsedDel)) initDeleted = parsedDel.filter((id): id is string => typeof id === 'string');
+    } catch {
+      initDeleted = [];
+    }
+    const delSet = new Set(initDeleted);
     const raw = localStorage.getItem(STORAGE_KEY + '_stock');
-    const base = raw ? JSON.parse(raw) : buildInitialStockMap();
+    const base = raw ? JSON.parse(raw) : buildInitialStockMap(initDeleted);
     INITIAL_PRODUCTS.forEach(p => {
-      if (!base[p.productId]) {
+      if (!delSet.has(p.productId) && !base[p.productId]) {
         base[p.productId] = { godown: 0, normal: 0, ac: 0 };
       }
     });
+    initDeleted.forEach(pid => { delete base[pid]; });
     return base;
   });
 
@@ -469,7 +524,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ledger,
     auditLog,
     suppliers,
-    dropdownOptions
+    dropdownOptions,
+    deletedProductIds
   });
 
   latestRef.current = {
@@ -484,7 +540,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ledger,
     auditLog,
     suppliers,
-    dropdownOptions
+    dropdownOptions,
+    deletedProductIds
   };
 
   const lastSyncedSnapshotRef = React.useRef<WorkspaceSnapshot>(latestRef.current);
@@ -500,6 +557,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { persistSliceToLocalStorage('_users', users); }, [users]);
   useEffect(() => { persistSliceToLocalStorage('_products', products); }, [products]);
   useEffect(() => { persistSliceToLocalStorage('_stock', stock); }, [stock]);
+  useEffect(() => { persistSliceToLocalStorage('_deleted_products', deletedProductIds); }, [deletedProductIds]);
   useEffect(() => { persistSliceToLocalStorage('_purchases', purchases); }, [purchases]);
   useEffect(() => { persistSliceToLocalStorage('_requests', requests); }, [requests]);
   useEffect(() => { persistSliceToLocalStorage('_transfers', transfers); }, [transfers]);
@@ -519,6 +577,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (partial.users !== undefined) setUsers(next.users);
     if (partial.products !== undefined) setProducts(next.products);
     if (partial.stock !== undefined) setStock(next.stock);
+    if (partial.deletedProductIds !== undefined) setDeletedProductIds(next.deletedProductIds ?? []);
     if (partial.purchases !== undefined) setPurchases(next.purchases);
     if (partial.requests !== undefined) setRequests(next.requests);
     if (partial.transfers !== undefined) setTransfers(next.transfers);
@@ -536,14 +595,27 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const dirty = pendingDirtySlicesRef.current;
 
+    const serverDeletedProductIds = Array.isArray(s.deletedProductIds)
+      ? Array.from(new Set(s.deletedProductIds.filter((id): id is string => typeof id === 'string')))
+      : undefined;
+    const nextDeletedProductIds =
+      !dirty.has('deletedProductIds') && serverDeletedProductIds !== undefined
+        ? serverDeletedProductIds
+        : (latestRef.current.deletedProductIds || []);
+    const deletedSet = new Set(nextDeletedProductIds);
+
     const serverUsers = Array.isArray(s.users) && s.users.length > 0 ? s.users : undefined;
     const serverProducts =
       Array.isArray(s.products) && s.products.length > 0
-        ? mergeCatalogueWithDefaults(s.products, true)
+        ? mergeCatalogueWithDefaults(s.products, true, nextDeletedProductIds)
         : undefined;
     const serverStock =
       s.stock && typeof s.stock === 'object' && Object.keys(s.stock).length > 0
-        ? { ...buildInitialStockMap(), ...s.stock }
+        ? (() => {
+            const merged = { ...buildInitialStockMap(nextDeletedProductIds), ...s.stock };
+            nextDeletedProductIds.forEach(pid => { delete merged[pid]; });
+            return merged;
+          })()
         : undefined;
     const serverPurchases = Array.isArray(s.purchases)
       ? [...s.purchases].sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || '') || String(b.batchId).localeCompare(String(a.batchId)))
@@ -573,8 +645,26 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         : undefined;
 
     const nextUsers = !dirty.has('users') && serverUsers ? serverUsers : latestRef.current.users;
-    const nextProducts = !dirty.has('products') && serverProducts ? serverProducts : latestRef.current.products;
-    const nextStock = !dirty.has('stock') && serverStock ? serverStock : latestRef.current.stock;
+    const rawNextProducts = !dirty.has('products') && serverProducts ? serverProducts : latestRef.current.products;
+    const nextProducts =
+      !dirty.has('products') && deletedSet.size > 0
+        ? rawNextProducts.filter(p => !deletedSet.has(p.productId))
+        : rawNextProducts;
+    const rawNextStock = !dirty.has('stock') && serverStock ? serverStock : latestRef.current.stock;
+    const nextStock = (() => {
+      if (dirty.has('stock') || deletedSet.size === 0) return rawNextStock;
+      let hasDeletedKey = false;
+      for (const pid of deletedSet) {
+        if (pid in rawNextStock) {
+          hasDeletedKey = true;
+          break;
+        }
+      }
+      if (!hasDeletedKey) return rawNextStock;
+      const copy = { ...rawNextStock };
+      deletedSet.forEach(pid => { delete copy[pid]; });
+      return copy;
+    })();
     const nextPurchases = !dirty.has('purchases') && serverPurchases ? serverPurchases : latestRef.current.purchases;
     const nextRequests = !dirty.has('requests') && serverRequests ? serverRequests : latestRef.current.requests;
     const nextTransfers = !dirty.has('transfers') && serverTransfers ? serverTransfers : latestRef.current.transfers;
@@ -604,7 +694,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ledger: serverLedger ?? lastSyncedSnapshotRef.current.ledger,
       auditLog: serverAuditLog ?? lastSyncedSnapshotRef.current.auditLog,
       suppliers: serverSuppliers ?? lastSyncedSnapshotRef.current.suppliers,
-      dropdownOptions: serverDropdowns ?? lastSyncedSnapshotRef.current.dropdownOptions
+      dropdownOptions: serverDropdowns ?? lastSyncedSnapshotRef.current.dropdownOptions,
+      deletedProductIds: serverDeletedProductIds ?? lastSyncedSnapshotRef.current.deletedProductIds
     };
 
     const mergedSnapshot: WorkspaceSnapshot = {
@@ -619,7 +710,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ledger: nextLedger,
       auditLog: nextAuditLog,
       suppliers: nextSuppliers,
-      dropdownOptions: nextDropdowns
+      dropdownOptions: nextDropdowns,
+      deletedProductIds: nextDeletedProductIds
     };
 
     commitLocalState(mergedSnapshot);
@@ -852,6 +944,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           auditLog: [],
           suppliers: INITIAL_SUPPLIERS,
           dropdownOptions: INITIAL_DROPDOWN_OPTIONS,
+          deletedProductIds: [],
         };
 
         const { memberEmails, cloudMembers: loadedCloudMembers } = await ensureWorkspaceBootstrapped(
@@ -1462,7 +1555,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       await syncToServer(['products', 'auditLog']);
       return p.productId;
     } else {
-      const newId = nextPrefixedId('PRD', curProducts.map(x => x.productId), 6);
+      const newId = nextPrefixedId(
+        'PRD',
+        [...curProducts.map(x => x.productId), ...(latestRef.current.deletedProductIds || [])],
+        6
+      );
       const newProduct: Product = {
         productId: newId,
         name: p.name.trim(),
@@ -1485,6 +1582,42 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       await syncToServer(['products', 'stock', 'auditLog']);
       return newId;
     }
+  };
+
+  const deleteProduct = async (productId: string) => {
+    if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
+    const curProducts = latestRef.current.products;
+    const target = curProducts.find(p => p.productId === productId);
+    if (!target) throw new Error('Product not found.');
+
+    const curLvl = latestRef.current.stock[productId] || { godown: 0, normal: 0, ac: 0 };
+    const nextProducts = curProducts.filter(p => p.productId !== productId);
+    const nextStock = { ...latestRef.current.stock };
+    delete nextStock[productId];
+
+    const prevDeleted = latestRef.current.deletedProductIds || [];
+    const nextDeletedProductIds = prevDeleted.includes(productId)
+      ? prevDeleted
+      : [...prevDeleted, productId].slice(-1000);
+
+    const auditEntry = buildAuditEntry(
+      'PRODUCT_DELETED',
+      productId,
+      `${target.name} ${target.sizeML}ml (${target.category}) | Removed stock: Godown ${curLvl.godown || 0}, Normal ${curLvl.normal || 0}, AC ${curLvl.ac || 0}`
+    );
+
+    commitLocalState(
+      {
+        products: nextProducts,
+        stock: nextStock,
+        deletedProductIds: nextDeletedProductIds,
+      },
+      [auditEntry]
+    );
+    await syncToServer(
+      ['products', 'stock', 'deletedProductIds', 'auditLog'],
+      { products: [productId], stock: [productId] }
+    );
   };
 
   // Admin direct stock adjustment
@@ -1857,7 +1990,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   // Transfers
-  const submitTransfer = async (data: { productId: string; qty: number; unit?: 'CASE' | 'BOTTLE'; to?: CounterLocation; note?: string }) => {
+  const submitTransfer = async (data: { productId: string; qty: number; unit?: 'CASE' | 'BOTTLE'; to?: StockLocation; note?: string }) => {
     if (!currentUser) throw new Error('Not logged in');
     const isAdmin = currentUser.role === 'ADMIN';
     const curState = latestRef.current;
@@ -1870,8 +2003,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const fromLoc: StockLocation = isAdmin ? 'GODOWN' : (currentUser.counter || 'NORMAL');
     const toLoc: StockLocation = isAdmin
-      ? (data.to || 'NORMAL')
-      : (currentUser.counter === 'NORMAL' ? 'AC' : 'NORMAL');
+      ? (data.to && data.to !== 'GODOWN' ? data.to : 'NORMAL')
+      : (data.to && data.to !== fromLoc ? data.to : (fromLoc === 'NORMAL' ? 'AC' : 'NORMAL'));
+
+    if (toLoc === fromLoc) {
+      throw new Error('Source and destination locations cannot be the same.');
+    }
 
     const avail = curState.stock[data.productId]?.[fromLoc.toLowerCase() as 'godown' | 'normal' | 'ac'] || 0;
     if (totalBottles > avail) {
@@ -1892,9 +2029,21 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
+    const transferType: StockTransfer['type'] =
+      fromLoc === 'GODOWN'
+        ? 'GODOWN_TO_COUNTER'
+        : toLoc === 'GODOWN'
+        ? 'COUNTER_TO_GODOWN'
+        : 'COUNTER_TO_COUNTER';
+
+    const autoRemark =
+      transferType === 'COUNTER_TO_GODOWN'
+        ? 'Auto-approved (counter to godown)'
+        : 'Auto-approved (counter to counter)';
+
     const newTransfer: StockTransfer = {
       transferId,
-      type: isAdmin ? 'GODOWN_TO_COUNTER' : 'COUNTER_TO_COUNTER',
+      type: transferType,
       fromLoc,
       toLoc,
       productId: data.productId,
@@ -1909,7 +2058,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: now,
       reviewedBy: autoApproved ? 'AUTO' : undefined,
       reviewedAt: autoApproved ? now : undefined,
-      remark: autoApproved ? 'Auto-approved (counter to counter)' : undefined
+      remark: autoApproved ? autoRemark : undefined
     };
 
     const auditEntry = buildAuditEntry(
@@ -2184,12 +2333,45 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return reportId;
   };
 
-  const adminEditReport = async (reportId: string, data: { recordedAmount: number; reason: string; lines: { productId: string; closing?: number; sold?: number }[] }) => {
+  const canCounterModifyReport = (report: DailySalesReport): boolean => {
+    if (!currentUser) return false;
+    if (currentUser.role === 'ADMIN') return true;
+    if (currentUser.counter !== report.counter) return false;
+    const todayStr = getTodayISO();
+    const isForCurrentDay =
+      report.date === businessDate ||
+      report.date === todayStr ||
+      (report.submittedAt || '').slice(0, 10) === todayStr;
+    if (!isForCurrentDay) return false;
+    const hasLaterReport = latestRef.current.dailySales.some(
+      other =>
+        other.reportId !== report.reportId &&
+        other.counter === report.counter &&
+        other.status !== 'Rejected' &&
+        other.date > report.date
+    );
+    return !hasLaterReport;
+  };
+
+  const adminEditReport = async (
+    reportId: string,
+    data: {
+      recordedAmount: number;
+      reason: string;
+      lines: { productId: string; closing?: number; sold?: number }[];
+      cashAmount?: number;
+      upiAmount?: number;
+      acCharges?: number;
+      cashierName?: string;
+      helperName?: string;
+      paymentExplanation?: string;
+    }
+  ) => {
     const report = latestRef.current.dailySales.find(r => r.reportId === reportId);
     if (!report) throw new Error('Report not found');
     const isAdmin = currentUser?.role === 'ADMIN';
-    if (!isAdmin && report.status !== 'Pending') {
-      throw new Error('This report was already reviewed by Admin.');
+    if (!isAdmin && report.status !== 'Pending' && !canCounterModifyReport(report)) {
+      throw new Error('Only same-day latest counter reports can be edited by counter staff. Ask Admin to edit older reports.');
     }
 
     const isHistorical = report.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
@@ -2198,6 +2380,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let totalSold = 0;
     let totalVal = 0;
     const stockMoves: { loc: StockLocation; productId: string; delta: number }[] = [];
+    const locKey = report.counter.toLowerCase() as 'normal' | 'ac';
 
     const updatedLines = report.lines.map(l => {
       const update = givenMap.get(l.productId);
@@ -2206,9 +2389,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (update) {
         if (isHistorical && update.sold !== undefined) {
-          newSold = Number(update.sold);
+          const parsedSold = Number(update.sold);
+          if (!Number.isInteger(parsedSold) || parsedSold < 0) {
+            throw new Error(`Invalid sold count for ${l.name || l.productId}.`);
+          }
+          newSold = parsedSold;
         } else if (update.closing !== undefined) {
-          newClosing = Number(update.closing);
+          const parsedClosing = Number(update.closing);
+          if (!Number.isInteger(parsedClosing) || parsedClosing < 0 || parsedClosing > l.available) {
+            throw new Error(`Closing count for ${l.name || l.productId} must be between 0 and ${l.available}.`);
+          }
+          newClosing = parsedClosing;
           newSold = Math.max(0, l.available - newClosing);
         }
       }
@@ -2217,9 +2408,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       totalSold += newSold;
       totalVal += newVal;
 
-      if (isAdmin && report.status === 'Approved' && !isHistorical) {
+      if (report.status === 'Approved' && !isHistorical) {
         const delta = l.sold - newSold;
         if (delta !== 0) {
+          const curQty = latestRef.current.stock[l.productId]?.[locKey] || 0;
+          if (curQty + delta < 0) {
+            throw new Error(
+              `Cannot increase sold qty for ${l.name || l.productId}: current ${report.counter} stock is ${curQty} btls (need ${-delta} more).`
+            );
+          }
           stockMoves.push({ loc: report.counter, productId: l.productId, delta });
         }
       }
@@ -2234,14 +2431,40 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const now = getNowTimestamp();
     const nextSalesVal = Math.round(totalVal * 100) / 100;
-    const nextRemark = `${report.remark ? report.remark + ' | ' : ''}Correction: ${data.reason}`;
+    const nextCash = data.cashAmount !== undefined ? Math.max(0, Number(data.cashAmount) || 0) : report.cashAmount;
+    const nextUpi = data.upiAmount !== undefined ? Math.max(0, Number(data.upiAmount) || 0) : report.upiAmount;
+    const nextAcCharges =
+      report.counter === 'AC'
+        ? data.acCharges !== undefined
+          ? Math.max(0, Number(data.acCharges) || 0)
+          : (report.acCharges || 0)
+        : 0;
+    const nextRecordedAmount =
+      data.cashAmount !== undefined || data.upiAmount !== undefined || data.acCharges !== undefined
+        ? Math.round((nextCash + nextUpi + (report.cardAmount || 0) + nextAcCharges) * 100) / 100
+        : data.recordedAmount;
+    const nextDiff = Math.round((nextRecordedAmount - (nextSalesVal + nextAcCharges)) * 100) / 100;
+    const nextCashier = data.cashierName !== undefined ? data.cashierName.trim() : report.cashierName;
+    const nextHelper = data.helperName !== undefined ? data.helperName.trim() : report.helperName;
+    const nextExplanation =
+      data.paymentExplanation !== undefined ? data.paymentExplanation.trim() : report.paymentExplanation;
+    const cleanReason = (data.reason || 'Updated daily sales').trim();
+    const nextRemark = `${report.remark ? report.remark + ' | ' : ''}Edited (${currentUser?.username || 'staff'}): ${cleanReason}`.slice(0, 300);
+
     const nextSales = latestRef.current.dailySales.map(r =>
       r.reportId === reportId
         ? {
             ...r,
             totalSoldQty: totalSold,
             totalSalesValue: nextSalesVal,
-            recordedAmount: data.recordedAmount,
+            recordedAmount: nextRecordedAmount,
+            cashAmount: nextCash,
+            upiAmount: nextUpi,
+            acCharges: report.counter === 'AC' ? nextAcCharges : undefined,
+            cashierName: nextCashier,
+            helperName: nextHelper,
+            paymentDifference: nextDiff,
+            paymentExplanation: nextExplanation,
             lines: updatedLines,
             editedBy: currentUser?.username,
             editedAt: now,
@@ -2250,7 +2473,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         : r
     );
 
-    const auditEntry = buildAuditEntry('SALES_EDITED', reportId, `Sold ${report.totalSoldQty} → ${totalSold} | ${data.reason}`);
+    const auditEntry = buildAuditEntry(
+      'SALES_EDITED',
+      reportId,
+      `${report.date} | ${report.counter} | Sold ${report.totalSoldQty} → ${totalSold} | Collected ₹${nextRecordedAmount} | ${cleanReason}`
+    );
     commitLocalState({ dailySales: nextSales }, [auditEntry]);
     await syncToServer(dirtySlices);
   };
@@ -2291,11 +2518,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const adminDeleteDailySales = async (reportId: string, reason?: string) => {
-    if (currentUser?.role !== 'ADMIN') {
-      throw new Error('Admin permission required to delete a daily sales report.');
-    }
     const report = latestRef.current.dailySales.find(r => r.reportId === reportId);
     if (!report) throw new Error('Daily sales report not found.');
+    const isAdmin = currentUser?.role === 'ADMIN';
+    if (!isAdmin && !canCounterModifyReport(report)) {
+      throw new Error('Only same-day latest counter reports can be deleted by counter staff. Ask Admin to delete older reports.');
+    }
 
     const isHistoricalOnly = report.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
     const dirtySlices = ['dailySales', 'auditLog'];
@@ -2315,7 +2543,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const auditEntry = buildAuditEntry(
-      'ADMIN_SALES_DELETED',
+      isAdmin ? 'ADMIN_SALES_DELETED' : 'COUNTER_SALES_DELETED',
       reportId,
       `${report.date} | ${report.counter} | reversed ${report.totalSoldQty} btls (₹${report.totalSalesValue})${reason?.trim() ? ` | Reason: ${reason.trim()}` : ''}`
     );
@@ -2678,6 +2906,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       users: INITIAL_USERS,
       products: INITIAL_PRODUCTS,
       stock: freshStock,
+      deletedProductIds: [],
       suppliers: INITIAL_SUPPLIERS,
       dropdownOptions: INITIAL_DROPDOWN_OPTIONS,
       purchases: [],
@@ -2692,7 +2921,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem('mm_user', JSON.stringify(INITIAL_USERS[0]));
 
     await syncToServer(
-      ['users', 'products', 'stock', 'suppliers', 'dropdownOptions', 'purchases', 'requests', 'transfers', 'dailySales', 'operations', 'ledger', 'auditLog'],
+      ['users', 'products', 'stock', 'deletedProductIds', 'suppliers', 'dropdownOptions', 'purchases', 'requests', 'transfers', 'dailySales', 'operations', 'ledger', 'auditLog'],
       undefined,
       true
     );
@@ -2777,6 +3006,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         changePassword,
 
         saveProduct,
+        deleteProduct,
         adminAdjustStock,
         submitPurchaseBatch,
         reviewPurchaseBill,

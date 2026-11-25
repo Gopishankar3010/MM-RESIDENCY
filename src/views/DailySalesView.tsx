@@ -12,6 +12,8 @@ import {
   PlusCircle,
   Eye,
   Edit2,
+  Trash2,
+  Save,
   User,
   Users,
   UserCheck,
@@ -30,6 +32,7 @@ export const DailySalesView: React.FC = () => {
     submitDailySales,
     adminCreateHistoricalReport,
     adminEditReport,
+    adminDeleteDailySales,
     reviewDailySales,
     products
   } = useStock();
@@ -87,7 +90,19 @@ export const DailySalesView: React.FC = () => {
   const [editReason, setEditReason] = useState('');
   const [editClosingMap, setEditClosingMap] = useState<Record<string, number>>({});
   const [editSoldMap, setEditSoldMap] = useState<Record<string, number>>({});
-  const [editReceivedAmount, setEditReceivedAmount] = useState('0');
+  const [editCashAmount, setEditCashAmount] = useState('0');
+  const [editUpiAmount, setEditUpiAmount] = useState('0');
+  const [editAcCharges, setEditAcCharges] = useState('0');
+  const [editCashierName, setEditCashierName] = useState('');
+  const [editHelperName, setEditHelperName] = useState('');
+  const [editPaymentExplanation, setEditPaymentExplanation] = useState('');
+  const [editSearchFilter, setEditSearchFilter] = useState('');
+  const [editShowAllLines, setEditShowAllLines] = useState(true);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [savingReportEdit, setSavingReportEdit] = useState(false);
+  const [confirmingDeleteReport, setConfirmingDeleteReport] = useState(false);
+  const [deleteReportReason, setDeleteReportReason] = useState('');
+  const [deletingReport, setDeletingReport] = useState(false);
 
   // Admin historical entry modal
   const [showHistoricalModal, setShowHistoricalModal] = useState(false);
@@ -101,6 +116,7 @@ export const DailySalesView: React.FC = () => {
 
   // Share text modal
   const [shareText, setShareText] = useState<string | null>(null);
+  const [copiedShare, setCopiedShare] = useState(false);
 
   // Admin filters
   const [adminCounterFilter, setAdminCounterFilter] = useState('');
@@ -265,6 +281,234 @@ export const DailySalesView: React.FC = () => {
     return txt;
   };
 
+  // Keep inspected report reactive to live edits
+  const activeViewingReport = useMemo(() => {
+    if (!viewingReport) return null;
+    return dailySales.find(r => r.reportId === viewingReport.reportId) || viewingReport;
+  }, [viewingReport, dailySales]);
+
+  // Allow Admin to modify any report, and Counter Staff to edit/delete their own counter's same-day/latest report
+  const canModifyReport = (report: DailySalesReport): boolean => {
+    if (isAdmin) return true;
+    if (!currentUser || report.counter !== counter) return false;
+    const isForDay =
+      report.date === businessDate ||
+      report.date === todayISO ||
+      (report.submittedAt || '').slice(0, 10) === todayISO;
+    if (!isForDay) return false;
+    const hasLaterReport = dailySales.some(
+      other =>
+        other.reportId !== report.reportId &&
+        other.counter === report.counter &&
+        other.status !== 'Rejected' &&
+        other.date > report.date
+    );
+    return !hasLaterReport;
+  };
+
+  const openInspectReport = (report: DailySalesReport) => {
+    setViewingReport(report);
+    setIsEditingReport(false);
+    setConfirmingDeleteReport(false);
+    setDeleteReportReason('');
+    setModalError(null);
+  };
+
+  const startEditingReport = (report: DailySalesReport) => {
+    const isHistorical = Boolean(report.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY'));
+    const nextClosing: Record<string, number> = {};
+    const nextSold: Record<string, number> = {};
+    report.lines.forEach(l => {
+      nextClosing[l.productId] = l.closing;
+      nextSold[l.productId] = l.sold;
+    });
+    setEditClosingMap(nextClosing);
+    setEditSoldMap(nextSold);
+    setEditCashAmount(String(report.cashAmount ?? 0));
+    setEditUpiAmount(String(report.upiAmount ?? 0));
+    setEditAcCharges(String(report.acCharges ?? 0));
+    setEditCashierName(report.cashierName || '');
+    setEditHelperName(report.helperName || '');
+    setEditPaymentExplanation(report.paymentExplanation || '');
+    setEditReason('');
+    setEditSearchFilter('');
+    setEditShowAllLines(!isHistorical);
+    setModalError(null);
+    setConfirmingDeleteReport(false);
+    setIsEditingReport(true);
+  };
+
+  const isEditingHistorical = Boolean(activeViewingReport?.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY'));
+
+  const editPreview = useMemo(() => {
+    if (!activeViewingReport) {
+      return {
+        lines: [] as {
+          productId: string;
+          name: string;
+          opening: number;
+          inQty: number;
+          outQty: number;
+          available: number;
+          closing: number;
+          sold: number;
+          price: number;
+          value: number;
+          isInvalid: boolean;
+        }[],
+        totalSold: 0,
+        totalSalesValue: 0,
+        cash: 0,
+        upi: 0,
+        acCharges: 0,
+        recordedAmount: 0,
+        diff: 0,
+        invalidCount: 0,
+      };
+    }
+
+    let totalSold = 0;
+    let totalSalesValue = 0;
+    let invalidCount = 0;
+
+    const lines = activeViewingReport.lines.map(l => {
+      let closing = l.closing;
+      let sold = l.sold;
+      let isInvalid = false;
+
+      if (isEditingHistorical) {
+        const rawSold = editSoldMap[l.productId];
+        sold = rawSold !== undefined ? Number(rawSold) : l.sold;
+        if (!Number.isInteger(sold) || sold < 0) {
+          isInvalid = true;
+          invalidCount += 1;
+          sold = Math.max(0, sold || 0);
+        }
+      } else {
+        const rawClosing = editClosingMap[l.productId];
+        closing = rawClosing !== undefined ? Number(rawClosing) : l.closing;
+        if (!Number.isInteger(closing) || closing < 0 || closing > l.available) {
+          isInvalid = true;
+          invalidCount += 1;
+        }
+        sold = Math.max(0, l.available - (Number.isFinite(closing) ? closing : l.available));
+      }
+
+      const value = sold * l.price;
+      totalSold += sold;
+      totalSalesValue += value;
+
+      return {
+        productId: l.productId,
+        name: l.name || l.productId,
+        opening: l.opening,
+        inQty: l.inQty,
+        outQty: l.outQty,
+        available: l.available,
+        closing,
+        sold,
+        price: l.price,
+        value,
+        isInvalid,
+      };
+    });
+
+    const cash = Math.max(0, Number(editCashAmount) || 0);
+    const upi = Math.max(0, Number(editUpiAmount) || 0);
+    const acCharges = activeViewingReport.counter === 'AC' ? Math.max(0, Number(editAcCharges) || 0) : 0;
+    const recordedAmount = Math.round((cash + upi + (activeViewingReport.cardAmount || 0) + acCharges) * 100) / 100;
+    const roundedSalesValue = Math.round(totalSalesValue * 100) / 100;
+    const diff = Math.round((recordedAmount - (roundedSalesValue + acCharges)) * 100) / 100;
+
+    return {
+      lines,
+      totalSold,
+      totalSalesValue: roundedSalesValue,
+      cash,
+      upi,
+      acCharges,
+      recordedAmount,
+      diff,
+      invalidCount,
+    };
+  }, [
+    activeViewingReport,
+    isEditingHistorical,
+    editClosingMap,
+    editSoldMap,
+    editCashAmount,
+    editUpiAmount,
+    editAcCharges,
+  ]);
+
+  const handleSaveEditedReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeViewingReport) return;
+
+    try {
+      setModalError(null);
+      if (editPreview.invalidCount > 0) {
+        throw new Error('One or more closing/sold counts are invalid. Closing stock cannot be negative or exceed available stock.');
+      }
+      if (!editReason.trim()) {
+        throw new Error('Please enter a short reason for editing this sales report.');
+      }
+      if (!isEditingHistorical && (!editCashierName.trim() || !editHelperName.trim())) {
+        throw new Error('Cashier and Helper names cannot be empty.');
+      }
+
+      setSavingReportEdit(true);
+      await adminEditReport(activeViewingReport.reportId, {
+        recordedAmount: editPreview.recordedAmount,
+        cashAmount: editPreview.cash,
+        upiAmount: editPreview.upi,
+        acCharges: editPreview.acCharges,
+        cashierName: editCashierName.trim() || activeViewingReport.cashierName,
+        helperName: editHelperName.trim() || activeViewingReport.helperName,
+        paymentExplanation: editPaymentExplanation.trim(),
+        reason: editReason.trim(),
+        lines: editPreview.lines.map(l =>
+          isEditingHistorical
+            ? { productId: l.productId, sold: l.sold }
+            : { productId: l.productId, closing: l.closing }
+        ),
+      });
+
+      setIsEditingReport(false);
+      setStatusMessage({
+        type: 'ok',
+        text: `Updated sales report ${activeViewingReport.reportId} for ${activeViewingReport.date} (${editPreview.totalSold} btls · ${formatCurrency(editPreview.totalSalesValue)}). Counter stock and ledger adjusted automatically.`
+      });
+    } catch (err: any) {
+      setModalError(err?.message || 'Failed to save edited daily sales.');
+    } finally {
+      setSavingReportEdit(false);
+    }
+  };
+
+  const handleConfirmDeleteReport = async () => {
+    if (!activeViewingReport) return;
+    try {
+      setModalError(null);
+      setDeletingReport(true);
+      const deletedInfo = `${activeViewingReport.reportId} (${activeViewingReport.date} · ${activeViewingReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'})`;
+      await adminDeleteDailySales(
+        activeViewingReport.reportId,
+        deleteReportReason.trim() || 'Deleted from Inspect Report for re-entry'
+      );
+      setConfirmingDeleteReport(false);
+      setViewingReport(null);
+      setStatusMessage({
+        type: 'ok',
+        text: `Deleted report ${deletedInfo}. Sold bottles were restored to counter stock and you can now re-submit daily sales for that date.`
+      });
+    } catch (err: any) {
+      setModalError(err?.message || 'Failed to delete daily sales report.');
+    } finally {
+      setDeletingReport(false);
+    }
+  };
+
   // Admin filter reports
   const displayedReports = dailySales.filter(r => {
     const matchesCounter = !adminCounterFilter || r.counter === adminCounterFilter;
@@ -274,6 +518,7 @@ export const DailySalesView: React.FC = () => {
 
   return (
     <div className="print-surface space-y-6">
+      <div className={activeViewingReport ? 'no-print space-y-6' : 'space-y-6'}>
       {/* Print-only formal header */}
       <div className="print-header text-center">
         <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – DAILY SALES & RECONCILIATION</h1>
@@ -969,11 +1214,8 @@ export const DailySalesView: React.FC = () => {
                     <td className="py-3 px-4 text-slate-500">{report.submittedBy}</td>
                     <td className="no-print py-3 px-4 text-right">
                       <button
-                        onClick={() => {
-                          setViewingReport(report);
-                          setIsEditingReport(false);
-                        }}
-                        className="rounded bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200"
+                        onClick={() => openInspectReport(report)}
+                        className="rounded bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
                       >
                         Inspect Report
                       </button>
@@ -985,164 +1227,613 @@ export const DailySalesView: React.FC = () => {
           </div>
         </div>
       </div>
+      </div>
 
-      {/* REPORT INSPECTION / APPROVAL / EDIT MODAL */}
-      {viewingReport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs overflow-y-auto">
-          <div className="w-full max-w-4xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 max-h-[90vh] overflow-y-auto space-y-5">
-            <div className="flex items-start justify-between border-b pb-4 dark:border-slate-800">
+      {/* DEDICATED A4 PRINT VIEW FOR INSPECTED DAILY SALES REPORT */}
+      {activeViewingReport && (
+        <div className="hidden print:block print-only space-y-4">
+          <div className="print-header text-center">
+            <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – DAILY SALES REPORT</h1>
+            <h2 className="text-sm font-bold uppercase tracking-wider mt-1">
+              {activeViewingReport.counter === 'NORMAL' ? 'NORMAL COUNTER' : 'AC COUNTER'} · {activeViewingReport.date}
+            </h2>
+            <p className="text-xs text-slate-600 mt-1">
+              Report ID: <strong>{activeViewingReport.reportId}</strong> · Status: <strong>{activeViewingReport.status}</strong> · Submitted by {activeViewingReport.submittedBy} ({activeViewingReport.submittedAt})
+            </p>
+          </div>
+
+          <div className="print-card grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <div><strong>Cashier:</strong> {activeViewingReport.cashierName || '—'}</div>
+              <div><strong>Helper:</strong> {activeViewingReport.helperName || '—'}</div>
+              {activeViewingReport.editedBy && (
+                <div><strong>Last Edited:</strong> {activeViewingReport.editedBy} ({activeViewingReport.editedAt})</div>
+              )}
+            </div>
+            <div className="text-right font-mono">
+              <div><strong>Bottles Sold:</strong> {activeViewingReport.totalSoldQty} btls</div>
+              <div><strong>Liquor Sales:</strong> {formatCurrency(activeViewingReport.totalSalesValue)}</div>
+              {activeViewingReport.counter === 'AC' && (
+                <div><strong>AC Charges:</strong> {formatCurrency(activeViewingReport.acCharges || 0)}</div>
+              )}
               <div>
-                <div className="flex items-center gap-2">
+                <strong>Cash / UPI:</strong> {formatCurrency(activeViewingReport.cashAmount)} / {formatCurrency(activeViewingReport.upiAmount)}
+              </div>
+              <div><strong>Total Collected:</strong> {formatCurrency(activeViewingReport.recordedAmount)}</div>
+              <div>
+                <strong>Difference:</strong>{' '}
+                {Math.abs(activeViewingReport.paymentDifference) <= 0.009
+                  ? 'Exact Match (0.00)'
+                  : `${activeViewingReport.paymentDifference > 0 ? '+' : ''}${formatCurrency(activeViewingReport.paymentDifference)}`}
+              </div>
+            </div>
+          </div>
+
+          {activeViewingReport.remark && (
+            <div className="print-card text-xs">
+              <strong>Notes / Audit:</strong> {activeViewingReport.remark}
+            </div>
+          )}
+
+          <div className="print-card">
+            <table className="print-table w-full text-left text-xs">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Product</th>
+                  <th>Open</th>
+                  <th>In</th>
+                  <th>Out</th>
+                  <th>Closing</th>
+                  <th>Sold</th>
+                  <th className="text-right">Rate</th>
+                  <th className="text-right">Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeViewingReport.lines.filter(l => l.sold > 0).length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="text-center py-4">
+                      No bottles sold recorded in this shift.
+                    </td>
+                  </tr>
+                ) : (
+                  activeViewingReport.lines
+                    .filter(l => l.sold > 0)
+                    .map((l, idx) => (
+                      <tr key={l.productId}>
+                        <td className="font-mono">{idx + 1}</td>
+                        <td className="font-bold">{l.name}</td>
+                        <td className="font-mono">{l.opening}</td>
+                        <td className="font-mono">{l.inQty}</td>
+                        <td className="font-mono">{l.outQty}</td>
+                        <td className="font-mono">{l.closing}</td>
+                        <td className="font-mono font-bold">{l.sold}</td>
+                        <td className="font-mono text-right">{formatCurrency(l.price)}</td>
+                        <td className="font-mono font-bold text-right">{formatCurrency(l.value)}</td>
+                      </tr>
+                    ))
+                )}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={6} className="text-right font-bold uppercase">Total Sold:</td>
+                  <td className="font-mono font-bold">{activeViewingReport.totalSoldQty}</td>
+                  <td></td>
+                  <td className="font-mono font-bold text-right">{formatCurrency(activeViewingReport.totalSalesValue)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <div className="grid grid-cols-3 gap-8 pt-8 text-center text-xs">
+            <div className="border-t border-slate-400 pt-1.5">Cashier Signature</div>
+            <div className="border-t border-slate-400 pt-1.5">Helper Signature</div>
+            <div className="border-t border-slate-400 pt-1.5">Manager / Admin Signature</div>
+          </div>
+        </div>
+      )}
+
+      {/* REPORT INSPECTION / EDIT / DELETE / PRINT MODAL */}
+      {activeViewingReport && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="w-full max-w-4xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 max-h-[92vh] overflow-y-auto space-y-5">
+            <div className="flex items-start justify-between border-b pb-4 dark:border-slate-800 gap-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                    Report Details · {viewingReport.reportId}
+                    {isEditingReport ? 'Edit Daily Sales · ' : 'Report Details · '}
+                    {activeViewingReport.reportId}
                   </h3>
                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                    viewingReport.status === 'Approved'
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : viewingReport.status === 'Pending'
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-red-100 text-red-800'
+                    activeViewingReport.status === 'Approved'
+                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                      : activeViewingReport.status === 'Pending'
+                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                      : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
                   }`}>
-                    {viewingReport.status}
+                    {activeViewingReport.status}
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-1">
-                  Counter: {viewingReport.counter} · Date: {viewingReport.date} · Submitted by {viewingReport.submittedBy} at {viewingReport.submittedAt}
+                  Counter: {activeViewingReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} · Date: <strong>{activeViewingReport.date}</strong> · Submitted by {activeViewingReport.submittedBy} at {activeViewingReport.submittedAt}
+                  {activeViewingReport.editedBy && (
+                    <span> · Edited by {activeViewingReport.editedBy} ({activeViewingReport.editedAt})</span>
+                  )}
                 </p>
               </div>
 
               <button
-                onClick={() => setViewingReport(null)}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                type="button"
+                onClick={() => {
+                  setViewingReport(null);
+                  setIsEditingReport(false);
+                  setConfirmingDeleteReport(false);
+                }}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            {/* Staff on Duty at top of Report Details */}
-            <div className="flex flex-wrap items-center gap-4 rounded-xl border border-amber-200/90 bg-amber-50/80 p-3 text-xs dark:border-amber-900/40 dark:bg-amber-950/40">
-              <div className="flex items-center gap-2">
-                <User className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                <span className="text-slate-600 dark:text-slate-400 font-medium">Cashier:</span>
-                <span className="font-bold text-slate-900 dark:text-white font-mono text-sm">{viewingReport.cashierName || '—'}</span>
-              </div>
-              <span className="text-amber-300 dark:text-amber-800">|</span>
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                <span className="text-slate-600 dark:text-slate-400 font-medium">Helper:</span>
-                <span className="font-bold text-slate-900 dark:text-white font-mono text-sm">{viewingReport.helperName || '—'}</span>
-              </div>
-            </div>
-
-            {viewingReport.remark && (
-              <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-                <strong>Notes / Audit:</strong> {viewingReport.remark}
+            {modalError && (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
+                {modalError}
               </div>
             )}
 
-            {/* Quick Metrics */}
-            <div className="grid grid-cols-4 gap-3 text-xs">
-              <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
-                <span className="text-slate-500">Sold Quantity</span>
-                <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{viewingReport.totalSoldQty} btls</div>
-              </div>
-              <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
-                <span className="text-slate-500">Sales Value</span>
-                <div className="font-mono text-base font-bold text-emerald-600">{formatCurrency(viewingReport.totalSalesValue)}</div>
-              </div>
-              <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
-                <span className="text-slate-500">Cash / UPI</span>
-                <div className="font-mono text-base font-bold text-slate-900 dark:text-white">
-                  {formatCurrency(viewingReport.cashAmount)} / {formatCurrency(viewingReport.upiAmount)}
+            {/* Delete Confirmation Banner */}
+            {confirmingDeleteReport && (
+              <div className="rounded-xl border border-red-300 bg-red-50/90 p-4 text-xs text-red-950 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200 space-y-3">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block text-sm font-bold">Delete Daily Sales Report ({activeViewingReport.date})?</strong>
+                    <p className="mt-0.5">
+                      {activeViewingReport.status === 'Approved' && !isEditingHistorical
+                        ? `This will restore all ${activeViewingReport.totalSoldQty} sold bottles back to ${activeViewingReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} stock, log a reversal in the stock ledger, and allow re-entering daily sales for ${activeViewingReport.date}.`
+                        : `This will permanently remove report ${activeViewingReport.reportId} for ${activeViewingReport.date}.`}
+                    </p>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold mb-1">Reason for deleting (optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Wrong closing counts entered, re-entering today's report"
+                    value={deleteReportReason}
+                    onChange={e => setDeleteReportReason(e.target.value)}
+                    className="w-full rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs text-slate-900 outline-none focus:border-red-500 dark:border-red-800 dark:bg-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={deletingReport}
+                    onClick={() => setConfirmingDeleteReport(false)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deletingReport}
+                    onClick={handleConfirmDeleteReport}
+                    className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>{deletingReport ? 'Deleting...' : 'Confirm Delete Report'}</span>
+                  </button>
                 </div>
               </div>
-              <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
-                <span className="text-slate-500">Difference</span>
-                <div className={`font-mono text-base font-bold ${viewingReport.paymentDifference === 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                  {viewingReport.paymentDifference === 0 ? '0.00' : formatCurrency(viewingReport.paymentDifference)}
+            )}
+
+            {isEditingReport ? (
+              <form onSubmit={handleSaveEditedReport} className="space-y-4">
+                {/* Staff & Payment Inputs */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3.5 text-xs dark:border-amber-900/40 dark:bg-amber-950/20">
+                  {!isEditingHistorical && (
+                    <>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">Cashier Name *</label>
+                        <input
+                          type="text"
+                          required
+                          value={editCashierName}
+                          onChange={e => setEditCashierName(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">Helper Name *</label>
+                        <input
+                          type="text"
+                          required
+                          value={editHelperName}
+                          onChange={e => setEditHelperName(e.target.value)}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                        />
+                      </div>
+                    </>
+                  )}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">Cash Received (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editCashAmount}
+                      onChange={e => setEditCashAmount(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono text-xs font-bold dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">UPI / Card Received (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editUpiAmount}
+                      onChange={e => setEditUpiAmount(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono text-xs font-bold dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    />
+                  </div>
+                  {activeViewingReport.counter === 'AC' && (
+                    <div>
+                      <label className="block text-[11px] font-bold text-purple-700 dark:text-purple-300 mb-1">AC Charges (₹)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={editAcCharges}
+                        onChange={e => setEditAcCharges(e.target.value)}
+                        className="w-full rounded-lg border border-purple-300 bg-white px-2.5 py-1.5 font-mono text-xs font-bold dark:border-purple-700 dark:bg-slate-800 dark:text-white"
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">Reason for Correction *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Fixed wrong closing bottle count"
+                      value={editReason}
+                      onChange={e => setEditReason(e.target.value)}
+                      className="w-full rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs dark:border-amber-700 dark:bg-slate-800 dark:text-white"
+                    />
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            {/* Lines List */}
-            <div className="print-card rounded-xl border border-slate-200 overflow-hidden dark:border-slate-800">
-              <div className="print-table-wrap overflow-x-auto max-h-[300px]">
-                <table className="print-table w-full text-left text-xs">
-                  <thead className="bg-slate-100 font-bold uppercase text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-400 sticky top-0">
-                    <tr>
-                      <th className="p-2.5">Product</th>
-                      <th className="p-2.5">Open</th>
-                      <th className="p-2.5">In</th>
-                      <th className="p-2.5">Out</th>
-                      <th className="p-2.5">Closing</th>
-                      <th className="p-2.5">Sold</th>
-                      <th className="p-2.5 text-right">Rate</th>
-                      <th className="p-2.5 text-right">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {viewingReport.lines.filter(l => l.sold > 0).map(l => (
-                      <tr key={l.productId}>
-                        <td className="p-2.5 font-bold text-slate-900 dark:text-white">{l.name}</td>
-                        <td className="p-2.5 font-mono">{l.opening}</td>
-                        <td className="p-2.5 font-mono text-emerald-600">{l.inQty}</td>
-                        <td className="p-2.5 font-mono text-red-600">{l.outQty}</td>
-                        <td className="p-2.5 font-mono">{l.closing}</td>
-                        <td className="p-2.5 font-mono font-bold text-blue-600">{l.sold}</td>
-                        <td className="p-2.5 font-mono text-right">{formatCurrency(l.price)}</td>
-                        <td className="p-2.5 font-mono font-bold text-right">{formatCurrency(l.value)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                {/* Live Recalculated Totals */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Updated Sold Qty</span>
+                    <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{editPreview.totalSold} btls</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Updated Sales Value</span>
+                    <div className="font-mono text-base font-bold text-emerald-600">{formatCurrency(editPreview.totalSalesValue)}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Total Collected</span>
+                    <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{formatCurrency(editPreview.recordedAmount)}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Updated Difference</span>
+                    <div className={`font-mono text-base font-bold ${Math.abs(editPreview.diff) <= 0.009 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {Math.abs(editPreview.diff) <= 0.009 ? '0.00' : formatCurrency(editPreview.diff)}
+                    </div>
+                  </div>
+                </div>
 
-            {/* Action Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    setShareText(generateReportSummaryText(viewingReport));
-                  }}
-                  className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
-                >
-                  <Share2 className="h-3.5 w-3.5" />
-                  <span>Share / Copy</span>
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {isAdmin && viewingReport.status === 'Pending' && (
-                  <>
-                    <button
-                      onClick={async () => {
-                        await reviewDailySales(viewingReport.reportId, 'REJECT', 'Rejected by admin');
-                        setViewingReport(null);
-                      }}
-                      className="rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700"
-                    >
-                      Reject
-                    </button>
-                    <button
-                      onClick={async () => {
-                        await reviewDailySales(viewingReport.reportId, 'APPROVE');
-                        setViewingReport(null);
-                      }}
-                      className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
-                    >
-                      Approve Report
-                    </button>
-                  </>
+                {Math.abs(editPreview.diff) > 0.009 && (
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                      Payment Difference Explanation (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Explain cash/UPI difference if any..."
+                      value={editPaymentExplanation}
+                      onChange={e => setEditPaymentExplanation(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    />
+                  </div>
                 )}
-                <button
-                  onClick={() => setViewingReport(null)}
-                  className="rounded-lg border border-slate-300 px-4 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
+
+                {/* Edit Search & Toggle */}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search product to adjust closing count..."
+                      value={editSearchFilter}
+                      onChange={e => setEditSearchFilter(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 py-1.5 text-xs outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    />
+                  </div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editShowAllLines}
+                      onChange={e => setEditShowAllLines(e.target.checked)}
+                      className="rounded border-slate-300"
+                    />
+                    <span>Show all items (including 0 sold)</span>
+                  </label>
+                </div>
+
+                {/* Editable Lines Table */}
+                <div className="rounded-xl border border-slate-200 overflow-hidden dark:border-slate-800">
+                  <div className="overflow-x-auto max-h-[290px]">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100 font-bold uppercase text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-400 sticky top-0">
+                        <tr>
+                          <th className="p-2.5">Product</th>
+                          <th className="p-2.5">Open</th>
+                          <th className="p-2.5">Avail</th>
+                          <th className="p-2.5 bg-amber-500/10">{isEditingHistorical ? 'Sold Qty' : 'Closing Count'}</th>
+                          <th className="p-2.5">Sold</th>
+                          <th className="p-2.5 text-right">Rate</th>
+                          <th className="p-2.5 text-right">Value</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {editPreview.lines
+                          .filter(l => {
+                            if (!editShowAllLines && l.sold <= 0) return false;
+                            if (!isEditingHistorical && !editShowAllLines && l.available <= 0) return false;
+                            return matchesSearchQuery(editSearchFilter, l.name, l.productId);
+                          })
+                          .map(l => (
+                            <tr key={l.productId} className={l.sold > 0 ? 'bg-amber-50/30 dark:bg-amber-950/10' : ''}>
+                              <td className="p-2.5 font-bold text-slate-900 dark:text-white">{l.name}</td>
+                              <td className="p-2.5 font-mono">{l.opening}</td>
+                              <td className="p-2.5 font-mono font-semibold">{l.available}</td>
+                              <td className="p-2.5 bg-amber-500/5">
+                                {isEditingHistorical ? (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={editSoldMap[l.productId] ?? l.sold}
+                                    onChange={e => {
+                                      const val = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                                      setEditSoldMap(prev => ({ ...prev, [l.productId]: val }));
+                                    }}
+                                    className="w-20 rounded border border-slate-300 bg-white px-2 py-1 font-mono text-xs font-bold dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                  />
+                                ) : (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max={l.available}
+                                    value={editClosingMap[l.productId] ?? l.closing}
+                                    onChange={e => {
+                                      const raw = e.target.value;
+                                      const val = raw === '' ? 0 : Math.floor(Number(raw));
+                                      setEditClosingMap(prev => ({ ...prev, [l.productId]: val }));
+                                    }}
+                                    className={`w-20 rounded border px-2 py-1 font-mono text-xs font-bold outline-none ${
+                                      l.isInvalid
+                                        ? 'border-red-500 bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-200'
+                                        : 'border-slate-300 bg-white text-slate-900 focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white'
+                                    }`}
+                                  />
+                                )}
+                              </td>
+                              <td className="p-2.5 font-mono font-bold text-blue-600">{l.sold}</td>
+                              <td className="p-2.5 font-mono text-right">{formatCurrency(l.price)}</td>
+                              <td className="p-2.5 font-mono font-bold text-right">{formatCurrency(l.value)}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Edit Action Bar */}
+                <div className="flex flex-wrap items-center justify-end gap-2 pt-3 border-t dark:border-slate-800">
+                  <button
+                    type="button"
+                    disabled={savingReportEdit}
+                    onClick={() => {
+                      setIsEditingReport(false);
+                      setModalError(null);
+                    }}
+                    className="rounded-lg border border-slate-300 px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 cursor-pointer"
+                  >
+                    Cancel Edit
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingReportEdit || editPreview.invalidCount > 0}
+                    className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-4 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-50 cursor-pointer"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    <span>{savingReportEdit ? 'Saving...' : 'Save Edited Sales'}</span>
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                {/* Staff on Duty at top of Report Details */}
+                <div className="flex flex-wrap items-center gap-4 rounded-xl border border-amber-200/90 bg-amber-50/80 p-3 text-xs dark:border-amber-900/40 dark:bg-amber-950/40">
+                  <div className="flex items-center gap-2">
+                    <User className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                    <span className="text-slate-600 dark:text-slate-400 font-medium">Cashier:</span>
+                    <span className="font-bold text-slate-900 dark:text-white font-mono text-sm">{activeViewingReport.cashierName || '—'}</span>
+                  </div>
+                  <span className="text-amber-300 dark:text-amber-800">|</span>
+                  <div className="flex items-center gap-2">
+                    <Users className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                    <span className="text-slate-600 dark:text-slate-400 font-medium">Helper:</span>
+                    <span className="font-bold text-slate-900 dark:text-white font-mono text-sm">{activeViewingReport.helperName || '—'}</span>
+                  </div>
+                </div>
+
+                {activeViewingReport.remark && (
+                  <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+                    <strong>Notes / Audit:</strong> {activeViewingReport.remark}
+                  </div>
+                )}
+
+                {/* Quick Metrics */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Sold Quantity</span>
+                    <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{activeViewingReport.totalSoldQty} btls</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Sales Value</span>
+                    <div className="font-mono text-base font-bold text-emerald-600">{formatCurrency(activeViewingReport.totalSalesValue)}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Cash / UPI</span>
+                    <div className="font-mono text-base font-bold text-slate-900 dark:text-white">
+                      {formatCurrency(activeViewingReport.cashAmount)} / {formatCurrency(activeViewingReport.upiAmount)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Difference</span>
+                    <div className={`font-mono text-base font-bold ${Math.abs(activeViewingReport.paymentDifference) <= 0.009 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {Math.abs(activeViewingReport.paymentDifference) <= 0.009 ? '0.00' : formatCurrency(activeViewingReport.paymentDifference)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Lines List */}
+                <div className="rounded-xl border border-slate-200 overflow-hidden dark:border-slate-800">
+                  <div className="overflow-x-auto max-h-[300px]">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100 font-bold uppercase text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-400 sticky top-0">
+                        <tr>
+                          <th className="p-2.5">Product</th>
+                          <th className="p-2.5">Open</th>
+                          <th className="p-2.5">In</th>
+                          <th className="p-2.5">Out</th>
+                          <th className="p-2.5">Closing</th>
+                          <th className="p-2.5">Sold</th>
+                          <th className="p-2.5 text-right">Rate</th>
+                          <th className="p-2.5 text-right">Value</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {activeViewingReport.lines.filter(l => l.sold > 0).length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="p-4 text-center text-slate-400">
+                              No sold items recorded in this report.
+                            </td>
+                          </tr>
+                        ) : (
+                          activeViewingReport.lines.filter(l => l.sold > 0).map(l => (
+                            <tr key={l.productId}>
+                              <td className="p-2.5 font-bold text-slate-900 dark:text-white">{l.name}</td>
+                              <td className="p-2.5 font-mono">{l.opening}</td>
+                              <td className="p-2.5 font-mono text-emerald-600">{l.inQty}</td>
+                              <td className="p-2.5 font-mono text-red-600">{l.outQty}</td>
+                              <td className="p-2.5 font-mono">{l.closing}</td>
+                              <td className="p-2.5 font-mono font-bold text-blue-600">{l.sold}</td>
+                              <td className="p-2.5 font-mono text-right">{formatCurrency(l.price)}</td>
+                              <td className="p-2.5 font-mono font-bold text-right">{formatCurrency(l.value)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Action Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t dark:border-slate-800">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 cursor-pointer"
+                    >
+                      <Printer className="h-3.5 w-3.5" />
+                      <span>Print Daily Sales</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCopiedShare(false);
+                        setShareText(generateReportSummaryText(activeViewingReport));
+                      }}
+                      className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 cursor-pointer"
+                    >
+                      <Share2 className="h-3.5 w-3.5" />
+                      <span>Share / Copy</span>
+                    </button>
+
+                    {canModifyReport(activeViewingReport) && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => startEditingReport(activeViewingReport)}
+                          className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60 cursor-pointer"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                          <span>Edit Sales</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setModalError(null);
+                            setConfirmingDeleteReport(true);
+                          }}
+                          className="flex items-center gap-1.5 rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-900/60 cursor-pointer"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>Delete Sales</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {isAdmin && activeViewingReport.status === 'Pending' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await reviewDailySales(activeViewingReport.reportId, 'REJECT', 'Rejected by admin');
+                            setViewingReport(null);
+                          }}
+                          className="rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 cursor-pointer"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await reviewDailySales(activeViewingReport.reportId, 'APPROVE');
+                            setViewingReport(null);
+                          }}
+                          className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
+                        >
+                          Approve Report
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setViewingReport(null);
+                        setIsEditingReport(false);
+                        setConfirmingDeleteReport(false);
+                      }}
+                      className="rounded-lg border border-slate-300 px-4 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1491,7 +2182,7 @@ export const DailySalesView: React.FC = () => {
 
       {/* SHARE MODAL */}
       {shareText && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl dark:bg-slate-900 space-y-4">
             <h3 className="text-sm font-bold text-slate-900 dark:text-white">
               Share Report Summary
@@ -1504,26 +2195,35 @@ export const DailySalesView: React.FC = () => {
             />
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(shareText);
-                  alert('Copied to clipboard!');
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(shareText);
+                    setCopiedShare(true);
+                  } catch {
+                    setCopiedShare(false);
+                  }
                 }}
-                className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700"
+                className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700 cursor-pointer"
               >
                 <Copy className="h-3.5 w-3.5" />
-                <span>Copy</span>
+                <span>{copiedShare ? 'Copied!' : 'Copy'}</span>
               </button>
-              <button
-                onClick={() => {
-                  window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, '_blank');
-                }}
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
               >
                 Open WhatsApp
-              </button>
+              </a>
               <button
-                onClick={() => setShareText(null)}
-                className="rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700"
+                type="button"
+                onClick={() => {
+                  setShareText(null);
+                  setCopiedShare(false);
+                }}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700 cursor-pointer"
               >
                 Close
               </button>

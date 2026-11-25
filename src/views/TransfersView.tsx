@@ -1,27 +1,50 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { ArrowRightLeft, Search, CheckCircle2, AlertCircle, Printer } from 'lucide-react';
-import { CounterLocation } from '../types';
+import { ArrowRightLeft, Search, Printer } from 'lucide-react';
+import { CounterLocation, StockLocation } from '../types';
 import { bottlesPerCase_, matchesSearchQuery, sortProductsCategoryWise, stockQtyLabel } from '../data/initialData';
+
+const formatLocationLabel = (loc: StockLocation | string): string => {
+  if (loc === 'GODOWN') return 'Godown';
+  if (loc === 'NORMAL') return 'Normal Counter';
+  if (loc === 'AC') return 'AC Counter';
+  return String(loc);
+};
 
 export const TransfersView: React.FC = () => {
   const { currentUser, stockItems, transfers, submitTransfer } = useStock();
   const isAdmin = currentUser?.role === 'ADMIN';
 
+  const fromLoc: StockLocation = isAdmin ? 'GODOWN' : (currentUser?.counter || 'NORMAL');
+  const otherCounter: CounterLocation = currentUser?.counter === 'NORMAL' ? 'AC' : 'NORMAL';
+
   const [productSearch, setProductSearch] = useState('');
   const [productId, setProductId] = useState('');
   const [qty, setQty] = useState('1');
   const [unit, setUnit] = useState<'CASE' | 'BOTTLE'>('BOTTLE');
-  const [targetCounter, setTargetCounter] = useState<CounterLocation>('NORMAL');
+  const [targetLocation, setTargetLocation] = useState<StockLocation>(isAdmin ? 'NORMAL' : otherCounter);
   const [note, setNote] = useState('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  const fromLocation = isAdmin ? 'Godown' : (currentUser?.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter');
-  const otherCounter: CounterLocation = currentUser?.counter === 'NORMAL' ? 'AC' : 'NORMAL';
-  const toLocation = isAdmin ? (targetCounter === 'NORMAL' ? 'Normal Counter' : 'AC Counter') : (otherCounter === 'NORMAL' ? 'Normal Counter' : 'AC Counter');
+  useEffect(() => {
+    setTargetLocation(prev => {
+      if (isAdmin) {
+        return prev === 'NORMAL' || prev === 'AC' ? prev : 'NORMAL';
+      }
+      return prev === 'GODOWN' || prev === otherCounter ? prev : otherCounter;
+    });
+  }, [isAdmin, otherCounter]);
+
+  const effectiveTarget: StockLocation = isAdmin
+    ? (targetLocation === 'AC' ? 'AC' : 'NORMAL')
+    : (targetLocation === 'GODOWN' ? 'GODOWN' : otherCounter);
+
+  const fromLocation = formatLocationLabel(fromLoc);
+  const toLocation = formatLocationLabel(effectiveTarget);
 
   // Products available at the source location
-  const sourceKey = isAdmin ? 'godown' : (currentUser?.counter?.toLowerCase() as 'normal' | 'ac' || 'normal');
+  const sourceKey = fromLoc.toLowerCase() as 'godown' | 'normal' | 'ac';
+  const destKey = effectiveTarget.toLowerCase() as 'godown' | 'normal' | 'ac';
   const transferableProducts = sortProductsCategoryWise(stockItems.filter(p => p[sourceKey] > 0));
   const searchResults = productSearch.trim()
     ? transferableProducts
@@ -33,6 +56,7 @@ export const TransfersView: React.FC = () => {
   const numQty = Number(qty) || 0;
   const totalBottles = numQty * (unit === 'CASE' ? pack : 1);
   const currentSourceStock = selectedProduct ? selectedProduct[sourceKey] : 0;
+  const currentDestStock = selectedProduct ? selectedProduct[destKey] : 0;
 
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [isSubmittingTransfer, setIsSubmittingTransfer] = useState(false);
@@ -72,7 +96,7 @@ export const TransfersView: React.FC = () => {
         productId,
         qty: numQty,
         unit,
-        to: isAdmin ? targetCounter : otherCounter,
+        to: effectiveTarget,
         note: note.trim()
       });
 
@@ -114,7 +138,7 @@ export const TransfersView: React.FC = () => {
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {isAdmin
               ? 'Transfer stock from Godown to Normal Counter or AC Counter.'
-              : 'Counter-to-counter transfers execute immediately with real-time stock balance deduction.'}
+              : 'Transfer stock to the other counter or return stock back to Godown with immediate real-time balance deduction.'}
           </p>
         </div>
 
@@ -149,23 +173,32 @@ export const TransfersView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {isAdmin && (
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                Destination Counter
-              </label>
-              <select
-                value={targetCounter}
-                onChange={e => setTargetCounter(e.target.value as CounterLocation)}
-                className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-              >
-                <option value="NORMAL">Normal Counter</option>
-                <option value="AC">AC Counter</option>
-              </select>
-            </div>
-          )}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+              {isAdmin ? 'Destination Counter' : 'Destination Location'}
+            </label>
+            <select
+              value={effectiveTarget}
+              onChange={e => setTargetLocation(e.target.value as StockLocation)}
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs font-semibold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            >
+              {isAdmin ? (
+                <>
+                  <option value="NORMAL">Normal Counter</option>
+                  <option value="AC">AC Counter</option>
+                </>
+              ) : (
+                <>
+                  <option value={otherCounter}>
+                    {otherCounter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}
+                  </option>
+                  <option value="GODOWN">Godown (Return Stock)</option>
+                </>
+              )}
+            </select>
+          </div>
 
-          <div className={`relative ${isAdmin ? '' : 'sm:col-span-2'} space-y-2`}>
+          <div className="relative space-y-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
               <input
@@ -224,7 +257,9 @@ export const TransfersView: React.FC = () => {
           <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-700 dark:bg-slate-800/60 dark:text-slate-300 flex items-center justify-between">
             <div>
               <strong className="block text-slate-900 dark:text-white">{selectedProduct.name} {selectedProduct.sizeML}ml</strong>
-              <span>Current {fromLocation} balance: <strong>{stockQtyLabel(currentSourceStock, pack)}</strong></span>
+              <span>
+                {fromLocation} balance: <strong>{stockQtyLabel(currentSourceStock, pack)}</strong> · {toLocation} balance: <strong>{stockQtyLabel(currentDestStock, pack)}</strong>
+              </span>
             </div>
             <div className="text-right">
               <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Equivalent</span>
@@ -262,7 +297,7 @@ export const TransfersView: React.FC = () => {
             <label className="block text-[11px] font-semibold text-slate-500 mb-1">Note (Optional)</label>
             <input
               type="text"
-              placeholder="e.g. VIP room order"
+              placeholder={effectiveTarget === 'GODOWN' ? 'e.g. Returning excess counter stock' : 'e.g. VIP room order'}
               value={note}
               onChange={e => setNote(e.target.value)}
               className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
@@ -323,12 +358,16 @@ export const TransfersView: React.FC = () => {
                 <span className="text-slate-800 dark:text-slate-200">{selectedProduct.category} · {pack} btls/case</span>
               </div>
               <div className="flex justify-between items-center py-1 border-b border-slate-100 dark:border-slate-800">
-                <span className="text-slate-500">{fromLocation} Available:</span>
-                <span className="font-mono font-bold text-slate-900 dark:text-white">{currentSourceStock} btls</span>
+                <span className="text-slate-500">{fromLocation} After Transfer:</span>
+                <span className="font-mono font-bold text-slate-900 dark:text-white">
+                  {currentSourceStock} → {currentSourceStock - totalBottles} btls
+                </span>
               </div>
               <div className="flex justify-between items-center py-1 border-b border-slate-100 dark:border-slate-800">
-                <span className="text-slate-500">{fromLocation} After Transfer:</span>
-                <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{currentSourceStock - totalBottles} btls</span>
+                <span className="text-slate-500">{toLocation} After Transfer:</span>
+                <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                  {currentDestStock} → {currentDestStock + totalBottles} btls
+                </span>
               </div>
               <div className="flex justify-between items-center py-1">
                 <span className="text-slate-500">Note:</span>
@@ -383,7 +422,7 @@ export const TransfersView: React.FC = () => {
                   <tr key={t.transferId} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                     <td className="py-3 px-4 font-mono text-[11px]">{t.createdAt}</td>
                     <td className="py-3 px-4 font-semibold text-slate-800 dark:text-slate-200">
-                      {t.fromLoc} → {t.toLoc}
+                      {formatLocationLabel(t.fromLoc)} → {formatLocationLabel(t.toLoc)}
                     </td>
                     <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">{t.productName}</td>
                     <td className="py-3 px-4 font-mono font-bold">

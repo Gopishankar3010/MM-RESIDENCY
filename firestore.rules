@@ -78,6 +78,12 @@ service cloud.firestore {
         && (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() >= 1 && listVal[0].size() <= 160));
     }
 
+    function isValidDeletedProductIds(listVal) {
+      return listVal is list
+        && listVal.size() <= 1000
+        && (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() >= 1 && listVal[0].size() <= 64));
+    }
+
     function isValidLinesList(listVal, maxLen) {
       return listVal is list
         && listVal.size() <= maxLen
@@ -124,7 +130,7 @@ service cloud.firestore {
 
     function isValidWorkspaceMeta(data) {
       return data.keys().hasAll(['metaId', 'bootstrapped', 'openingEpoch', 'catalogVersion', 'ownerEmail', 'memberEmails', 'suppliers', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['metaId', 'bootstrapped', 'openingEpoch', 'catalogVersion', 'ownerEmail', 'memberEmails', 'suppliers', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['metaId', 'bootstrapped', 'openingEpoch', 'catalogVersion', 'ownerEmail', 'memberEmails', 'suppliers', 'deletedProductIds', 'createdAt', 'updatedAt'])
         && isValidId(data.metaId)
         && data.bootstrapped is bool
         && data.openingEpoch is string && data.openingEpoch.size() >= 1 && data.openingEpoch.size() <= 64
@@ -132,6 +138,7 @@ service cloud.firestore {
         && data.ownerEmail is string && data.ownerEmail.size() >= 5 && data.ownerEmail.size() <= 160
         && isValidMemberEmails(data.memberEmails)
         && isValidSuppliersList(data.suppliers)
+        && (!('deletedProductIds' in data) || isValidDeletedProductIds(data.deletedProductIds))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -241,7 +248,7 @@ service cloud.firestore {
       return data.keys().hasAll(['transferId', 'type', 'fromLoc', 'toLoc', 'productId', 'productName', 'casePack', 'qty', 'status', 'createdBy', 'createdAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['transferId', 'type', 'fromLoc', 'toLoc', 'productId', 'productName', 'casePack', 'qty', 'enteredQty', 'unit', 'note', 'status', 'createdBy', 'createdAtStr', 'reviewedBy', 'reviewedAtStr', 'remark', 'memberEmails', 'createdAt', 'updatedAt'])
         && isValidId(data.transferId)
-        && data.type in ['GODOWN_TO_COUNTER', 'COUNTER_TO_COUNTER']
+        && data.type in ['GODOWN_TO_COUNTER', 'COUNTER_TO_COUNTER', 'COUNTER_TO_GODOWN']
         && data.fromLoc in ['GODOWN', 'NORMAL', 'AC']
         && data.toLoc in ['GODOWN', 'NORMAL', 'AC']
         && data.productId is string && data.productId.size() >= 1 && data.productId.size() <= 64
@@ -427,8 +434,10 @@ service cloud.firestore {
         && hasUpdateTimestamps(incoming())
         && (
           incoming().diff(existing()).affectedKeys().hasOnly(['suppliers', 'updatedAt']) ||
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['deletedProductIds', 'updatedAt'])) ||
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['suppliers', 'deletedProductIds', 'updatedAt'])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt'])) ||
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['bootstrapped', 'openingEpoch', 'catalogVersion', 'suppliers', 'memberEmails', 'updatedAt']))
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['bootstrapped', 'openingEpoch', 'catalogVersion', 'suppliers', 'deletedProductIds', 'memberEmails', 'updatedAt']))
         );
       allow delete: if false;
     }

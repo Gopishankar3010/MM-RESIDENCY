@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Package, Search, Plus, Edit2, Check, X, Filter, Printer } from 'lucide-react';
+import { Search, Plus, Printer, Trash2, AlertTriangle } from 'lucide-react';
 import { Product } from '../types';
 import { bottlesPerCase_, CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
 
 export const ProductsView: React.FC = () => {
-  const { currentUser, products, saveProduct } = useStock();
+  const { currentUser, products, stockItems, saveProduct, deleteProduct } = useStock();
   const isAdmin = currentUser?.role === 'ADMIN';
 
   const [search, setSearch] = useState('');
@@ -14,14 +14,43 @@ export const ProductsView: React.FC = () => {
 
   // Edit / Add modal
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
+  const [isCustomCategory, setIsCustomCategory] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  const categories = Array.from(new Set(products.map(p => p.category || 'Others'))).sort((a, b) => {
-    const ia = CATEGORY_ORDER.indexOf(a);
-    const ib = CATEGORY_ORDER.indexOf(b);
-    if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-    return a.localeCompare(b);
-  });
+  const sortCategories = (list: string[]) =>
+    Array.from(new Set(list.filter(Boolean))).sort((a, b) => {
+      const ia = CATEGORY_ORDER.indexOf(a);
+      const ib = CATEGORY_ORDER.indexOf(b);
+      if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+      return a.localeCompare(b);
+    });
+
+  const categories = sortCategories(products.map(p => p.category || 'Others'));
+  const modalCategories = sortCategories([
+    ...CATEGORY_ORDER,
+    ...products.map(p => (p.category || '').trim()).filter(Boolean)
+  ]);
+
+  const openProductModal = (product: Partial<Product>) => {
+    const cat = (product.category || '').trim();
+    const isKnown = !cat || modalCategories.includes(cat);
+    setIsCustomCategory(!isKnown);
+    setConfirmDelete(false);
+    setIsDeleting(false);
+    setModalError(null);
+    setEditingProduct(product);
+  };
+
+  const closeProductModal = () => {
+    setEditingProduct(null);
+    setIsCustomCategory(false);
+    setConfirmDelete(false);
+    setIsDeleting(false);
+    setModalError(null);
+  };
 
   const filtered = sortProductsCategoryWise(
     products.filter(p => {
@@ -51,6 +80,7 @@ export const ProductsView: React.FC = () => {
     if (!editingProduct) return;
     try {
       setStatusMsg(null);
+      setModalError(null);
       if (!editingProduct.name?.trim()) throw new Error('Product name is required.');
       if (!editingProduct.category?.trim()) throw new Error('Category is required.');
       if (!editingProduct.sizeML || editingProduct.sizeML <= 0) throw new Error('Size (ml) must be greater than 0.');
@@ -58,7 +88,7 @@ export const ProductsView: React.FC = () => {
         throw new Error('Selling price must be 0 or greater.');
       }
 
-      const pid = await saveProduct({
+      await saveProduct({
         productId: editingProduct.productId,
         name: editingProduct.name.trim(),
         category: editingProduct.category.trim(),
@@ -68,12 +98,33 @@ export const ProductsView: React.FC = () => {
         active: editingProduct.active ?? true
       });
 
-      setStatusMsg({ type: 'ok', text: `Product ${editingProduct.name} saved successfully!` });
-      setEditingProduct(null);
+      setStatusMsg({ type: 'ok', text: `Product ${editingProduct.name.trim()} saved successfully!` });
+      closeProductModal();
     } catch (err: any) {
-      setStatusMsg({ type: 'err', text: err.message });
+      setModalError(err.message || 'Could not save product.');
     }
   };
+
+  const handleConfirmDelete = async () => {
+    if (!editingProduct?.productId) return;
+    try {
+      setIsDeleting(true);
+      setModalError(null);
+      setStatusMsg(null);
+      const deletedName = editingProduct.name || editingProduct.productId;
+      await deleteProduct(editingProduct.productId);
+      setStatusMsg({ type: 'ok', text: `Deleted "${deletedName}" and removed its stock from the catalogue.` });
+      closeProductModal();
+    } catch (err: any) {
+      setModalError(err.message || 'Could not delete product.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const editingStockItem = editingProduct?.productId
+    ? stockItems.find(s => s.productId === editingProduct.productId)
+    : undefined;
 
   return (
     <div className="print-surface space-y-6">
@@ -108,7 +159,7 @@ export const ProductsView: React.FC = () => {
           </button>
           {isAdmin && (
             <button
-              onClick={() => setEditingProduct({ name: '', category: 'Beer', sizeML: 650, casePack: 12, sellingPrice: 200, active: true })}
+              onClick={() => openProductModal({ name: '', category: 'Beer', sizeML: 650, casePack: 12, sellingPrice: 200, active: true })}
               className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition-colors cursor-pointer"
             >
               <Plus className="h-4 w-4" />
@@ -265,8 +316,8 @@ export const ProductsView: React.FC = () => {
                           {isAdmin && (
                             <td className="no-print py-3 px-4 text-right">
                               <button
-                                onClick={() => setEditingProduct({ ...p })}
-                                className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                                onClick={() => openProductModal({ ...p })}
+                                className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
                               >
                                 Edit
                               </button>
@@ -286,10 +337,16 @@ export const ProductsView: React.FC = () => {
       {/* EDIT / CREATE PRODUCT MODAL */}
       {editingProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 space-y-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
             <h3 className="text-base font-bold text-slate-900 dark:text-white">
               {editingProduct.productId ? 'Edit Product Details' : 'Add New Beverage'}
             </h3>
+
+            {modalError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300">
+                {modalError}
+              </div>
+            )}
 
             <form onSubmit={handleSave} className="space-y-3 text-xs">
               <div>
@@ -307,14 +364,40 @@ export const ProductsView: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-500 mb-1">Category *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Beer, Brandy, Whisky..."
-                    value={editingProduct.category || ''}
-                    onChange={e => setEditingProduct(prev => ({ ...prev, category: e.target.value }))}
-                    className="w-full rounded-lg border border-slate-300 p-2 dark:bg-slate-800 dark:text-white dark:border-slate-700"
-                  />
+                  <select
+                    required={!isCustomCategory}
+                    value={isCustomCategory ? '__CUSTOM__' : (editingProduct.category || '')}
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (val === '__CUSTOM__') {
+                        setIsCustomCategory(true);
+                        setEditingProduct(prev => ({ ...prev, category: '' }));
+                      } else {
+                        setIsCustomCategory(false);
+                        setEditingProduct(prev => ({ ...prev, category: val }));
+                      }
+                    }}
+                    className="w-full rounded-lg border border-slate-300 bg-white p-2 font-semibold text-slate-800 dark:bg-slate-800 dark:text-white dark:border-slate-700"
+                  >
+                    {!editingProduct.category && !isCustomCategory && (
+                      <option value="">Select category...</option>
+                    )}
+                    {modalCategories.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                    <option value="__CUSTOM__">+ Add Custom Category...</option>
+                  </select>
+                  {isCustomCategory && (
+                    <input
+                      type="text"
+                      required
+                      autoFocus
+                      placeholder="Enter custom category..."
+                      value={editingProduct.category || ''}
+                      onChange={e => setEditingProduct(prev => ({ ...prev, category: e.target.value }))}
+                      className="mt-2 w-full rounded-lg border border-amber-400 p-2 font-semibold dark:bg-slate-800 dark:text-white dark:border-amber-500"
+                    />
+                  )}
                 </div>
 
                 <div>
@@ -370,21 +453,79 @@ export const ProductsView: React.FC = () => {
                 <span className="font-semibold">Active in counter sales and Godown indents</span>
               </label>
 
-              <div className="flex justify-end gap-2 pt-4 border-t dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setEditingProduct(null)}
-                  className="rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
-                >
-                  Save Product
-                </button>
-              </div>
+              {confirmDelete && editingProduct.productId ? (
+                <div className="mt-4 rounded-xl border border-red-200 bg-red-50/90 p-3.5 space-y-2.5 dark:border-red-900/70 dark:bg-red-950/40">
+                  <div className="flex items-start gap-2 text-red-800 dark:text-red-300">
+                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-bold">
+                        Delete "{editingProduct.name} {editingProduct.sizeML}ml"?
+                      </p>
+                      <p className="text-[11px] text-red-700 dark:text-red-300/90">
+                        This permanently removes the product and clears its current stock balance
+                        (Godown: <strong className="font-mono">{editingStockItem?.godown ?? 0}</strong>,
+                        Normal: <strong className="font-mono">{editingStockItem?.normal ?? 0}</strong>,
+                        AC: <strong className="font-mono">{editingStockItem?.ac ?? 0}</strong> btls).
+                        Past sales and purchase history will remain preserved.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={isDeleting}
+                      onClick={() => setConfirmDelete(false)}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+                    >
+                      Keep Product
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isDeleting}
+                      onClick={handleConfirmDelete}
+                      className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>{isDeleting ? 'Deleting...' : 'Confirm Delete'}</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2 pt-4 border-t dark:border-slate-800">
+                  {editingProduct.productId ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModalError(null);
+                        setConfirmDelete(true);
+                      }}
+                      title="Delete product from catalogue"
+                      className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-400 dark:hover:bg-red-950/70 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Delete</span>
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={closeProductModal}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
+                    >
+                      Save Product
+                    </button>
+                  </div>
+                </div>
+              )}
             </form>
           </div>
         </div>

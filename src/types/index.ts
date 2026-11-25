@@ -119,7 +119,7 @@ export interface RequestGroup {
 
 export interface StockTransfer {
   transferId: string;
-  type: 'GODOWN_TO_COUNTER' | 'COUNTER_TO_COUNTER';
+  type: 'GODOWN_TO_COUNTER' | 'COUNTER_TO_COUNTER' | 'COUNTER_TO_GODOWN';
   fromLoc: StockLocation;
   toLoc: StockLocation;
   productId: string;

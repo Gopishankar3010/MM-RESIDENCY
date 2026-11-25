@@ -92,6 +92,7 @@ export interface WorkspaceSnapshot {
   auditLog: AuditLogEntry[];
   suppliers: string[];
   dropdownOptions: DropdownOption[];
+  deletedProductIds?: string[];
 }
 
 export type KnownDocsMap = Map<string, Set<string>>;
@@ -399,7 +400,10 @@ function fromRequestDoc(d: Record<string, any>): StockRequestItem {
 function toTransferDoc(t: StockTransfer, memberEmails: string[], existingCreatedAt?: any) {
   const docData: Record<string, any> = {
     transferId: nonEmptyStr(t.transferId, 64, 'TRF-000001'),
-    type: t.type === 'COUNTER_TO_COUNTER' ? 'COUNTER_TO_COUNTER' : 'GODOWN_TO_COUNTER',
+    type:
+      t.type === 'COUNTER_TO_COUNTER' || t.type === 'COUNTER_TO_GODOWN'
+        ? t.type
+        : 'GODOWN_TO_COUNTER',
     fromLoc: t.fromLoc,
     toLoc: t.toLoc,
     productId: nonEmptyStr(t.productId, 64, 'PRD-000001'),
@@ -993,6 +997,7 @@ export async function ensureWorkspaceBootstrapped(
         ownerEmail: callerLower,
         memberEmails,
         suppliers: seedSnapshot.suppliers.slice(0, 100),
+        deletedProductIds: (seedSnapshot.deletedProductIds || []).slice(0, 1000),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
@@ -1085,11 +1090,15 @@ export function subscribeWorkspaceCollections(
             return;
           }
           const updatedCloudMembers = await fetchCloudMembersList(db, callerLower, storedMembers);
+          const metaPatch: Partial<WorkspaceSnapshot> = {
+            deletedProductIds: Array.isArray(data?.deletedProductIds)
+              ? data.deletedProductIds.filter((id): id is string => typeof id === 'string')
+              : [],
+          };
           if (Array.isArray(data?.suppliers)) {
-            onSliceUpdate({ suppliers: data.suppliers }, storedMembers, updatedCloudMembers);
-          } else {
-            onSliceUpdate({}, storedMembers, updatedCloudMembers);
+            metaPatch.suppliers = data.suppliers;
           }
+          onSliceUpdate(metaPatch, storedMembers, updatedCloudMembers);
         }
       },
       handleErr('workspace_meta/main')
@@ -1350,8 +1359,16 @@ export async function fetchAllCollectionsFromFirestore(
 
   try {
     const metaSnap = await getDoc(doc(db, 'workspace_meta', 'main'));
-    if (metaSnap.exists() && Array.isArray(metaSnap.data()?.suppliers)) {
-      result.suppliers = metaSnap.data().suppliers;
+    if (metaSnap.exists()) {
+      const metaData = metaSnap.data();
+      if (Array.isArray(metaData?.suppliers)) {
+        result.suppliers = metaData.suppliers;
+      }
+      if (Array.isArray(metaData?.deletedProductIds)) {
+        result.deletedProductIds = metaData.deletedProductIds.filter(
+          (id): id is string => typeof id === 'string'
+        );
+      }
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, 'workspace_meta/main');
@@ -1478,6 +1495,7 @@ export async function syncSlicesToFirestore(
     try {
       await updateDoc(doc(db, 'workspace_meta', 'main'), {
         suppliers: nextSnapshot.suppliers.slice(0, 100),
+        deletedProductIds: (nextSnapshot.deletedProductIds || []).slice(0, 1000),
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -1485,13 +1503,19 @@ export async function syncSlicesToFirestore(
     }
   }
 
-  // 1. suppliers
-  if (dirty.has('suppliers')) {
+  // 1. suppliers & deletedProductIds
+  if (dirty.has('suppliers') || dirty.has('deletedProductIds')) {
     try {
-      await updateDoc(doc(db, 'workspace_meta', 'main'), {
-        suppliers: nextSnapshot.suppliers.slice(0, 100),
+      const metaUpdate: Record<string, any> = {
         updatedAt: serverTimestamp(),
-      });
+      };
+      if (dirty.has('suppliers')) {
+        metaUpdate.suppliers = nextSnapshot.suppliers.slice(0, 100);
+      }
+      if (dirty.has('deletedProductIds')) {
+        metaUpdate.deletedProductIds = (nextSnapshot.deletedProductIds || []).slice(0, 1000);
+      }
+      await updateDoc(doc(db, 'workspace_meta', 'main'), metaUpdate);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'workspace_meta/main');
     }
@@ -1529,8 +1553,16 @@ export async function syncSlicesToFirestore(
   }
 
   // 3. products -> products
-  if (dirty.has('products')) {
+  if (dirty.has('products') || (deletedIds?.products && deletedIds.products.length > 0)) {
     const known = ensureSet('products');
+    for (const delId of deletedIds?.products || []) {
+      try {
+        await deleteDoc(doc(db, 'products', delId));
+        known.delete(delId);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `products/${delId}`);
+      }
+    }
     const prevMap = new Map(prevSnapshot.products.map((p) => [p.productId, p]));
     for (const p of nextSnapshot.products) {
       const prev = prevMap.get(p.productId);
@@ -1569,8 +1601,16 @@ export async function syncSlicesToFirestore(
   }
 
   // 4. stock -> stock
-  if (dirty.has('stock')) {
+  if (dirty.has('stock') || (deletedIds?.stock && deletedIds.stock.length > 0)) {
     const known = ensureSet('stock');
+    for (const delId of deletedIds?.stock || []) {
+      try {
+        await deleteDoc(doc(db, 'stock', delId));
+        known.delete(delId);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `stock/${delId}`);
+      }
+    }
     for (const [pid, lvl] of Object.entries(nextSnapshot.stock)) {
       const prev = prevSnapshot.stock[pid];
       if (
@@ -1739,10 +1779,20 @@ export async function syncSlicesToFirestore(
               totalSoldQty: nonNegNum(r.totalSoldQty, 0),
               totalSalesValue: nonNegNum(r.totalSalesValue, 0),
               recordedAmount: anyNum(r.recordedAmount, 0),
+              cashAmount: nonNegNum(r.cashAmount, 0),
+              upiAmount: nonNegNum(r.upiAmount, 0),
+              cardAmount: nonNegNum(r.cardAmount, 0),
+              cashierName: sanitizeStr(r.cashierName, 100, ''),
+              helperName: sanitizeStr(r.helperName, 100, ''),
+              paymentDifference: anyNum(r.paymentDifference, 0),
               lines: Array.isArray(r.lines) ? r.lines.slice(0, 300) : [],
               remark: sanitizeStr(r.remark, 300, ''),
               updatedAt: serverTimestamp(),
             };
+            if (r.acCharges !== undefined) patch.acCharges = anyNum(r.acCharges, 0);
+            if (r.paymentExplanation !== undefined) {
+              patch.paymentExplanation = sanitizeStr(r.paymentExplanation, 300, '');
+            }
             if (r.editedBy !== undefined) patch.editedBy = sanitizeStr(r.editedBy, 80);
             if (r.editedAt !== undefined) patch.editedAtStr = sanitizeStr(r.editedAt, 40);
             await updateDoc(doc(db, 'daily_sales', r.reportId), patch);

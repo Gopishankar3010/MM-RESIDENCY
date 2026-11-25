@@ -39,6 +39,7 @@
         "ownerEmail": { "type": "string", "minLength": 5, "maxLength": 160 },
         "memberEmails": { "type": "array", "description": "Authorized team emails (max 25)." },
         "suppliers": { "type": "array", "description": "Supplier names list (max 100)." },
+        "deletedProductIds": { "type": "array", "description": "Product IDs permanently deleted by Admin (max 1000)." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -166,7 +167,7 @@
       "type": "object",
       "properties": {
         "transferId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "type": { "type": "string", "enum": ["GODOWN_TO_COUNTER", "COUNTER_TO_COUNTER"] },
+        "type": { "type": "string", "enum": ["GODOWN_TO_COUNTER", "COUNTER_TO_COUNTER", "COUNTER_TO_GODOWN"] },
         "fromLoc": { "type": "string", "enum": ["GODOWN", "NORMAL", "AC"] },
         "toLoc": { "type": "string", "enum": ["GODOWN", "NORMAL", "AC"] },
         "productId": { "type": "string", "minLength": 1, "maxLength": 64 },
