@@ -18,6 +18,7 @@ import {
   AuditLogEntry,
   DailyOperation,
   DailySalesReport,
+  DeletedDailySalesReport,
   DropdownOption,
   Product,
   PurchaseBatch,
@@ -87,6 +88,7 @@ export interface WorkspaceSnapshot {
   requests: StockRequestItem[];
   transfers: StockTransfer[];
   dailySales: DailySalesReport[];
+  deletedDailySales?: DeletedDailySalesReport[];
   operations: DailyOperation[];
   ledger: StockLedgerEntry[];
   auditLog: AuditLogEntry[];
@@ -371,6 +373,8 @@ function toRequestDoc(r: StockRequestItem, memberEmails: string[], existingCreat
   if (r.reviewedBy !== undefined) docData.reviewedBy = sanitizeStr(r.reviewedBy, 80);
   if (r.reviewedAt !== undefined) docData.reviewedAtStr = sanitizeStr(r.reviewedAt, 40);
   if (r.remark !== undefined) docData.remark = sanitizeStr(r.remark, 300);
+  if (r.reversedBy !== undefined) docData.reversedBy = sanitizeStr(r.reversedBy, 80);
+  if (r.reversedAt !== undefined) docData.reversedAtStr = sanitizeStr(r.reversedAt, 40);
   return docData;
 }
 
@@ -394,6 +398,8 @@ function fromRequestDoc(d: Record<string, any>): StockRequestItem {
     reviewedBy: d.reviewedBy,
     reviewedAt: d.reviewedAtStr,
     remark: d.remark,
+    reversedBy: d.reversedBy,
+    reversedAt: d.reversedAtStr,
   });
 }
 
@@ -507,6 +513,27 @@ function fromDailySalesDoc(d: Record<string, any>): DailySalesReport {
     editedBy: d.editedBy,
     editedAt: d.editedAtStr,
     lines: Array.isArray(d.lines) ? d.lines : [],
+  });
+}
+
+function toDeletedDailySalesDoc(r: DeletedDailySalesReport, memberEmails: string[], existingCreatedAt?: any) {
+  const docData = toDailySalesDoc(r, memberEmails, existingCreatedAt);
+  docData.deletedBy = nonEmptyStr(r.deletedBy, 80, 'admin');
+  docData.deletedAtStr = nonEmptyStr(r.deletedAt, 40, '2026-01-01 00:00:00');
+  docData.stockReversed = Boolean(r.stockReversed);
+  if (r.deleteReason !== undefined && r.deleteReason !== '') {
+    docData.deleteReason = sanitizeStr(r.deleteReason, 300);
+  }
+  return docData;
+}
+
+function fromDeletedDailySalesDoc(d: Record<string, any>): DeletedDailySalesReport {
+  return stripUndefined({
+    ...fromDailySalesDoc(d),
+    deletedBy: d.deletedBy || 'admin',
+    deletedAt: d.deletedAtStr || '',
+    deleteReason: d.deleteReason,
+    stockReversed: Boolean(d.stockReversed),
   });
 }
 
@@ -813,6 +840,7 @@ export async function authorizeCloudEmailInFirestore(
     'requests',
     'transfers',
     'daily_sales',
+    'deleted_daily_sales',
     'operations',
     'ledger',
     'audit_log',
@@ -874,6 +902,7 @@ export async function revokeCloudEmailInFirestore(
     'requests',
     'transfers',
     'daily_sales',
+    'deleted_daily_sales',
     'operations',
     'ledger',
     'audit_log',
@@ -1027,6 +1056,9 @@ export async function ensureWorkspaceBootstrapped(
   });
   seedSnapshot.dailySales.forEach((s) => {
     ops.push({ type: 'set', path: 'daily_sales', id: s.reportId, data: toDailySalesDoc(s, memberEmails) });
+  });
+  (seedSnapshot.deletedDailySales || []).forEach((s) => {
+    ops.push({ type: 'set', path: 'deleted_daily_sales', id: s.reportId, data: toDeletedDailySalesDoc(s, memberEmails) });
   });
   seedSnapshot.operations.forEach((op) => {
     ops.push({ type: 'set', path: 'operations', id: op.operationId, data: toOperationDoc(op, memberEmails) });
@@ -1255,6 +1287,24 @@ export function subscribeWorkspaceCollections(
     )
   );
 
+  // deleted_daily_sales
+  unsubs.push(
+    onSnapshot(
+      scopedQuery('deleted_daily_sales'),
+      (snap) => {
+        const ids: string[] = [];
+        const items: DeletedDailySalesReport[] = [];
+        snap.docs.forEach((d) => {
+          ids.push(d.id);
+          items.push(fromDeletedDailySalesDoc(d.data()));
+        });
+        markIds('deleted_daily_sales', ids);
+        onSliceUpdate({ deletedDailySales: items });
+      },
+      handleErr('deleted_daily_sales')
+    )
+  );
+
   // operations
   unsubs.push(
     onSnapshot(
@@ -1382,6 +1432,7 @@ export async function fetchAllCollectionsFromFirestore(
     requests,
     transfers,
     dailySales,
+    deletedDailySales,
     operations,
     ledger,
     auditLog,
@@ -1394,6 +1445,7 @@ export async function fetchAllCollectionsFromFirestore(
     readCol('requests', fromRequestDoc),
     readCol('transfers', fromTransferDoc),
     readCol('daily_sales', fromDailySalesDoc),
+    readCol('deleted_daily_sales', fromDeletedDailySalesDoc),
     readCol('operations', fromOperationDoc),
     readCol('ledger', fromLedgerDoc),
     readCol('audit_log', fromAuditDoc),
@@ -1418,6 +1470,7 @@ export async function fetchAllCollectionsFromFirestore(
   result.requests = requests;
   result.transfers = transfers;
   result.dailySales = dailySales;
+  result.deletedDailySales = deletedDailySales;
   result.operations = operations;
   result.ledger = ledger;
   result.auditLog = auditLog;
@@ -1458,7 +1511,7 @@ export async function syncSlicesToFirestore(
 
   if (isReset) {
     // Delete transactional collections cleanly, then reset opening state
-    const colsToClear = ['purchases', 'requests', 'transfers', 'daily_sales', 'operations', 'ledger', 'audit_log'];
+    const colsToClear = ['purchases', 'requests', 'transfers', 'daily_sales', 'deleted_daily_sales', 'operations', 'ledger', 'audit_log'];
     const deleteOps: Array<{ type: 'set' | 'delete'; path: string; id: string }> = [];
     for (const colName of colsToClear) {
       try {
@@ -1707,6 +1760,14 @@ export async function syncSlicesToFirestore(
             remark: sanitizeStr(r.remark, 300, ''),
             updatedAt: serverTimestamp(),
           });
+        } else if (prev && prev.status === 'Approved' && r.status === 'Reversed') {
+          await updateDoc(doc(db, 'requests', r.requestId), {
+            status: 'Reversed',
+            reversedBy: sanitizeStr(r.reversedBy, 80, ''),
+            reversedAtStr: sanitizeStr(r.reversedAt, 40, ''),
+            remark: sanitizeStr(r.remark, 300, ''),
+            updatedAt: serverTimestamp(),
+          });
         }
       } catch (err) {
         handleFirestoreError(err, known.has(r.requestId) ? OperationType.UPDATE : OperationType.CREATE, path);
@@ -1797,6 +1858,30 @@ export async function syncSlicesToFirestore(
             if (r.editedAt !== undefined) patch.editedAtStr = sanitizeStr(r.editedAt, 40);
             await updateDoc(doc(db, 'daily_sales', r.reportId), patch);
           }
+        }
+      } catch (err) {
+        handleFirestoreError(err, known.has(r.reportId) ? OperationType.UPDATE : OperationType.CREATE, path);
+      }
+    }
+  }
+
+  // 8b. deletedDailySales -> deleted_daily_sales
+  if (dirty.has('deletedDailySales') || (deletedIds?.deletedDailySales && deletedIds.deletedDailySales.length > 0)) {
+    const known = ensureSet('deleted_daily_sales');
+    for (const delId of deletedIds?.deletedDailySales || []) {
+      try {
+        await deleteDoc(doc(db, 'deleted_daily_sales', delId));
+        known.delete(delId);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `deleted_daily_sales/${delId}`);
+      }
+    }
+    for (const r of nextSnapshot.deletedDailySales || []) {
+      const path = `deleted_daily_sales/${r.reportId}`;
+      try {
+        if (!known.has(r.reportId)) {
+          await setDoc(doc(db, 'deleted_daily_sales', r.reportId), toDeletedDailySalesDoc(r, memberEmails));
+          known.add(r.reportId);
         }
       } catch (err) {
         handleFirestoreError(err, known.has(r.reportId) ? OperationType.UPDATE : OperationType.CREATE, path);

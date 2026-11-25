@@ -94,13 +94,15 @@ export interface StockRequestItem {
   enteredQty: number;
   unit: 'CASE' | 'BOTTLE' | 'MIXED';
   reason: string;
-  status: 'Pending' | 'Approved' | 'Rejected';
+  status: 'Pending' | 'Approved' | 'Rejected' | 'Reversed';
   date: string;
   createdBy: string;
   createdAt: string;
   reviewedBy?: string;
   reviewedAt?: string;
   remark?: string;
+  reversedBy?: string;
+  reversedAt?: string;
   godownQty?: number;
   short?: boolean;
 }
@@ -185,6 +187,13 @@ export interface DailySalesReport {
   editedBy?: string;
   editedAt?: string;
   lines: DailySalesLine[];
+}
+
+export interface DeletedDailySalesReport extends DailySalesReport {
+  deletedBy: string;
+  deletedAt: string;
+  deleteReason?: string;
+  stockReversed: boolean;
 }
 
 export interface DailyOperation {

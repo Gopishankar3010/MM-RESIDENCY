@@ -10,7 +10,7 @@ import {
 } from 'firebase/auth';
 import {
   User, Product, StockItem, PurchaseBatch, StockRequestItem, StockTransfer,
-  DailySalesReport, DailyOperation, StockLedgerEntry, AuditLogEntry, DropdownOption,
+  DailySalesReport, DeletedDailySalesReport, DailyOperation, StockLedgerEntry, AuditLogEntry, DropdownOption,
   CounterLocation, StockLocation, Role
 } from '../types';
 import {
@@ -50,6 +50,7 @@ interface StockContextType {
   requests: StockRequestItem[];
   transfers: StockTransfer[];
   dailySales: DailySalesReport[];
+  deletedDailySales: DeletedDailySalesReport[];
   operations: DailyOperation[];
   ledger: StockLedgerEntry[];
   auditLog: AuditLogEntry[];
@@ -99,6 +100,7 @@ interface StockContextType {
   setBusinessDate: (date: string) => void;
   toggleTheme: () => void;
   changePassword: (oldPw: string, newPw: string) => Promise<void>;
+  verifyCurrentAdminPassword: (password: string) => void;
 
   // Products & Stock Adjustments
   saveProduct: (p: Partial<Product> & { name: string; category: string; sizeML: number; casePack: number; sellingPrice: number }) => Promise<string>;
@@ -118,6 +120,7 @@ interface StockContextType {
   // Requests
   submitRequestBatch: (data: { date: string; reason: string; items: { productId: string; qty: number; unit: 'CASE' | 'BOTTLE' }[] }) => Promise<void>;
   reviewRequestGroup: (ids: string[], decision: 'APPROVE' | 'REJECT', remark?: string, skipShort?: boolean) => Promise<{ approved: number; rejected: number }>;
+  reverseRequestItems: (ids: string[], reason?: string) => Promise<{ reversed: number; totalBottles: number }>;
 
   // Transfers
   submitTransfer: (data: { productId: string; qty: number; unit?: 'CASE' | 'BOTTLE'; to?: StockLocation; note?: string }) => Promise<{ autoApproved: boolean }>;
@@ -151,6 +154,8 @@ interface StockContextType {
   ) => Promise<void>;
   reviewDailySales: (reportId: string, decision: 'APPROVE' | 'REJECT', remark?: string) => Promise<void>;
   adminDeleteDailySales: (reportId: string, reason?: string) => Promise<void>;
+  adminRestoreDailySales: (reportId: string) => Promise<void>;
+  adminDismissDeletedSales: (reportId: string) => Promise<void>;
 
   // Daily Operations
   saveDailyOperation: (data: {
@@ -205,6 +210,7 @@ function ensureOpeningEpochReset(): void {
         '_requests',
         '_transfers',
         '_daily_sales',
+        '_deleted_daily_sales',
         '_operations',
         '_ledger',
         '_audit'
@@ -453,6 +459,16 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return [];
   });
 
+  const [deletedDailySales, setDeletedDailySales] = useState<DeletedDailySalesReport[]>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY + '_deleted_daily_sales');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [operations, setOperations] = useState<DailyOperation[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEY + '_operations');
     return raw ? JSON.parse(raw) : [];
@@ -520,6 +536,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     requests,
     transfers,
     dailySales,
+    deletedDailySales,
     operations,
     ledger,
     auditLog,
@@ -536,6 +553,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     requests,
     transfers,
     dailySales,
+    deletedDailySales,
     operations,
     ledger,
     auditLog,
@@ -562,6 +580,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { persistSliceToLocalStorage('_requests', requests); }, [requests]);
   useEffect(() => { persistSliceToLocalStorage('_transfers', transfers); }, [transfers]);
   useEffect(() => { persistSliceToLocalStorage('_daily_sales', dailySales); }, [dailySales]);
+  useEffect(() => { persistSliceToLocalStorage('_deleted_daily_sales', deletedDailySales); }, [deletedDailySales]);
   useEffect(() => { persistSliceToLocalStorage('_operations', operations); }, [operations]);
   useEffect(() => { persistSliceToLocalStorage('_ledger', ledger); }, [ledger]);
   useEffect(() => { persistSliceToLocalStorage('_audit', auditLog); }, [auditLog]);
@@ -582,6 +601,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (partial.requests !== undefined) setRequests(next.requests);
     if (partial.transfers !== undefined) setTransfers(next.transfers);
     if (partial.dailySales !== undefined) setDailySales(next.dailySales);
+    if (partial.deletedDailySales !== undefined) setDeletedDailySales(next.deletedDailySales ?? []);
     if (partial.operations !== undefined) setOperations(next.operations);
     if (partial.ledger !== undefined) setLedger(next.ledger);
     if (partial.auditLog !== undefined || (auditEntries && auditEntries.length > 0)) setAuditLog(next.auditLog);
@@ -629,6 +649,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const serverDailySales = Array.isArray(s.dailySales)
       ? [...s.dailySales].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.reportId).localeCompare(String(a.reportId)))
       : undefined;
+    const serverDeletedDailySales = Array.isArray(s.deletedDailySales)
+      ? [...s.deletedDailySales].sort((a, b) =>
+          String(b.deletedAt || '').localeCompare(String(a.deletedAt || '')) ||
+          String(b.date || '').localeCompare(String(a.date || '')) ||
+          String(b.reportId).localeCompare(String(a.reportId))
+        )
+      : undefined;
     const serverOperations = Array.isArray(s.operations)
       ? [...s.operations].sort((a, b) => (b.createdAt || b.date || '').localeCompare(a.createdAt || a.date || '') || String(b.operationId).localeCompare(String(a.operationId)))
       : undefined;
@@ -669,6 +696,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const nextRequests = !dirty.has('requests') && serverRequests ? serverRequests : latestRef.current.requests;
     const nextTransfers = !dirty.has('transfers') && serverTransfers ? serverTransfers : latestRef.current.transfers;
     const nextDailySales = !dirty.has('dailySales') && serverDailySales ? serverDailySales : latestRef.current.dailySales;
+    const nextDeletedDailySales =
+      !dirty.has('deletedDailySales') && serverDeletedDailySales !== undefined
+        ? serverDeletedDailySales
+        : (latestRef.current.deletedDailySales || []);
     const nextOperations = !dirty.has('operations') && serverOperations ? serverOperations : latestRef.current.operations;
     const nextLedger = !dirty.has('ledger') && serverLedger ? serverLedger : latestRef.current.ledger;
     const nextAuditLog = !dirty.has('auditLog') && serverAuditLog ? serverAuditLog : latestRef.current.auditLog;
@@ -690,6 +721,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       requests: serverRequests ?? lastSyncedSnapshotRef.current.requests,
       transfers: serverTransfers ?? lastSyncedSnapshotRef.current.transfers,
       dailySales: serverDailySales ?? lastSyncedSnapshotRef.current.dailySales,
+      deletedDailySales: serverDeletedDailySales ?? lastSyncedSnapshotRef.current.deletedDailySales,
       operations: serverOperations ?? lastSyncedSnapshotRef.current.operations,
       ledger: serverLedger ?? lastSyncedSnapshotRef.current.ledger,
       auditLog: serverAuditLog ?? lastSyncedSnapshotRef.current.auditLog,
@@ -706,6 +738,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       requests: nextRequests,
       transfers: nextTransfers,
       dailySales: nextDailySales,
+      deletedDailySales: nextDeletedDailySales,
       operations: nextOperations,
       ledger: nextLedger,
       auditLog: nextAuditLog,
@@ -939,6 +972,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           requests: [],
           transfers: [],
           dailySales: [],
+          deletedDailySales: [],
           operations: [],
           ledger: [],
           auditLog: [],
@@ -1528,6 +1562,28 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     await syncToServer(['users', 'auditLog']);
   };
 
+  const verifyCurrentAdminPassword = (password: string) => {
+    if (!currentUser || currentUser.role !== 'ADMIN') {
+      throw new Error('Admin permission required.');
+    }
+    if (!password) {
+      throw new Error('Please enter your Admin password to confirm.');
+    }
+    const liveUser =
+      latestRef.current.users.find(
+        u =>
+          u.userId === currentUser.userId ||
+          u.username.toLowerCase() === currentUser.username.toLowerCase()
+      ) || currentUser;
+    const expected = liveUser.password ?? '';
+    if (!expected) {
+      throw new Error('No password is set on your Admin account.');
+    }
+    if (password !== expected) {
+      throw new Error('Incorrect Admin password. Please check and try again.');
+    }
+  };
+
   // Product management
   const saveProduct = async (p: Partial<Product> & { name: string; category: string; sizeML: number; casePack: number; sellingPrice: number; purchaseCost?: number; reorderThreshold?: number }) => {
     if (currentUser?.role !== 'ADMIN') throw new Error('Admin permission required.');
@@ -1989,6 +2045,92 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return { approved: approvedIds.length, rejected: rejectedIds.length };
   };
 
+  const reverseRequestItems = async (ids: string[], reason?: string) => {
+    if (currentUser?.role !== 'ADMIN') {
+      throw new Error('Only Admin can reverse approved Godown stock requests.');
+    }
+    const targetRequests = latestRef.current.requests.filter(r => ids.includes(r.requestId));
+    if (!targetRequests.length) {
+      throw new Error('Approved request item(s) not found.');
+    }
+    const nonApproved = targetRequests.filter(r => r.status !== 'Approved');
+    if (nonApproved.length > 0) {
+      throw new Error('Only approved requests can be reversed.');
+    }
+
+    const neededByKey = new Map<string, { counter: CounterLocation; productId: string; productName: string; qty: number }>();
+    targetRequests.forEach(r => {
+      const key = `${r.counter}|${r.productId}`;
+      const existingNeed = neededByKey.get(key);
+      if (existingNeed) {
+        existingNeed.qty += r.qty;
+      } else {
+        neededByKey.set(key, {
+          counter: r.counter,
+          productId: r.productId,
+          productName: r.productName,
+          qty: r.qty,
+        });
+      }
+    });
+
+    for (const need of neededByKey.values()) {
+      const counterKey = need.counter.toLowerCase() as 'normal' | 'ac';
+      const avail = latestRef.current.stock[need.productId]?.[counterKey] || 0;
+      if (avail < need.qty) {
+        throw new Error(
+          `Cannot reverse ${need.productName}: ${need.counter} counter only has ${avail} btls, but ${need.qty} btls are needed to return to Godown.`
+        );
+      }
+    }
+
+    const moves: { loc: StockLocation; productId: string; delta: number }[] = [];
+    targetRequests.forEach(r => {
+      if (r.qty > 0) {
+        moves.push({ loc: r.counter, productId: r.productId, delta: -r.qty });
+        moves.push({ loc: 'GODOWN', productId: r.productId, delta: r.qty });
+      }
+    });
+
+    const dirtySlices = ['requests', 'auditLog'];
+    const moveDate = businessDate || targetRequests[0].date;
+    if (moves.length > 0 && applyMovements(moves, 'REQUEST', ids[0], moveDate)) {
+      dirtySlices.push('stock', 'ledger');
+    }
+
+    const now = getNowTimestamp();
+    const cleanReason = (reason || '').trim();
+    const totalBottles = targetRequests.reduce((s, r) => s + (r.qty || 0), 0);
+    const reversedSet = new Set(ids);
+
+    const nextRequests = latestRef.current.requests.map(r => {
+      if (!reversedSet.has(r.requestId)) return r;
+      const reverseNote = cleanReason
+        ? `Reversed (${currentUser.username}): ${cleanReason}`
+        : `Reversed by ${currentUser.username}`;
+      const nextRemark = r.remark
+        ? `${r.remark} | ${reverseNote}`.slice(0, 300)
+        : reverseNote.slice(0, 300);
+      return {
+        ...r,
+        status: 'Reversed' as const,
+        reversedBy: currentUser.username,
+        reversedAt: now,
+        remark: nextRemark,
+      };
+    });
+
+    const auditEntry = buildAuditEntry(
+      'REVERSED_REQUEST',
+      ids[0],
+      `Reversed ${targetRequests.length} approved item(s) (${totalBottles} btls) from ${targetRequests[0].counter} back to Godown${cleanReason ? ` | Reason: ${cleanReason}` : ''}`
+    );
+    commitLocalState({ requests: nextRequests }, [auditEntry]);
+    await syncToServer(dirtySlices);
+
+    return { reversed: targetRequests.length, totalBottles };
+  };
+
   // Transfers
   const submitTransfer = async (data: { productId: string; qty: number; unit?: 'CASE' | 'BOTTLE'; to?: StockLocation; note?: string }) => {
     if (!currentUser) throw new Error('Not logged in');
@@ -2108,7 +2250,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         else if (l.refType === 'TRANSFER') transferInMap.set(l.productId, (transferInMap.get(l.productId) || 0) + l.delta);
       } else if (l.delta < 0) {
         if (l.refType === 'DAMAGE') damageOutMap.set(l.productId, (damageOutMap.get(l.productId) || 0) - l.delta);
-        else if (l.refType === 'TRANSFER') transferOutMap.set(l.productId, (transferOutMap.get(l.productId) || 0) - l.delta);
+        else if (l.refType === 'TRANSFER' || l.refType === 'REQUEST') transferOutMap.set(l.productId, (transferOutMap.get(l.productId) || 0) - l.delta);
       }
     });
 
@@ -2526,7 +2668,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const isHistoricalOnly = report.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
-    const dirtySlices = ['dailySales', 'auditLog'];
+    const dirtySlices = ['dailySales', 'deletedDailySales', 'auditLog'];
+    let stockReversed = false;
 
     if (report.status === 'Approved' && !isHistoricalOnly) {
       const reverseMoves = report.lines
@@ -2539,16 +2682,114 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (reverseMoves.length > 0 && applyMovements(reverseMoves, 'SALES_CORRECTION', reportId, report.date)) {
         dirtySlices.push('stock', 'ledger');
+        stockReversed = true;
       }
     }
+
+    const deletedEntry: DeletedDailySalesReport = {
+      ...report,
+      deletedBy: currentUser?.username || 'admin',
+      deletedAt: getNowTimestamp(),
+      ...(reason?.trim() ? { deleteReason: reason.trim() } : {}),
+      stockReversed,
+    };
 
     const auditEntry = buildAuditEntry(
       isAdmin ? 'ADMIN_SALES_DELETED' : 'COUNTER_SALES_DELETED',
       reportId,
       `${report.date} | ${report.counter} | reversed ${report.totalSoldQty} btls (₹${report.totalSalesValue})${reason?.trim() ? ` | Reason: ${reason.trim()}` : ''}`
     );
-    commitLocalState({ dailySales: latestRef.current.dailySales.filter(r => r.reportId !== reportId) }, [auditEntry]);
+    commitLocalState(
+      {
+        dailySales: latestRef.current.dailySales.filter(r => r.reportId !== reportId),
+        deletedDailySales: [
+          deletedEntry,
+          ...(latestRef.current.deletedDailySales || []).filter(d => d.reportId !== reportId),
+        ],
+      },
+      [auditEntry]
+    );
     await syncToServer(dirtySlices, { dailySales: [reportId] });
+  };
+
+  const adminRestoreDailySales = async (reportId: string) => {
+    if (currentUser?.role !== 'ADMIN') {
+      throw new Error('Only Admin can restore deleted daily sales reports.');
+    }
+    const curDeleted = latestRef.current.deletedDailySales || [];
+    const deletedEntry = curDeleted.find(d => d.reportId === reportId);
+    if (!deletedEntry) {
+      throw new Error('Deleted daily sales report not found in the recovery bin.');
+    }
+
+    const existingReplacement = latestRef.current.dailySales.find(
+      r => r.date === deletedEntry.date && r.counter === deletedEntry.counter && r.status !== 'Rejected'
+    );
+    if (existingReplacement) {
+      throw new Error(
+        `A replacement report (${existingReplacement.reportId}) already exists for ${deletedEntry.counter} on ${deletedEntry.date}. Keeping the replacement report.`
+      );
+    }
+
+    const {
+      deletedBy: _deletedBy,
+      deletedAt: _deletedAt,
+      deleteReason: _deleteReason,
+      stockReversed,
+      ...restoredReport
+    } = deletedEntry;
+
+    const dirtySlices = ['dailySales', 'deletedDailySales', 'auditLog'];
+    if (stockReversed) {
+      const restoreMoves = deletedEntry.lines
+        .filter(l => l.sold > 0)
+        .map(l => ({
+          loc: deletedEntry.counter as StockLocation,
+          productId: l.productId,
+          delta: -l.sold,
+        }));
+      if (restoreMoves.length > 0 && applyMovements(restoreMoves, 'SALE', deletedEntry.reportId, deletedEntry.date)) {
+        dirtySlices.push('stock', 'ledger');
+      }
+    }
+
+    const auditEntry = buildAuditEntry(
+      'ADMIN_SALES_RESTORED',
+      reportId,
+      `${deletedEntry.date} | ${deletedEntry.counter} | restored ${deletedEntry.totalSoldQty} btls (₹${deletedEntry.totalSalesValue})`
+    );
+    commitLocalState(
+      {
+        dailySales: [restoredReport, ...latestRef.current.dailySales.filter(r => r.reportId !== reportId)],
+        deletedDailySales: (latestRef.current.deletedDailySales || []).filter(d => d.reportId !== reportId),
+      },
+      [auditEntry]
+    );
+    await syncToServer(dirtySlices, { deletedDailySales: [reportId] });
+  };
+
+  const adminDismissDeletedSales = async (reportId: string) => {
+    if (currentUser?.role !== 'ADMIN') {
+      throw new Error('Only Admin can remove entries from the deleted reports bin.');
+    }
+    const curDeleted = latestRef.current.deletedDailySales || [];
+    const deletedEntry = curDeleted.find(d => d.reportId === reportId);
+    if (!deletedEntry) {
+      throw new Error('Deleted report entry not found.');
+    }
+
+    const auditEntry = buildAuditEntry(
+      'ADMIN_DELETED_BIN_DISMISSED',
+      reportId,
+      `${deletedEntry.date} | ${deletedEntry.counter} | removed entry from deleted reports bin`
+    );
+    commitLocalState(
+      {
+        deletedDailySales: curDeleted.filter(d => d.reportId !== reportId),
+      },
+      [auditEntry]
+    );
+    await syncToServer(['deletedDailySales', 'auditLog'], { deletedDailySales: [reportId] });
   };
 
   // Daily Operations
@@ -2913,6 +3154,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       requests: [],
       transfers: [],
       dailySales: [],
+      deletedDailySales: [],
       operations: [],
       ledger: [],
       auditLog: []
@@ -2921,7 +3163,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem('mm_user', JSON.stringify(INITIAL_USERS[0]));
 
     await syncToServer(
-      ['users', 'products', 'stock', 'deletedProductIds', 'suppliers', 'dropdownOptions', 'purchases', 'requests', 'transfers', 'dailySales', 'operations', 'ledger', 'auditLog'],
+      ['users', 'products', 'stock', 'deletedProductIds', 'suppliers', 'dropdownOptions', 'purchases', 'requests', 'transfers', 'dailySales', 'deletedDailySales', 'operations', 'ledger', 'auditLog'],
       undefined,
       true
     );
@@ -2991,6 +3233,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         requests,
         transfers,
         dailySales,
+        deletedDailySales,
         operations,
         ledger,
         auditLog,
@@ -3004,6 +3247,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setBusinessDate,
         toggleTheme,
         changePassword,
+        verifyCurrentAdminPassword,
 
         saveProduct,
         deleteProduct,
@@ -3015,6 +3259,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         submitRequestBatch,
         reviewRequestGroup,
+        reverseRequestItems,
 
         submitTransfer,
 
@@ -3024,6 +3269,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         adminEditReport,
         reviewDailySales,
         adminDeleteDailySales,
+        adminRestoreDailySales,
+        adminDismissDeletedSales,
 
         saveDailyOperation,
         saveDailyOperationsBatch,

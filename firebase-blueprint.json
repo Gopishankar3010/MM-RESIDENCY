@@ -148,13 +148,15 @@
         "enteredQty": { "type": "number" },
         "unit": { "type": "string", "enum": ["CASE", "BOTTLE", "MIXED"] },
         "reason": { "type": "string", "maxLength": 240 },
-        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected", "Reversed"] },
         "date": { "type": "string", "minLength": 4, "maxLength": 20 },
         "createdBy": { "type": "string", "minLength": 1, "maxLength": 80 },
         "createdAtStr": { "type": "string", "minLength": 1, "maxLength": 40 },
         "reviewedBy": { "type": "string", "maxLength": 80 },
         "reviewedAtStr": { "type": "string", "maxLength": 40 },
         "remark": { "type": "string", "maxLength": 300 },
+        "reversedBy": { "type": "string", "maxLength": 80 },
+        "reversedAtStr": { "type": "string", "maxLength": 40 },
         "memberEmails": { "type": "array" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -223,6 +225,45 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["reportId", "date", "counter", "status", "totalSoldQty", "totalSalesValue", "recordedAmount", "cashAmount", "upiAmount", "cardAmount", "cashierName", "helperName", "paymentDifference", "cutoffSeq", "submittedBy", "submittedAtStr", "lines", "memberEmails", "createdAt", "updatedAt"]
+    },
+    "DeletedDailySalesReport": {
+      "title": "DeletedDailySalesReport",
+      "description": "Soft-deleted daily sales report snapshot archived for Admin 1-click recovery.",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "counter": { "type": "string", "enum": ["NORMAL", "AC"] },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "totalSoldQty": { "type": "number" },
+        "totalSalesValue": { "type": "number" },
+        "recordedAmount": { "type": "number" },
+        "cashAmount": { "type": "number" },
+        "upiAmount": { "type": "number" },
+        "cardAmount": { "type": "number" },
+        "acCharges": { "type": "number" },
+        "cashierName": { "type": "string", "maxLength": 100 },
+        "helperName": { "type": "string", "maxLength": 100 },
+        "paymentDifference": { "type": "number" },
+        "paymentExplanation": { "type": "string", "maxLength": 300 },
+        "cutoffSeq": { "type": "number" },
+        "submittedBy": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "submittedAtStr": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "reviewedBy": { "type": "string", "maxLength": 80 },
+        "reviewedAtStr": { "type": "string", "maxLength": 40 },
+        "remark": { "type": "string", "maxLength": 300 },
+        "editedBy": { "type": "string", "maxLength": 80 },
+        "editedAtStr": { "type": "string", "maxLength": 40 },
+        "lines": { "type": "array", "description": "Sold product line breakdown (max 300)." },
+        "deletedBy": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "deletedAtStr": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "deleteReason": { "type": "string", "maxLength": 300 },
+        "stockReversed": { "type": "boolean" },
+        "memberEmails": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reportId", "date", "counter", "status", "totalSoldQty", "totalSalesValue", "recordedAmount", "cashAmount", "upiAmount", "cardAmount", "cashierName", "helperName", "paymentDifference", "cutoffSeq", "submittedBy", "submittedAtStr", "lines", "deletedBy", "deletedAtStr", "stockReversed", "memberEmails", "createdAt", "updatedAt"]
     },
     "DailyOperation": {
       "title": "DailyOperation",
@@ -360,6 +401,10 @@
     "/daily_sales/{reportId}": {
       "schema": { "$ref": "#/entities/DailySalesReport" },
       "description": "Daily closing sales reports."
+    },
+    "/deleted_daily_sales/{reportId}": {
+      "schema": { "$ref": "#/entities/DeletedDailySalesReport" },
+      "description": "Archived deleted daily closing sales reports for Admin recovery."
     },
     "/operations/{operationId}": {
       "schema": { "$ref": "#/entities/DailyOperation" },

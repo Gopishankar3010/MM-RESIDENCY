@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useStock } from '../context/StockContext';
 import {
   Printer,
@@ -14,6 +14,7 @@ import {
   Edit2,
   Trash2,
   Save,
+  RotateCcw,
   User,
   Users,
   UserCheck,
@@ -22,6 +23,109 @@ import {
 } from 'lucide-react';
 import { DailySalesReport, CounterLocation } from '../types';
 import { CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
+
+interface DailySalesDraft {
+  closingInputs: Record<string, string>;
+  cashierName: string;
+  helperName: string;
+  cashAmount: string;
+  upiAmount: string;
+  acChargesAmount: string;
+  paymentExplanation: string;
+  savedAt: string;
+}
+
+const draftStorageKey = (counter: CounterLocation, date: string) =>
+  `mm_daily_sales_draft_${counter}_${date}`;
+
+const activeDraftDateKey = (counter: CounterLocation) =>
+  `mm_daily_sales_active_date_${counter}`;
+
+const formatDraftTime = (date: Date): string => {
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+};
+
+const readSalesDraft = (counter: CounterLocation, date: string): DailySalesDraft | null => {
+  try {
+    const raw = window.localStorage.getItem(draftStorageKey(counter, date));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      closingInputs: parsed.closingInputs && typeof parsed.closingInputs === 'object' ? parsed.closingInputs : {},
+      cashierName: typeof parsed.cashierName === 'string' ? parsed.cashierName : '',
+      helperName: typeof parsed.helperName === 'string' ? parsed.helperName : '',
+      cashAmount: typeof parsed.cashAmount === 'string' ? parsed.cashAmount : '0',
+      upiAmount: typeof parsed.upiAmount === 'string' ? parsed.upiAmount : '0',
+      acChargesAmount: typeof parsed.acChargesAmount === 'string' ? parsed.acChargesAmount : '0',
+      paymentExplanation: typeof parsed.paymentExplanation === 'string' ? parsed.paymentExplanation : '',
+      savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : ''
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeSalesDraft = (counter: CounterLocation, date: string, draft: DailySalesDraft): boolean => {
+  try {
+    window.localStorage.setItem(draftStorageKey(counter, date), JSON.stringify(draft));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const removeSalesDraft = (counter: CounterLocation, date: string): void => {
+  try {
+    window.localStorage.removeItem(draftStorageKey(counter, date));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const readActiveDraftDate = (counter: CounterLocation): string | null => {
+  try {
+    return window.localStorage.getItem(activeDraftDateKey(counter));
+  } catch {
+    return null;
+  }
+};
+
+const writeActiveDraftDate = (counter: CounterLocation, date: string): void => {
+  try {
+    window.localStorage.setItem(activeDraftDateKey(counter), date);
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const clearActiveDraftDate = (counter: CounterLocation): void => {
+  try {
+    window.localStorage.removeItem(activeDraftDateKey(counter));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const hasDraftEntries = (
+  closingInputs: Record<string, string>,
+  cashierName: string,
+  helperName: string,
+  cashAmount: string,
+  upiAmount: string,
+  acChargesAmount: string,
+  paymentExplanation: string
+): boolean => {
+  if (Object.values(closingInputs).some(val => val !== '')) return true;
+  if (cashierName.trim() !== '') return true;
+  if (helperName.trim() !== '') return true;
+  if (cashAmount !== '' && cashAmount !== '0') return true;
+  if (upiAmount !== '' && upiAmount !== '0') return true;
+  if (acChargesAmount !== '' && acChargesAmount !== '0') return true;
+  if (paymentExplanation.trim() !== '') return true;
+  return false;
+};
 
 export const DailySalesView: React.FC = () => {
   const {
@@ -41,11 +145,24 @@ export const DailySalesView: React.FC = () => {
   const counter: CounterLocation = currentUser?.counter || 'NORMAL';
 
   const todayISO = new Date().toISOString().slice(0, 10);
-  const [reportDate, setReportDate] = useState<string>(businessDate);
 
-  useEffect(() => {
-    setReportDate(businessDate);
-  }, [businessDate]);
+  const initialBootRef = useRef<{ date: string; draft: DailySalesDraft | null } | null>(null);
+  if (initialBootRef.current === null) {
+    const savedActiveDate = !isAdmin ? readActiveDraftDate(counter) : null;
+    const savedActiveDraft = savedActiveDate ? readSalesDraft(counter, savedActiveDate) : null;
+    if (savedActiveDate && savedActiveDraft) {
+      initialBootRef.current = { date: savedActiveDate, draft: savedActiveDraft };
+    } else {
+      initialBootRef.current = {
+        date: businessDate,
+        draft: !isAdmin ? readSalesDraft(counter, businessDate) : null
+      };
+    }
+  }
+
+  const [reportDate, setReportDate] = useState<string>(initialBootRef.current.date);
+  const prevBusinessDateRef = useRef<string>(businessDate);
+  const loadedDraftKeyRef = useRef<string>(`${counter}::${initialBootRef.current.date}`);
 
   // Recent past dates (last 5 days prior to today) for entering or updating previous days' sales
   const recentPastDates = useMemo(() => {
@@ -71,14 +188,38 @@ export const DailySalesView: React.FC = () => {
       .map(d => d.date);
   }, [recentPastDates, counter, isAdmin]);
 
-  // State for counter submission form
-  const [closingInputs, setClosingInputs] = useState<Record<string, string>>({});
-  const [cashierName, setCashierName] = useState('');
-  const [helperName, setHelperName] = useState('');
-  const [cashAmount, setCashAmount] = useState('0');
-  const [upiAmount, setUpiAmount] = useState('0');
-  const [acChargesAmount, setAcChargesAmount] = useState('0');
-  const [paymentExplanation, setPaymentExplanation] = useState('');
+  // State for counter submission form (hydrated from saved browser draft if present)
+  const [closingInputs, setClosingInputs] = useState<Record<string, string>>(
+    () => initialBootRef.current?.draft?.closingInputs || {}
+  );
+  const [cashierName, setCashierName] = useState<string>(
+    () => initialBootRef.current?.draft?.cashierName || ''
+  );
+  const [helperName, setHelperName] = useState<string>(
+    () => initialBootRef.current?.draft?.helperName || ''
+  );
+  const [cashAmount, setCashAmount] = useState<string>(
+    () => initialBootRef.current?.draft?.cashAmount ?? '0'
+  );
+  const [upiAmount, setUpiAmount] = useState<string>(
+    () => initialBootRef.current?.draft?.upiAmount ?? '0'
+  );
+  const [acChargesAmount, setAcChargesAmount] = useState<string>(
+    () => initialBootRef.current?.draft?.acChargesAmount ?? '0'
+  );
+  const [paymentExplanation, setPaymentExplanation] = useState<string>(
+    () => initialBootRef.current?.draft?.paymentExplanation || ''
+  );
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(() => {
+    const raw = initialBootRef.current?.draft?.savedAt;
+    if (!raw) return null;
+    const formatted = formatDraftTime(new Date(raw));
+    return formatted || raw;
+  });
+  const [justSavedDraft, setJustSavedDraft] = useState(false);
+  const [confirmingClearDraft, setConfirmingClearDraft] = useState(false);
+  const justSavedTimerRef = useRef<number | null>(null);
+
   const [categoryFilter, setCategoryFilter] = useState('');
   const [searchFilter, setSearchFilter] = useState('');
   const [onlySelected, setOnlySelected] = useState(false);
@@ -125,6 +266,254 @@ export const DailySalesView: React.FC = () => {
   // Counter form lines based on selected reportDate
   const formState = getReportFormLines(counter, reportDate);
   const formLines = formState.lines;
+
+  const hasCurrentDraftContent = hasDraftEntries(
+    closingInputs,
+    cashierName,
+    helperName,
+    cashAmount,
+    upiAmount,
+    acChargesAmount,
+    paymentExplanation
+  );
+
+  // Switch shift date while flushing current draft and hydrating the target date's saved draft
+  const handleSelectReportDate = (nextDate: string) => {
+    if (!nextDate || nextDate === reportDate) return;
+
+    if (!isAdmin && !formState.blockedMessage && hasCurrentDraftContent) {
+      writeSalesDraft(counter, reportDate, {
+        closingInputs,
+        cashierName,
+        helperName,
+        cashAmount,
+        upiAmount,
+        acChargesAmount,
+        paymentExplanation,
+        savedAt: new Date().toISOString()
+      });
+    }
+
+    const nextDraft = !isAdmin ? readSalesDraft(counter, nextDate) : null;
+    loadedDraftKeyRef.current = `${counter}::${nextDate}`;
+    setReportDate(nextDate);
+    setClosingInputs(nextDraft?.closingInputs || {});
+    setCashierName(nextDraft?.cashierName || '');
+    setHelperName(nextDraft?.helperName || '');
+    setCashAmount(nextDraft?.cashAmount ?? '0');
+    setUpiAmount(nextDraft?.upiAmount ?? '0');
+    setAcChargesAmount(nextDraft?.acChargesAmount ?? '0');
+    setPaymentExplanation(nextDraft?.paymentExplanation || '');
+    setDraftSavedAt(
+      nextDraft?.savedAt ? formatDraftTime(new Date(nextDraft.savedAt)) || nextDraft.savedAt : null
+    );
+    if (!isAdmin) {
+      if (nextDraft) {
+        writeActiveDraftDate(counter, nextDate);
+      } else {
+        clearActiveDraftDate(counter);
+      }
+    }
+    setConfirmingClearDraft(false);
+    setJustSavedDraft(false);
+    setStatusMessage(null);
+  };
+
+  // Sync reportDate only when header businessDate explicitly changes while mounted
+  useEffect(() => {
+    if (businessDate !== prevBusinessDateRef.current) {
+      prevBusinessDateRef.current = businessDate;
+      handleSelectReportDate(businessDate);
+    }
+  });
+
+  // Hydrate draft if counter changes while mounted
+  useEffect(() => {
+    const expectedKey = `${counter}::${reportDate}`;
+    if (loadedDraftKeyRef.current !== expectedKey) {
+      const nextDraft = !isAdmin ? readSalesDraft(counter, reportDate) : null;
+      loadedDraftKeyRef.current = expectedKey;
+      setClosingInputs(nextDraft?.closingInputs || {});
+      setCashierName(nextDraft?.cashierName || '');
+      setHelperName(nextDraft?.helperName || '');
+      setCashAmount(nextDraft?.cashAmount ?? '0');
+      setUpiAmount(nextDraft?.upiAmount ?? '0');
+      setAcChargesAmount(nextDraft?.acChargesAmount ?? '0');
+      setPaymentExplanation(nextDraft?.paymentExplanation || '');
+      setDraftSavedAt(
+        nextDraft?.savedAt ? formatDraftTime(new Date(nextDraft.savedAt)) || nextDraft.savedAt : null
+      );
+      setConfirmingClearDraft(false);
+      setJustSavedDraft(false);
+    }
+  }, [counter, reportDate, isAdmin]);
+
+  // Keep latest draft snapshot in ref for synchronous flush on unmount / tab switch
+  const latestDraftSnapshotRef = useRef({
+    isAdmin,
+    counter,
+    reportDate,
+    isBlocked: Boolean(formState.blockedMessage),
+    closingInputs,
+    cashierName,
+    helperName,
+    cashAmount,
+    upiAmount,
+    acChargesAmount,
+    paymentExplanation
+  });
+  latestDraftSnapshotRef.current = {
+    isAdmin,
+    counter,
+    reportDate,
+    isBlocked: Boolean(formState.blockedMessage),
+    closingInputs,
+    cashierName,
+    helperName,
+    cashAmount,
+    upiAmount,
+    acChargesAmount,
+    paymentExplanation
+  };
+
+  // Automatically persist draft to localStorage as counts/fields change
+  useEffect(() => {
+    if (isAdmin) return;
+    if (loadedDraftKeyRef.current !== `${counter}::${reportDate}`) return;
+    if (formState.blockedMessage) return;
+
+    if (hasCurrentDraftContent) {
+      const now = new Date();
+      writeSalesDraft(counter, reportDate, {
+        closingInputs,
+        cashierName,
+        helperName,
+        cashAmount,
+        upiAmount,
+        acChargesAmount,
+        paymentExplanation,
+        savedAt: now.toISOString()
+      });
+      writeActiveDraftDate(counter, reportDate);
+      setDraftSavedAt(formatDraftTime(now));
+    } else {
+      removeSalesDraft(counter, reportDate);
+      if (readActiveDraftDate(counter) === reportDate) {
+        clearActiveDraftDate(counter);
+      }
+      setDraftSavedAt(null);
+    }
+  }, [
+    isAdmin,
+    counter,
+    reportDate,
+    formState.blockedMessage,
+    hasCurrentDraftContent,
+    closingInputs,
+    cashierName,
+    helperName,
+    cashAmount,
+    upiAmount,
+    acChargesAmount,
+    paymentExplanation
+  ]);
+
+  // Flush draft synchronously on unmount (e.g., switching tabs) and clean up timer
+  useEffect(() => {
+    return () => {
+      if (justSavedTimerRef.current !== null) {
+        window.clearTimeout(justSavedTimerRef.current);
+      }
+      const snap = latestDraftSnapshotRef.current;
+      if (snap.isAdmin || snap.isBlocked) return;
+      if (
+        hasDraftEntries(
+          snap.closingInputs,
+          snap.cashierName,
+          snap.helperName,
+          snap.cashAmount,
+          snap.upiAmount,
+          snap.acChargesAmount,
+          snap.paymentExplanation
+        )
+      ) {
+        writeSalesDraft(snap.counter, snap.reportDate, {
+          closingInputs: snap.closingInputs,
+          cashierName: snap.cashierName,
+          helperName: snap.helperName,
+          cashAmount: snap.cashAmount,
+          upiAmount: snap.upiAmount,
+          acChargesAmount: snap.acChargesAmount,
+          paymentExplanation: snap.paymentExplanation,
+          savedAt: new Date().toISOString()
+        });
+        writeActiveDraftDate(snap.counter, snap.reportDate);
+      }
+    };
+  }, []);
+
+  const handleSaveDraft = () => {
+    if (formState.blockedMessage) return;
+    if (!hasCurrentDraftContent) {
+      setStatusMessage({
+        type: 'err',
+        text: 'No entries to save yet. Enter closing counts, staff names, or payment amounts first.'
+      });
+      return;
+    }
+
+    const now = new Date();
+    const ok = writeSalesDraft(counter, reportDate, {
+      closingInputs,
+      cashierName,
+      helperName,
+      cashAmount,
+      upiAmount,
+      acChargesAmount,
+      paymentExplanation,
+      savedAt: now.toISOString()
+    });
+
+    if (ok) {
+      writeActiveDraftDate(counter, reportDate);
+      setDraftSavedAt(formatDraftTime(now));
+      setConfirmingClearDraft(false);
+      setJustSavedDraft(true);
+      setStatusMessage(null);
+      if (justSavedTimerRef.current !== null) {
+        window.clearTimeout(justSavedTimerRef.current);
+      }
+      justSavedTimerRef.current = window.setTimeout(() => {
+        setJustSavedDraft(false);
+      }, 2500);
+    } else {
+      setStatusMessage({
+        type: 'err',
+        text: 'Unable to save draft in browser storage. Please check storage permissions.'
+      });
+    }
+  };
+
+  const handleConfirmClearDraft = () => {
+    removeSalesDraft(counter, reportDate);
+    if (readActiveDraftDate(counter) === reportDate) {
+      clearActiveDraftDate(counter);
+    }
+    setClosingInputs({});
+    setCashierName('');
+    setHelperName('');
+    setCashAmount('0');
+    setUpiAmount('0');
+    setAcChargesAmount('0');
+    setPaymentExplanation('');
+    setDraftSavedAt(null);
+    setConfirmingClearDraft(false);
+    setJustSavedDraft(false);
+    setStatusMessage({
+      type: 'ok',
+      text: `Cleared saved draft for ${reportDate}.`
+    });
+  };
 
   // Compute calculated sales in counter form
   let formCalculatedSoldBottles = 0;
@@ -244,13 +633,22 @@ export const DailySalesView: React.FC = () => {
         lines: submissionLines
       });
 
+      removeSalesDraft(counter, reportDate);
+      if (readActiveDraftDate(counter) === reportDate) {
+        clearActiveDraftDate(counter);
+      }
       setShowSubmitPreview(false);
       setStatusMessage({ type: 'ok', text: `Shift report ${reportId} auto-approved and recorded! Stock decremented and immediately reflected in Consolidated Report.` });
       setClosingInputs({});
+      setCashierName('');
+      setHelperName('');
       setCashAmount('0');
       setUpiAmount('0');
       setAcChargesAmount('0');
       setPaymentExplanation('');
+      setDraftSavedAt(null);
+      setConfirmingClearDraft(false);
+      setJustSavedDraft(false);
     } catch (e: any) {
       setStatusMessage({ type: 'err', text: e.message || 'Error submitting report.' });
     } finally {
@@ -684,7 +1082,7 @@ export const DailySalesView: React.FC = () => {
                   <button
                     key={d}
                     type="button"
-                    onClick={() => setReportDate(d)}
+                    onClick={() => handleSelectReportDate(d)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${
                       reportDate === d
                         ? 'bg-amber-600 text-white shadow-amber-950/30'
@@ -713,12 +1111,12 @@ export const DailySalesView: React.FC = () => {
                   type="date"
                   max={todayISO}
                   value={reportDate}
-                  onChange={e => e.target.value && setReportDate(e.target.value)}
+                  onChange={e => e.target.value && handleSelectReportDate(e.target.value)}
                   className="rounded-lg border border-amber-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
                 />
                 <button
                   type="button"
-                  onClick={() => setReportDate(todayISO)}
+                  onClick={() => handleSelectReportDate(todayISO)}
                   className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-bold text-xs hover:bg-amber-700 cursor-pointer"
                 >
                   Go to Today
@@ -740,6 +1138,11 @@ export const DailySalesView: React.FC = () => {
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
                         Recording sales closure for <strong className="text-slate-900 dark:text-white">{reportDate}</strong> ({counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'})
+                        {draftSavedAt && (
+                          <span className="text-emerald-700 dark:text-emerald-400 font-medium">
+                            {' '}· Draft saved at {draftSavedAt}
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -753,14 +1156,14 @@ export const DailySalesView: React.FC = () => {
                       type="date"
                       max={todayISO}
                       value={reportDate}
-                      onChange={e => e.target.value && setReportDate(e.target.value)}
+                      onChange={e => e.target.value && handleSelectReportDate(e.target.value)}
                       className="rounded-xl border border-amber-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 shadow-xs cursor-pointer"
                       title="Select date you are recording closing stock for"
                     />
                     {reportDate !== todayISO && (
                       <button
                         type="button"
-                        onClick={() => setReportDate(todayISO)}
+                        onClick={() => handleSelectReportDate(todayISO)}
                         className="rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 cursor-pointer"
                       >
                         Back to Today ({todayISO})
@@ -1096,22 +1499,67 @@ export const DailySalesView: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {confirmingClearDraft ? (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleConfirmClearDraft}
+                        className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        <span>Confirm Clear</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingClearDraft(false)}
+                        className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        Keep Draft
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!hasCurrentDraftContent && !draftSavedAt}
+                      onClick={() => setConfirmingClearDraft(true)}
+                      className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      <span>Clear Draft</span>
+                    </button>
+                  )}
+
                   <button
+                    type="button"
+                    onClick={handleSaveDraft}
+                    className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      justSavedDraft
+                        ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-300'
+                        : 'border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                    }`}
+                  >
+                    {justSavedDraft ? <Check className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+                    <span>{justSavedDraft ? 'Draft Saved' : 'Save Draft'}</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => {
-                      const txt = `*MM Residency - Draft Report*\nDate: ${businessDate}\nSold Bottles: ${formCalculatedSoldBottles}\nCalculated Value: ${formatCurrency(formCalculatedTotalValue)}\nPayment: ${formatCurrency(totalPaymentReceived)}`;
+                      const txt = `*MM Residency - Draft Report*\nDate: ${reportDate}\nSold Bottles: ${formCalculatedSoldBottles}\nCalculated Value: ${formatCurrency(formCalculatedTotalValue)}\nPayment: ${formatCurrency(totalPaymentReceived)}`;
                       setShareText(txt);
                     }}
-                    className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors"
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <Share2 className="h-3.5 w-3.5" />
                     <span>WhatsApp Draft</span>
                   </button>
 
                   <button
+                    type="button"
                     disabled={formInvalidEntries > 0}
                     onClick={handleOpenSubmitPreview}
-                    className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 transition-colors cursor-pointer"
+                    className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <Check className="h-4 w-4" />
                     <span>Preview & Submit Report</span>

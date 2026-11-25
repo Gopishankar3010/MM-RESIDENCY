@@ -220,7 +220,7 @@ service cloud.firestore {
 
     function isValidStockRequest(data) {
       return data.keys().hasAll(['requestId', 'counter', 'productId', 'productName', 'category', 'sizeML', 'casePack', 'qty', 'enteredQty', 'unit', 'reason', 'status', 'date', 'createdBy', 'createdAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['requestId', 'counter', 'productId', 'productName', 'category', 'sizeML', 'casePack', 'qty', 'enteredQty', 'unit', 'reason', 'status', 'date', 'createdBy', 'createdAtStr', 'reviewedBy', 'reviewedAtStr', 'remark', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['requestId', 'counter', 'productId', 'productName', 'category', 'sizeML', 'casePack', 'qty', 'enteredQty', 'unit', 'reason', 'status', 'date', 'createdBy', 'createdAtStr', 'reviewedBy', 'reviewedAtStr', 'remark', 'reversedBy', 'reversedAtStr', 'memberEmails', 'createdAt', 'updatedAt'])
         && isValidId(data.requestId)
         && data.counter in ['NORMAL', 'AC']
         && data.productId is string && data.productId.size() >= 1 && data.productId.size() <= 64
@@ -232,13 +232,15 @@ service cloud.firestore {
         && data.enteredQty is number && data.enteredQty >= 0
         && data.unit in ['CASE', 'BOTTLE', 'MIXED']
         && data.reason is string && data.reason.size() <= 240
-        && data.status in ['Pending', 'Approved', 'Rejected']
+        && data.status in ['Pending', 'Approved', 'Rejected', 'Reversed']
         && data.date is string && data.date.size() >= 4 && data.date.size() <= 20
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 80
         && data.createdAtStr is string && data.createdAtStr.size() >= 1 && data.createdAtStr.size() <= 40
         && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 80))
         && (!('reviewedAtStr' in data) || (data.reviewedAtStr is string && data.reviewedAtStr.size() <= 40))
         && (!('remark' in data) || (data.remark is string && data.remark.size() <= 300))
+        && (!('reversedBy' in data) || (data.reversedBy is string && data.reversedBy.size() <= 80))
+        && (!('reversedAtStr' in data) || (data.reversedAtStr is string && data.reversedAtStr.size() <= 40))
         && isValidMemberEmails(data.memberEmails)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -296,6 +298,42 @@ service cloud.firestore {
         && (!('editedBy' in data) || (data.editedBy is string && data.editedBy.size() <= 80))
         && (!('editedAtStr' in data) || (data.editedAtStr is string && data.editedAtStr.size() <= 40))
         && isValidLinesList(data.lines, 300)
+        && isValidMemberEmails(data.memberEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDeletedDailySalesReport(data) {
+      return data.keys().hasAll(['reportId', 'date', 'counter', 'status', 'totalSoldQty', 'totalSalesValue', 'recordedAmount', 'cashAmount', 'upiAmount', 'cardAmount', 'cashierName', 'helperName', 'paymentDifference', 'cutoffSeq', 'submittedBy', 'submittedAtStr', 'lines', 'deletedBy', 'deletedAtStr', 'stockReversed', 'memberEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['reportId', 'date', 'counter', 'status', 'totalSoldQty', 'totalSalesValue', 'recordedAmount', 'cashAmount', 'upiAmount', 'cardAmount', 'acCharges', 'cashierName', 'helperName', 'paymentDifference', 'paymentExplanation', 'cutoffSeq', 'submittedBy', 'submittedAtStr', 'reviewedBy', 'reviewedAtStr', 'remark', 'editedBy', 'editedAtStr', 'lines', 'deletedBy', 'deletedAtStr', 'deleteReason', 'stockReversed', 'memberEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.reportId)
+        && data.date is string && data.date.size() >= 4 && data.date.size() <= 20
+        && data.counter in ['NORMAL', 'AC']
+        && data.status in ['Pending', 'Approved', 'Rejected']
+        && data.totalSoldQty is number && data.totalSoldQty >= 0
+        && data.totalSalesValue is number && data.totalSalesValue >= 0
+        && data.recordedAmount is number
+        && data.cashAmount is number && data.cashAmount >= 0
+        && data.upiAmount is number && data.upiAmount >= 0
+        && data.cardAmount is number && data.cardAmount >= 0
+        && (!('acCharges' in data) || data.acCharges is number)
+        && data.cashierName is string && data.cashierName.size() <= 100
+        && data.helperName is string && data.helperName.size() <= 100
+        && data.paymentDifference is number
+        && (!('paymentExplanation' in data) || (data.paymentExplanation is string && data.paymentExplanation.size() <= 300))
+        && data.cutoffSeq is number
+        && data.submittedBy is string && data.submittedBy.size() >= 1 && data.submittedBy.size() <= 80
+        && data.submittedAtStr is string && data.submittedAtStr.size() >= 1 && data.submittedAtStr.size() <= 40
+        && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 80))
+        && (!('reviewedAtStr' in data) || (data.reviewedAtStr is string && data.reviewedAtStr.size() <= 40))
+        && (!('remark' in data) || (data.remark is string && data.remark.size() <= 300))
+        && (!('editedBy' in data) || (data.editedBy is string && data.editedBy.size() <= 80))
+        && (!('editedAtStr' in data) || (data.editedAtStr is string && data.editedAtStr.size() <= 40))
+        && isValidLinesList(data.lines, 300)
+        && data.deletedBy is string && data.deletedBy.size() >= 1 && data.deletedBy.size() <= 80
+        && data.deletedAtStr is string && data.deletedAtStr.size() >= 1 && data.deletedAtStr.size() <= 40
+        && (!('deleteReason' in data) || (data.deleteReason is string && data.deleteReason.size() <= 300))
+        && data.stockReversed is bool
         && isValidMemberEmails(data.memberEmails)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -550,6 +588,7 @@ service cloud.firestore {
         && hasUpdateTimestamps(incoming())
         && (
           (existing().status == 'Pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'remark', 'updatedAt'])) ||
+          (existing().status == 'Approved' && incoming().status == 'Reversed' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reversedBy', 'reversedAtStr', 'remark', 'updatedAt'])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
         );
       allow delete: if isValidId(requestId) && isVerified();
@@ -594,6 +633,24 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAtStr', 'remark', 'updatedAt']) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']))
         );
+      allow delete: if isValidId(reportId) && isVerified();
+    }
+
+    match /deleted_daily_sales/{reportId} {
+      allow get: if isValidId(reportId) && isVerified();
+      allow list: if isVerified();
+      allow create: if isValidId(reportId)
+        && isVerified()
+        && isValidDeletedDailySalesReport(incoming())
+        && incoming().reportId == reportId
+        && hasCreateTimestamps(incoming());
+      allow update: if isValidId(reportId)
+        && isVerified()
+        && isValidDeletedDailySalesReport(incoming())
+        && incoming().reportId == existing().reportId
+        && hasUpdateTimestamps(incoming())
+        && isAdmin()
+        && incoming().diff(existing()).affectedKeys().hasOnly(['memberEmails', 'updatedAt']);
       allow delete: if isValidId(reportId) && isVerified();
     }
 

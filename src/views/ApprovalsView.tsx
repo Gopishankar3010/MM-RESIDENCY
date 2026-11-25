@@ -1,18 +1,23 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { CheckCircle2, ArrowRightLeft, Truck, Check, X, ShieldCheck, Printer, Trash2, AlertTriangle, Receipt } from 'lucide-react';
-import { RequestGroup, DailySalesReport } from '../types';
+import { CheckCircle2, ArrowRightLeft, Truck, Check, X, ShieldCheck, Printer, Trash2, AlertTriangle, Receipt, RotateCcw, Lock, Eye, EyeOff } from 'lucide-react';
+import { RequestGroup, DailySalesReport, DeletedDailySalesReport, StockRequestItem } from '../types';
 
 export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onNavigateToSales }) => {
   const {
     currentUser,
+    verifyCurrentAdminPassword,
     requests,
     stockItems,
     reviewRequestGroup,
+    reverseRequestItems,
     purchases,
     reviewPurchaseBill,
     dailySales,
-    adminDeleteDailySales
+    deletedDailySales,
+    adminDeleteDailySales,
+    adminRestoreDailySales,
+    adminDismissDeletedSales
   } = useStock();
 
   const [remarkModal, setRemarkModal] = useState<{
@@ -27,7 +32,26 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [deleteSalesTarget, setDeleteSalesTarget] = useState<DailySalesReport | null>(null);
   const [deleteSalesReason, setDeleteSalesReason] = useState('');
+  const [deleteSalesPassword, setDeleteSalesPassword] = useState('');
+  const [showDeleteSalesPassword, setShowDeleteSalesPassword] = useState(false);
+  const [deleteSalesError, setDeleteSalesError] = useState<string | null>(null);
   const [deletingSales, setDeletingSales] = useState(false);
+  const [restoringSalesId, setRestoringSalesId] = useState<string | null>(null);
+  const [confirmingDismissId, setConfirmingDismissId] = useState<string | null>(null);
+  const [dismissingSalesId, setDismissingSalesId] = useState<string | null>(null);
+  const [reverseRequestModal, setReverseRequestModal] = useState<{
+    ids: string[];
+    counter: 'NORMAL' | 'AC';
+    date: string;
+    totalBottles: number;
+    title: string;
+    summary: string;
+  } | null>(null);
+  const [reverseReason, setReverseReason] = useState('');
+  const [reversePassword, setReversePassword] = useState('');
+  const [showReversePassword, setShowReversePassword] = useState(false);
+  const [reverseError, setReverseError] = useState<string | null>(null);
+  const [reversingRequests, setReversingRequests] = useState(false);
 
   const formatCurrency = (val: number) =>
     '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -74,6 +98,38 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
 
   const requestGroups = Array.from(requestGroupsMap.values());
 
+  // 1b. Approved Godown Requests (Admin reversal back to Godown)
+  const approvedRequests = requests.filter(r => r.status === 'Approved');
+  const approvedGroupsMap = new Map<string, RequestGroup>();
+
+  approvedRequests.forEach(r => {
+    const key = `${r.counter}|${r.date}|${r.reason}|${r.createdBy}`;
+    if (!approvedGroupsMap.has(key)) {
+      approvedGroupsMap.set(key, {
+        groupKey: key,
+        counter: r.counter,
+        date: r.date,
+        reason: r.reason,
+        by: r.createdBy,
+        at: r.reviewedAt || r.createdAt,
+        items: [r],
+        totalBottles: r.qty,
+        shortCount: 0,
+      });
+    } else {
+      const g = approvedGroupsMap.get(key)!;
+      g.items.push(r);
+      g.totalBottles += r.qty;
+      if ((r.reviewedAt || r.createdAt) > g.at) {
+        g.at = r.reviewedAt || r.createdAt;
+      }
+    }
+  });
+
+  const approvedRequestGroups = Array.from(approvedGroupsMap.values()).sort(
+    (a, b) => String(b.at || '').localeCompare(String(a.at || '')) || String(b.date || '').localeCompare(String(a.date || ''))
+  );
+
   // 2. Pending Purchases (Godown Stock Intake)
   const pendingPurchases = purchases.filter(p => p.status === 'Pending');
 
@@ -106,7 +162,9 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
     if (!deleteSalesTarget) return;
     try {
       setDeletingSales(true);
+      setDeleteSalesError(null);
       setStatusMsg(null);
+      verifyCurrentAdminPassword(deleteSalesPassword);
       const target = deleteSalesTarget;
       await adminDeleteDailySales(target.reportId, deleteSalesReason);
       const isHistorical = target.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
@@ -116,10 +174,86 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
       });
       setDeleteSalesTarget(null);
       setDeleteSalesReason('');
+      setDeleteSalesPassword('');
+      setShowDeleteSalesPassword(false);
+      setDeleteSalesError(null);
     } catch (e: any) {
-      setStatusMsg({ type: 'err', text: e?.message || 'Failed to delete daily sales report.' });
+      setDeleteSalesError(e?.message || 'Failed to delete daily sales report.');
     } finally {
       setDeletingSales(false);
+    }
+  };
+
+  const executeRestoreDailySales = async (rep: DeletedDailySalesReport) => {
+    try {
+      setRestoringSalesId(rep.reportId);
+      setStatusMsg(null);
+      await adminRestoreDailySales(rep.reportId);
+      setStatusMsg({
+        type: 'ok',
+        text: `Restored ${rep.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} daily sales report (${rep.reportId}) for ${rep.date}.${rep.stockReversed && rep.totalSoldQty > 0 ? ` Re-applied ${rep.totalSoldQty} sold bottles to ${rep.counter} stock.` : ''}`
+      });
+    } catch (e: any) {
+      setStatusMsg({ type: 'err', text: e?.message || 'Failed to restore daily sales report.' });
+    } finally {
+      setRestoringSalesId(null);
+    }
+  };
+
+  const executeDismissDeletedSales = async (rep: DeletedDailySalesReport) => {
+    try {
+      setDismissingSalesId(rep.reportId);
+      setStatusMsg(null);
+      await adminDismissDeletedSales(rep.reportId);
+      setConfirmingDismissId(null);
+      setStatusMsg({
+        type: 'ok',
+        text: `Removed superseded entry (${rep.reportId}) for ${rep.date} from the deleted reports bin.`
+      });
+    } catch (e: any) {
+      setStatusMsg({ type: 'err', text: e?.message || 'Failed to remove entry from bin.' });
+    } finally {
+      setDismissingSalesId(null);
+    }
+  };
+
+  const openReverseModal = (opts: {
+    ids: string[];
+    counter: 'NORMAL' | 'AC';
+    date: string;
+    totalBottles: number;
+    title: string;
+    summary: string;
+  }) => {
+    setReverseReason('');
+    setReversePassword('');
+    setShowReversePassword(false);
+    setReverseError(null);
+    setReverseRequestModal(opts);
+  };
+
+  const executeReverseRequests = async () => {
+    if (!reverseRequestModal) return;
+    try {
+      setReversingRequests(true);
+      setReverseError(null);
+      setStatusMsg(null);
+      verifyCurrentAdminPassword(reversePassword);
+      const res = await reverseRequestItems(reverseRequestModal.ids, reverseReason);
+      const counterLabel = reverseRequestModal.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter';
+      setStatusMsg({
+        type: 'ok',
+        text: `Reversed ${res.reversed} approved request item(s) (${res.totalBottles} btls) from ${counterLabel} back to Central Godown and marked as Reversed.`
+      });
+      setReverseRequestModal(null);
+      setReverseReason('');
+      setReversePassword('');
+      setShowReversePassword(false);
+      setReverseError(null);
+    } catch (e: any) {
+      setReverseError(e?.message || 'Failed to reverse approved stock request.');
+    } finally {
+      setReversingRequests(false);
     }
   };
 
@@ -298,6 +432,114 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
         )}
       </div>
 
+      {/* 1b. Approved Godown Requests (Admin Single-Item or Batch Reversal) */}
+      <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b pb-3 dark:border-slate-800">
+          <div className="flex items-center gap-2">
+            <RotateCcw className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              Approved Godown Requests ({approvedRequests.length})
+            </h2>
+          </div>
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            Reverse a single item or entire batch to return bottles from Counter back to Central Godown
+          </span>
+        </div>
+
+        {approvedRequestGroups.length > 0 ? (
+          <div className="divide-y divide-slate-200 dark:divide-slate-800">
+            {approvedRequestGroups.map(g => {
+              const allIds = g.items.map(i => i.requestId);
+              const counterLabel = g.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter';
+              const approver = g.items[0]?.reviewedBy || 'admin';
+
+              return (
+                <div key={g.groupKey} className="print-avoid-break py-3.5 first:pt-0 last:pb-0 space-y-2.5 text-xs">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <div className="font-bold text-slate-900 dark:text-white">
+                        {counterLabel} · <span className="font-mono tabular-nums">{g.items.length}</span> item(s) ·{' '}
+                        <span className="font-mono tabular-nums">{g.totalBottles}</span> btls
+                      </div>
+                      <div className="text-slate-500 dark:text-slate-400">
+                        Date: <span className="font-mono tabular-nums">{g.date}</span> · Reason: <strong className="text-slate-700 dark:text-slate-300">{g.reason}</strong> · Requested by {g.by} · Approved by {approver}
+                      </div>
+                    </div>
+
+                    {g.items.length > 1 && (
+                      <div className="no-print flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openReverseModal({
+                              ids: allIds,
+                              counter: g.counter,
+                              date: g.date,
+                              totalBottles: g.totalBottles,
+                              title: `Reverse Entire Batch (${counterLabel})`,
+                              summary: `${g.items.length} items · ${g.totalBottles} bottles (${g.date})`
+                            })
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-700 cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          <span>Reverse Batch ({g.totalBottles} btls)</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800/80 border-t border-slate-100 dark:border-slate-800/80 pl-3">
+                    {g.items.map((item: StockRequestItem) => (
+                      <div
+                        key={item.requestId}
+                        className="py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
+                      >
+                        <div className="text-[11px] text-slate-700 dark:text-slate-300">
+                          <span className="font-bold text-slate-900 dark:text-white">{item.productName}</span>{' '}
+                          <span className="text-slate-400" aria-hidden="true">·</span>{' '}
+                          <span className="font-mono tabular-nums font-bold">{item.qty} btls</span>{' '}
+                          <span className="text-slate-500 dark:text-slate-400">
+                            ({item.enteredQty} {item.unit.toLowerCase()})
+                          </span>
+                          {item.remark ? (
+                            <span className="text-slate-500 dark:text-slate-400"> · Note: {item.remark}</span>
+                          ) : null}
+                        </div>
+
+                        <div className="no-print shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openReverseModal({
+                                ids: [item.requestId],
+                                counter: item.counter,
+                                date: item.date,
+                                totalBottles: item.qty,
+                                title: `Reverse Approved Item (${counterLabel})`,
+                                summary: `${item.productName} · ${item.qty} bottles (${item.date})`
+                              })
+                            }
+                            className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200 dark:hover:bg-amber-900/60 cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                            <span>{g.items.length === 1 ? `Reverse (${item.qty} btls)` : 'Reverse Item'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-400 dark:text-slate-500 py-3 text-center">
+            No approved Godown requests available to reverse.
+          </p>
+        )}
+      </div>
+
       {/* 2. Stock Purchases Approvals */}
       <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
         <div className="flex items-center justify-between border-b pb-3 dark:border-slate-800">
@@ -407,6 +649,9 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                       type="button"
                       onClick={() => {
                         setDeleteSalesReason('');
+                        setDeleteSalesPassword('');
+                        setShowDeleteSalesPassword(false);
+                        setDeleteSalesError(null);
                         setDeleteSalesTarget(rep);
                       }}
                       className="inline-flex items-center gap-1 rounded-lg bg-red-100 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-200 dark:bg-red-950 dark:text-red-300 cursor-pointer"
@@ -420,6 +665,117 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
           </div>
         ) : (
           <p className="text-xs text-slate-400 py-3 text-center">No daily sales reports submitted yet.</p>
+        )}
+      </div>
+
+      {/* 4. Deleted Daily Sales Reports (Admin 1-Click Recovery Bin) */}
+      <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b pb-3 dark:border-slate-800">
+          <div className="flex items-center gap-2">
+            <RotateCcw className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              Deleted Daily Sales Reports ({deletedDailySales.length})
+            </h2>
+          </div>
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            Restore mistakenly deleted reports in 1 click unless a replacement report already exists
+          </span>
+        </div>
+
+        {deletedDailySales.length > 0 ? (
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {[...deletedDailySales]
+              .sort(
+                (a, b) =>
+                  String(b.deletedAt || '').localeCompare(String(a.deletedAt || '')) ||
+                  String(b.date || '').localeCompare(String(a.date || '')) ||
+                  String(b.reportId).localeCompare(String(a.reportId))
+              )
+              .map(rep => {
+                const replacement = dailySales.find(
+                  r => r.date === rep.date && r.counter === rep.counter && r.status !== 'Rejected'
+                );
+                const isRestoring = restoringSalesId === rep.reportId;
+                const isConfirmingDismiss = confirmingDismissId === rep.reportId;
+                const isDismissing = dismissingSalesId === rep.reportId;
+
+                return (
+                  <div
+                    key={rep.reportId}
+                    className="print-avoid-break py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="font-bold text-slate-900 dark:text-white">
+                        {rep.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} ·{' '}
+                        <span className="font-mono tabular-nums">{rep.date}</span> ({rep.reportId})
+                      </div>
+                      <div className="text-slate-500 dark:text-slate-400">
+                        Sold: <strong className="font-mono tabular-nums text-slate-700 dark:text-slate-200">{rep.totalSoldQty} btls</strong> · Value:{' '}
+                        <strong className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">{formatCurrency(rep.totalSalesValue)}</strong> · Cashier: {rep.cashierName || '—'} / Helper: {rep.helperName || '—'}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Deleted by <strong className="text-slate-700 dark:text-slate-300">{rep.deletedBy}</strong> ·{' '}
+                        <span className="font-mono tabular-nums">{rep.deletedAt}</span>
+                        {rep.deleteReason ? ` · Reason: ${rep.deleteReason}` : ''}
+                        {rep.stockReversed ? ' · Stock restored on delete' : ''}
+                      </div>
+                    </div>
+
+                    <div className="no-print flex flex-wrap items-center gap-2 shrink-0">
+                      {replacement ? (
+                        <>
+                          <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 whitespace-nowrap">
+                            Replacement active ({replacement.reportId}) · Kept
+                          </span>
+                          {isConfirmingDismiss ? (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => executeDismissDeletedSales(rep)}
+                                disabled={isDismissing}
+                                className="rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                {isDismissing ? 'Removing...' : 'Confirm Remove'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmingDismissId(null)}
+                                disabled={isDismissing}
+                                className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                Keep
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingDismissId(rep.reportId)}
+                              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              Remove from Bin
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => executeRestoreDailySales(rep)}
+                          disabled={restoringSalesId !== null}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          <span>{isRestoring ? 'Restoring...' : 'Restore Report'}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-400 dark:text-slate-500 py-3 text-center">
+            No deleted daily sales reports in the recovery bin.
+          </p>
         )}
       </div>
 
@@ -467,7 +823,13 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
       {/* Delete Daily Sales Confirmation Modal */}
       {deleteSalesTarget && (
         <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-6 shadow-2xl dark:border-red-900/60 dark:bg-slate-900 space-y-4">
+          <form
+            onSubmit={e => {
+              e.preventDefault();
+              void executeDeleteDailySales();
+            }}
+            className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-6 shadow-2xl dark:border-red-900/60 dark:bg-slate-900 space-y-4"
+          >
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-400">
                 <AlertTriangle className="h-5 w-5" />
@@ -486,38 +848,204 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
               Restores <strong>{deleteSalesTarget.totalSoldQty} sold bottles</strong> ({formatCurrency(deleteSalesTarget.totalSalesValue)}) back to {deleteSalesTarget.counter} stock and lets counter staff submit {deleteSalesTarget.date} sales again.
             </div>
 
+            {deleteSalesError && (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                {deleteSalesError}
+              </div>
+            )}
+
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">
+              <label
+                htmlFor="delete-sales-reason"
+                className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1"
+              >
                 Reason for Deletion (Optional)
               </label>
               <input
+                id="delete-sales-reason"
                 type="text"
                 placeholder="e.g. Incorrect closing count entered"
                 value={deleteSalesReason}
                 onChange={e => setDeleteSalesReason(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 p-2 text-xs outline-none focus:border-red-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                className="w-full rounded-lg border border-slate-300 p-2 text-xs outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               />
+            </div>
+
+            <div>
+              <label
+                htmlFor="delete-sales-admin-password"
+                className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1"
+              >
+                <Lock className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                <span>Admin Password (Required)</span>
+              </label>
+              <div className="relative">
+                <input
+                  id="delete-sales-admin-password"
+                  type={showDeleteSalesPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  required
+                  placeholder={`Enter password for ${currentUser.username}`}
+                  value={deleteSalesPassword}
+                  onChange={e => {
+                    setDeleteSalesPassword(e.target.value);
+                    if (deleteSalesError) setDeleteSalesError(null);
+                  }}
+                  className="w-full rounded-lg border border-slate-300 p-2 pr-9 text-xs outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteSalesPassword(prev => !prev)}
+                  aria-label={showDeleteSalesPassword ? 'Hide password' : 'Show password'}
+                  className="absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-400 hover:text-slate-600 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer"
+                >
+                  {showDeleteSalesPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                Verification required every time to prevent accidental deletion.
+              </p>
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setDeleteSalesTarget(null)}
+                onClick={() => {
+                  setDeleteSalesTarget(null);
+                  setDeleteSalesReason('');
+                  setDeleteSalesPassword('');
+                  setShowDeleteSalesPassword(false);
+                  setDeleteSalesError(null);
+                }}
                 disabled={deletingSales}
-                className="rounded-lg border px-3 py-1.5 text-xs font-semibold dark:border-slate-700 cursor-pointer"
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0"
               >
                 Cancel
               </button>
               <button
-                type="button"
-                onClick={executeDeleteDailySales}
-                disabled={deletingSales}
-                className="rounded-lg bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                type="submit"
+                disabled={deletingSales || !deleteSalesPassword}
+                className="rounded-lg bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap shrink-0"
               >
                 {deletingSales ? 'Deleting...' : 'Confirm Delete & Restore Stock'}
               </button>
             </div>
-          </div>
+          </form>
+        </div>
+      )}
+      {/* Reverse Approved Godown Request Modal */}
+      {reverseRequestModal && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-xs">
+          <form
+            onSubmit={e => {
+              e.preventDefault();
+              void executeReverseRequests();
+            }}
+            className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-6 shadow-2xl dark:border-amber-900/60 dark:bg-slate-900 space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+                <RotateCcw className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {reverseRequestModal.title}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {reverseRequestModal.summary}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+              Returns <strong className="font-mono tabular-nums">{reverseRequestModal.totalBottles} bottles</strong> from{' '}
+              <strong>{reverseRequestModal.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}</strong> back to{' '}
+              <strong>Central Godown</strong> and marks the request as <strong>Reversed</strong>.
+            </div>
+
+            {reverseError && (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                {reverseError}
+              </div>
+            )}
+
+            <div>
+              <label
+                htmlFor="reverse-request-reason"
+                className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1"
+              >
+                Reason for Reversal (Optional)
+              </label>
+              <input
+                id="reverse-request-reason"
+                type="text"
+                placeholder="e.g. Approved wrong counter or incorrect quantity"
+                value={reverseReason}
+                onChange={e => setReverseReason(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 p-2 text-xs outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="reverse-request-admin-password"
+                className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1"
+              >
+                <Lock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                <span>Admin Password (Required)</span>
+              </label>
+              <div className="relative">
+                <input
+                  id="reverse-request-admin-password"
+                  type={showReversePassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  required
+                  placeholder={`Enter password for ${currentUser.username}`}
+                  value={reversePassword}
+                  onChange={e => {
+                    setReversePassword(e.target.value);
+                    if (reverseError) setReverseError(null);
+                  }}
+                  className="w-full rounded-lg border border-slate-300 p-2 pr-9 text-xs outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowReversePassword(prev => !prev)}
+                  aria-label={showReversePassword ? 'Hide password' : 'Show password'}
+                  className="absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-400 hover:text-slate-600 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer"
+                >
+                  {showReversePassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                Verification required every time to prevent accidental reversal.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setReverseRequestModal(null);
+                  setReverseReason('');
+                  setReversePassword('');
+                  setShowReversePassword(false);
+                  setReverseError(null);
+                }}
+                disabled={reversingRequests}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={reversingRequests || !reversePassword}
+                className="rounded-lg bg-amber-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap shrink-0"
+              >
+                {reversingRequests ? 'Reversing...' : 'Confirm Reverse & Return Stock'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

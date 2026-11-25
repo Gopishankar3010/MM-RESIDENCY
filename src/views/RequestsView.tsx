@@ -525,6 +525,8 @@ export const RequestsView: React.FC = () => {
                           ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                           : r.status === 'Pending'
                           ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                          : r.status === 'Reversed'
+                          ? 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
                           : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
                       }`}>
                         {r.status}
