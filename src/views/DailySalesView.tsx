@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { DailySalesReport, CounterLocation } from '../types';
 import { CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
+import { computeShiftReconciliation, getReportReconciliation } from '../utils/reconciliation';
 
 interface DailySalesDraft {
   closingInputs: Record<string, string>;
@@ -132,6 +133,7 @@ export const DailySalesView: React.FC = () => {
     currentUser,
     businessDate,
     dailySales,
+    operations,
     getReportFormLines,
     submitDailySales,
     adminCreateHistoricalReport,
@@ -546,6 +548,7 @@ export const DailySalesView: React.FC = () => {
 
   // Show only products with available stock (> 0) on the sales sheet
   const availableLineCalculations = lineCalculations.filter(l => l.available > 0);
+  const totalAvailableBottles = availableLineCalculations.reduce((sum, l) => sum + l.available, 0);
 
   const categories = Array.from(new Set(availableLineCalculations.map(l => l.category || 'Others'))).sort((a, b) => {
     const ia = CATEGORY_ORDER.indexOf(a);
@@ -557,9 +560,21 @@ export const DailySalesView: React.FC = () => {
   const parsedCash = Number(cashAmount) || 0;
   const parsedUpi = Number(upiAmount) || 0;
   const parsedAcCharges = counter === 'AC' ? (Number(acChargesAmount) || 0) : 0;
-  const totalPaymentReceived = parsedCash + parsedUpi + parsedAcCharges;
-  const expectedTotal = formCalculatedTotalValue + parsedAcCharges;
-  const paymentDiff = Math.round((totalPaymentReceived - expectedTotal) * 100) / 100;
+  const shiftReconciliation = computeShiftReconciliation({
+    counter,
+    date: reportDate,
+    grossSalesValue: formCalculatedTotalValue,
+    cashAmount: parsedCash,
+    upiAmount: parsedUpi,
+    cardAmount: 0,
+    acCharges: parsedAcCharges,
+    operations,
+  });
+  const totalPaymentReceived = shiftReconciliation.collectedTotal;
+  const expectedTotal = shiftReconciliation.expectedDrawerTotal;
+  const shopOutflowsTotal = shiftReconciliation.shopOutflowsTotal;
+  const shopOutflowsCredited = shiftReconciliation.shopOutflowsCredited;
+  const paymentDiff = shiftReconciliation.staffDifference;
 
   const filteredLines = sortProductsCategoryWise(
     availableLineCalculations.filter(l => {
@@ -659,6 +674,7 @@ export const DailySalesView: React.FC = () => {
   // Build WhatsApp / Clipboard Text
   const generateReportSummaryText = (report: DailySalesReport) => {
     const soldLines = report.lines.filter(l => l.sold > 0);
+    const rec = getReportReconciliation(report, operations);
     let txt = `*MM Residency – Daily Sales Report*\n`;
     txt += `Counter: ${report.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} | Date: ${report.date}\n`;
     txt += `Report ID: ${report.reportId} | Status: ${report.status}\n\n`;
@@ -669,11 +685,15 @@ export const DailySalesView: React.FC = () => {
     txt += `\n*TOTALS:*\n`;
     txt += `Bottles Sold: ${report.totalSoldQty}\n`;
     txt += `Calculated Sales: ${formatCurrency(report.totalSalesValue)}\n`;
+    if (rec.shopOutflowsCredited > 0) {
+      txt += `Less Shop Expenses & Wages (Normal Cash): -${formatCurrency(rec.shopOutflowsCredited)}\n`;
+      txt += `Expected Drawer Total: ${formatCurrency(rec.expectedDrawerTotal)}\n`;
+    }
     txt += `Cash Received: ${formatCurrency(report.cashAmount)}\n`;
     txt += `UPI/Card Received: ${formatCurrency(report.upiAmount + report.cardAmount)}\n`;
     txt += `Total Received: ${formatCurrency(report.recordedAmount)}\n`;
-    if (Math.abs(report.paymentDifference) > 0.009) {
-      txt += `Difference: ${report.paymentDifference > 0 ? '+' : ''}${formatCurrency(report.paymentDifference)} (${report.paymentExplanation || 'N/A'})\n`;
+    if (Math.abs(rec.staffDifference) > 0.009) {
+      txt += `Staff Difference: ${rec.staffDifference > 0 ? '+' : ''}${formatCurrency(rec.staffDifference)} (${report.paymentExplanation || 'N/A'})\n`;
     }
     txt += `Cashier: ${report.cashierName} | Helper: ${report.helperName}\n`;
     return txt;
@@ -759,6 +779,8 @@ export const DailySalesView: React.FC = () => {
         cash: 0,
         upi: 0,
         acCharges: 0,
+        shopOutflowsCredited: 0,
+        expectedDrawerTotal: 0,
         recordedAmount: 0,
         diff: 0,
         invalidCount: 0,
@@ -814,9 +836,17 @@ export const DailySalesView: React.FC = () => {
     const cash = Math.max(0, Number(editCashAmount) || 0);
     const upi = Math.max(0, Number(editUpiAmount) || 0);
     const acCharges = activeViewingReport.counter === 'AC' ? Math.max(0, Number(editAcCharges) || 0) : 0;
-    const recordedAmount = Math.round((cash + upi + (activeViewingReport.cardAmount || 0) + acCharges) * 100) / 100;
     const roundedSalesValue = Math.round(totalSalesValue * 100) / 100;
-    const diff = Math.round((recordedAmount - (roundedSalesValue + acCharges)) * 100) / 100;
+    const editRec = computeShiftReconciliation({
+      counter: activeViewingReport.counter,
+      date: activeViewingReport.date,
+      grossSalesValue: roundedSalesValue,
+      cashAmount: cash,
+      upiAmount: upi,
+      cardAmount: activeViewingReport.cardAmount || 0,
+      acCharges,
+      operations,
+    });
 
     return {
       lines,
@@ -825,8 +855,10 @@ export const DailySalesView: React.FC = () => {
       cash,
       upi,
       acCharges,
-      recordedAmount,
-      diff,
+      shopOutflowsCredited: editRec.shopOutflowsCredited,
+      expectedDrawerTotal: editRec.expectedDrawerTotal,
+      recordedAmount: editRec.collectedTotal,
+      diff: editRec.staffDifference,
       invalidCount,
     };
   }, [
@@ -837,6 +869,7 @@ export const DailySalesView: React.FC = () => {
     editCashAmount,
     editUpiAmount,
     editAcCharges,
+    operations,
   ]);
 
   const handleSaveEditedReport = async (e: React.FormEvent) => {
@@ -1263,7 +1296,7 @@ export const DailySalesView: React.FC = () => {
                 </div>
 
                 <div className="text-xs text-slate-500">
-                  Available Items: {filteredLines.length} of {availableLineCalculations.length} in stock · Leave blank for 0 sold
+                  Available Items: <strong className="font-mono text-slate-700 dark:text-slate-200">{filteredLines.length}</strong> of <strong className="font-mono text-slate-700 dark:text-slate-200">{availableLineCalculations.length}</strong> stocked (<span className="font-mono">{totalAvailableBottles} btls</span>) · Counter Stock synced · Leave blank for 0 sold
                 </div>
               </div>
 
@@ -1417,12 +1450,29 @@ export const DailySalesView: React.FC = () => {
                     )}
                   </div>
 
+                  {counter === 'NORMAL' && shopOutflowsTotal > 0 && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-300 space-y-0.5">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold">Shop Expenses &amp; Wages Paid from Normal Cash ({reportDate})</span>
+                        <span className="font-mono font-bold text-slate-900 dark:text-white">
+                          -{formatCurrency(shopOutflowsCredited)}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                        Automatically credited to Normal drawer · Expected Cash + UPI: <strong className="font-mono text-slate-800 dark:text-slate-200">{formatCurrency(expectedTotal)}</strong>
+                        {shopOutflowsTotal > shopOutflowsCredited && (
+                          <span> · Unabsorbed ({formatCurrency(shopOutflowsTotal - shopOutflowsCredited)}) tracked in Consolidated outflows</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {Math.abs(paymentDiff) > 0.009 && (
                     <div>
                       <div className="mb-1 text-[11px] font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1">
                         <AlertTriangle className="h-3 w-3" />
                         <span>
-                          Difference: {paymentDiff > 0 ? `+${formatCurrency(paymentDiff)} (Excess)` : `${formatCurrency(paymentDiff)} (Short)`} (Submission Allowed)
+                          Staff Difference: {paymentDiff > 0 ? `+${formatCurrency(paymentDiff)} (Excess)` : `${formatCurrency(paymentDiff)} (Short)`} (Submission Allowed)
                         </span>
                       </div>
                       <input
@@ -1449,29 +1499,41 @@ export const DailySalesView: React.FC = () => {
                         </span>
                       </div>
                       <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
-                        <span className="text-slate-500">Calculated Stock Value:</span>
-                        <span className="font-mono font-bold text-emerald-600">{formatCurrency(formCalculatedTotalValue)}</span>
+                        <span className="text-slate-500">Calculated Stock Value (Gross Sales):</span>
+                        <span className="font-mono tabular-nums font-bold text-emerald-600">{formatCurrency(formCalculatedTotalValue)}</span>
                       </div>
+                      {counter === 'NORMAL' && shopOutflowsTotal > 0 && (
+                        <>
+                          <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
+                            <span className="text-slate-500">Less: Shop Expenses &amp; Wages (Normal Cash):</span>
+                            <span className="font-mono tabular-nums font-bold text-slate-700 dark:text-slate-300">-{formatCurrency(shopOutflowsCredited)}</span>
+                          </div>
+                          <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
+                            <span className="text-slate-700 dark:text-slate-300 font-semibold">Expected Normal Drawer Total:</span>
+                            <span className="font-mono tabular-nums font-bold text-slate-900 dark:text-white">{formatCurrency(expectedTotal)}</span>
+                          </div>
+                        </>
+                      )}
                       {counter === 'AC' && (
                         <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
                           <span className="text-purple-700 dark:text-purple-300 font-semibold">Total AC Charges:</span>
-                          <span className="font-mono font-bold text-purple-700 dark:text-purple-300">+{formatCurrency(parsedAcCharges)}</span>
+                          <span className="font-mono tabular-nums font-bold text-purple-700 dark:text-purple-300">+{formatCurrency(parsedAcCharges)}</span>
                         </div>
                       )}
                       <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
                         <span className="text-slate-500">Total Money Received:</span>
-                        <span className="font-mono font-bold text-slate-900 dark:text-white">{formatCurrency(totalPaymentReceived)}</span>
+                        <span className="font-mono tabular-nums font-bold text-slate-900 dark:text-white">{formatCurrency(totalPaymentReceived)}</span>
                       </div>
                       <div className="flex items-center justify-between py-1">
-                        <span className="text-slate-500">Reconciliation:</span>
-                        <span className={`font-mono font-bold ${Math.abs(paymentDiff) <= 0.009 ? 'text-emerald-600' : paymentDiff > 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                        <span className="text-slate-500">Staff Difference:</span>
+                        <span className={`font-mono tabular-nums font-bold ${Math.abs(paymentDiff) <= 0.009 ? 'text-emerald-600' : paymentDiff > 0 ? 'text-blue-600' : 'text-red-600'}`}>
                           {Math.abs(paymentDiff) <= 0.009 ? '✓ Exact Match' : `${paymentDiff > 0 ? '+' : ''}${formatCurrency(paymentDiff)}`}
                         </span>
                       </div>
                     </div>
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    Verify all physical closing bottle counts and cash drawer tallies before submitting this shift report.
+                    Verify physical closing bottle counts and cash drawer tallies before submitting this shift report.
                   </div>
                 </div>
               </div>
@@ -1621,7 +1683,9 @@ export const DailySalesView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {displayedReports.map(report => (
+                {displayedReports.map(report => {
+                  const repRec = getReportReconciliation(report, operations);
+                  return (
                   <tr key={report.reportId} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                     <td className="py-3 px-4 font-mono font-semibold text-slate-900 dark:text-white">
                       {report.date}
@@ -1648,12 +1712,17 @@ export const DailySalesView: React.FC = () => {
                       {formatCurrency(report.totalSalesValue)}
                     </td>
                     <td className="py-3 px-4 font-mono font-bold text-slate-900 dark:text-white">
-                      {formatCurrency(report.recordedAmount)}
+                      <div>{formatCurrency(report.recordedAmount)}</div>
+                      {repRec.shopOutflowsCredited > 0 && (
+                        <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                          Exp/Wages: -{formatCurrency(repRec.shopOutflowsCredited)}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-4 font-mono">
-                      {Math.abs(report.paymentDifference) > 0.009 ? (
-                        <span className={report.paymentDifference < 0 ? 'text-red-600 font-bold' : 'text-blue-600 font-bold'}>
-                          {report.paymentDifference > 0 ? '+' : ''}{formatCurrency(report.paymentDifference)}
+                      {Math.abs(repRec.staffDifference) > 0.009 ? (
+                        <span className={repRec.staffDifference < 0 ? 'text-red-600 font-bold' : 'text-blue-600 font-bold'}>
+                          {repRec.staffDifference > 0 ? '+' : ''}{formatCurrency(repRec.staffDifference)}
                         </span>
                       ) : (
                         <span className="text-emerald-600">✓ Matches</span>
@@ -1663,13 +1732,14 @@ export const DailySalesView: React.FC = () => {
                     <td className="no-print py-3 px-4 text-right">
                       <button
                         onClick={() => openInspectReport(report)}
-                        className="rounded bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+                        className="rounded bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 cursor-pointer whitespace-nowrap shrink-0"
                       >
                         Inspect Report
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1699,21 +1769,34 @@ export const DailySalesView: React.FC = () => {
               )}
             </div>
             <div className="text-right font-mono">
-              <div><strong>Bottles Sold:</strong> {activeViewingReport.totalSoldQty} btls</div>
-              <div><strong>Liquor Sales:</strong> {formatCurrency(activeViewingReport.totalSalesValue)}</div>
-              {activeViewingReport.counter === 'AC' && (
-                <div><strong>AC Charges:</strong> {formatCurrency(activeViewingReport.acCharges || 0)}</div>
-              )}
-              <div>
-                <strong>Cash / UPI:</strong> {formatCurrency(activeViewingReport.cashAmount)} / {formatCurrency(activeViewingReport.upiAmount)}
-              </div>
-              <div><strong>Total Collected:</strong> {formatCurrency(activeViewingReport.recordedAmount)}</div>
-              <div>
-                <strong>Difference:</strong>{' '}
-                {Math.abs(activeViewingReport.paymentDifference) <= 0.009
-                  ? 'Exact Match (0.00)'
-                  : `${activeViewingReport.paymentDifference > 0 ? '+' : ''}${formatCurrency(activeViewingReport.paymentDifference)}`}
-              </div>
+              {(() => {
+                const viewRec = getReportReconciliation(activeViewingReport, operations);
+                return (
+                  <>
+                    <div><strong>Bottles Sold:</strong> {activeViewingReport.totalSoldQty} btls</div>
+                    <div><strong>Liquor Sales:</strong> {formatCurrency(activeViewingReport.totalSalesValue)}</div>
+                    {viewRec.shopOutflowsCredited > 0 && (
+                      <>
+                        <div><strong>Less Shop Expenses &amp; Wages (Normal Cash):</strong> -{formatCurrency(viewRec.shopOutflowsCredited)}</div>
+                        <div><strong>Expected Drawer Total:</strong> {formatCurrency(viewRec.expectedDrawerTotal)}</div>
+                      </>
+                    )}
+                    {activeViewingReport.counter === 'AC' && (
+                      <div><strong>AC Charges:</strong> {formatCurrency(activeViewingReport.acCharges || 0)}</div>
+                    )}
+                    <div>
+                      <strong>Cash / UPI:</strong> {formatCurrency(activeViewingReport.cashAmount)} / {formatCurrency(activeViewingReport.upiAmount)}
+                    </div>
+                    <div><strong>Total Collected:</strong> {formatCurrency(activeViewingReport.recordedAmount)}</div>
+                    <div>
+                      <strong>Staff Difference:</strong>{' '}
+                      {Math.abs(viewRec.staffDifference) <= 0.009
+                        ? 'Exact Match (0.00)'
+                        : `${viewRec.staffDifference > 0 ? '+' : ''}${formatCurrency(viewRec.staffDifference)}`}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
 
@@ -1961,15 +2044,25 @@ export const DailySalesView: React.FC = () => {
                   <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
                     <span className="text-slate-500">Updated Sales Value</span>
                     <div className="font-mono text-base font-bold text-emerald-600">{formatCurrency(editPreview.totalSalesValue)}</div>
+                    {editPreview.shopOutflowsCredited > 0 && (
+                      <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                        Less Exp/Wages: -{formatCurrency(editPreview.shopOutflowsCredited)}
+                      </div>
+                    )}
                   </div>
                   <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
                     <span className="text-slate-500">Total Collected</span>
                     <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{formatCurrency(editPreview.recordedAmount)}</div>
+                    {editPreview.shopOutflowsCredited > 0 && (
+                      <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                        Expected: {formatCurrency(editPreview.expectedDrawerTotal)}
+                      </div>
+                    )}
                   </div>
                   <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
-                    <span className="text-slate-500">Updated Difference</span>
+                    <span className="text-slate-500">Staff Difference</span>
                     <div className={`font-mono text-base font-bold ${Math.abs(editPreview.diff) <= 0.009 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {Math.abs(editPreview.diff) <= 0.009 ? '0.00' : formatCurrency(editPreview.diff)}
+                      {Math.abs(editPreview.diff) <= 0.009 ? '✓ Matches' : `${editPreview.diff > 0 ? '+' : ''}${formatCurrency(editPreview.diff)}`}
                     </div>
                   </div>
                 </div>
@@ -2127,28 +2220,43 @@ export const DailySalesView: React.FC = () => {
                 )}
 
                 {/* Quick Metrics */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
-                    <span className="text-slate-500">Sold Quantity</span>
-                    <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{activeViewingReport.totalSoldQty} btls</div>
-                  </div>
-                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
-                    <span className="text-slate-500">Sales Value</span>
-                    <div className="font-mono text-base font-bold text-emerald-600">{formatCurrency(activeViewingReport.totalSalesValue)}</div>
-                  </div>
-                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
-                    <span className="text-slate-500">Cash / UPI</span>
-                    <div className="font-mono text-base font-bold text-slate-900 dark:text-white">
-                      {formatCurrency(activeViewingReport.cashAmount)} / {formatCurrency(activeViewingReport.upiAmount)}
+                {(() => {
+                  const viewRec = getReportReconciliation(activeViewingReport, operations);
+                  return (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                        <span className="text-slate-500">Sold Quantity</span>
+                        <div className="font-mono text-base font-bold text-slate-900 dark:text-white">{activeViewingReport.totalSoldQty} btls</div>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                        <span className="text-slate-500">Sales Value</span>
+                        <div className="font-mono text-base font-bold text-emerald-600">{formatCurrency(activeViewingReport.totalSalesValue)}</div>
+                        {viewRec.shopOutflowsCredited > 0 && (
+                          <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                            Less Exp/Wages: -{formatCurrency(viewRec.shopOutflowsCredited)}
+                          </div>
+                        )}
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                        <span className="text-slate-500">Cash / UPI</span>
+                        <div className="font-mono text-base font-bold text-slate-900 dark:text-white">
+                          {formatCurrency(activeViewingReport.cashAmount)} / {formatCurrency(activeViewingReport.upiAmount)}
+                        </div>
+                        {viewRec.shopOutflowsCredited > 0 && (
+                          <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                            Expected Drawer: {formatCurrency(viewRec.expectedDrawerTotal)}
+                          </div>
+                        )}
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                        <span className="text-slate-500">Staff Difference</span>
+                        <div className={`font-mono text-base font-bold ${Math.abs(viewRec.staffDifference) <= 0.009 ? 'text-emerald-600' : viewRec.staffDifference > 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                          {Math.abs(viewRec.staffDifference) <= 0.009 ? '✓ Matches' : `${viewRec.staffDifference > 0 ? '+' : ''}${formatCurrency(viewRec.staffDifference)}`}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
-                    <span className="text-slate-500">Difference</span>
-                    <div className={`font-mono text-base font-bold ${Math.abs(activeViewingReport.paymentDifference) <= 0.009 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {Math.abs(activeViewingReport.paymentDifference) <= 0.009 ? '0.00' : formatCurrency(activeViewingReport.paymentDifference)}
-                    </div>
-                  </div>
-                </div>
+                  );
+                })()}
 
                 {/* Lines List */}
                 <div className="rounded-xl border border-slate-200 overflow-hidden dark:border-slate-800">
@@ -2525,7 +2633,7 @@ export const DailySalesView: React.FC = () => {
             </div>
 
             {/* Financial Summary Tiles */}
-            <div className={`grid grid-cols-2 ${counter === 'AC' ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2.5 text-xs`}>
+            <div className={`grid grid-cols-2 ${counter === 'AC' || shopOutflowsCredited > 0 ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2.5 text-xs`}>
               <div className="rounded-xl bg-amber-50/70 p-3 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40">
                 <span className="text-[10px] font-bold text-amber-800 dark:text-amber-300 uppercase">Bottles Sold</span>
                 <div className="font-mono text-base font-black text-amber-950 dark:text-amber-200 mt-0.5">
@@ -2538,6 +2646,15 @@ export const DailySalesView: React.FC = () => {
                   {formatCurrency(formCalculatedTotalValue)}
                 </div>
               </div>
+              {counter === 'NORMAL' && shopOutflowsCredited > 0 && (
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase">Exp &amp; Wages</span>
+                  <div className="font-mono text-base font-bold text-slate-900 dark:text-white mt-0.5">
+                    -{formatCurrency(shopOutflowsCredited)}
+                  </div>
+                  <span className="text-[10px] text-slate-400">Expected: {formatCurrency(expectedTotal)}</span>
+                </div>
+              )}
               {counter === 'AC' && (
                 <div className="rounded-xl bg-purple-50/70 p-3 dark:bg-purple-950/30 border border-purple-200/60 dark:border-purple-900/40">
                   <span className="text-[10px] font-bold text-purple-800 dark:text-purple-300 uppercase">AC Charges</span>
@@ -2553,7 +2670,7 @@ export const DailySalesView: React.FC = () => {
                 </div>
               </div>
               <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
-                <span className="text-[10px] font-bold text-slate-500 uppercase">Difference</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Staff Difference</span>
                 <div className={`font-mono text-xs font-bold mt-1 ${Math.abs(paymentDiff) > 0.009 ? (paymentDiff > 0 ? 'text-blue-600' : 'text-red-600') : 'text-emerald-600'}`}>
                   {Math.abs(paymentDiff) <= 0.009 ? '✓ Exact Match' : `${paymentDiff > 0 ? '+' : ''}${formatCurrency(paymentDiff)}`}
                 </div>

@@ -31,6 +31,7 @@ import {
   syncSlicesToFirestore,
   type WorkspaceSnapshot,
 } from '../utils/firestoreSync';
+import { computeShiftReconciliation, getReportReconciliation } from '../utils/reconciliation';
 
 export interface VerificationDetails {
   email: string;
@@ -2231,7 +2232,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const lastApproved = dailySales
-      .filter(r => r.counter === counter && r.status === 'Approved' && r.date < date)
+      .filter(
+        r =>
+          r.counter === counter &&
+          r.status === 'Approved' &&
+          r.date < date &&
+          !r.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY')
+      )
       .sort((a, b) => b.date.localeCompare(a.date))[0];
 
     const openingMap = new Map<string, number>();
@@ -2243,33 +2250,51 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const transferInMap = new Map<string, number>();
     const transferOutMap = new Map<string, number>();
     const damageOutMap = new Map<string, number>();
+    const postDateDeltaMap = new Map<string, number>();
 
-    ledger.filter(l => l.location === counter && l.businessDate === date).forEach(l => {
-      if (l.delta > 0) {
-        if (l.refType === 'REQUEST') godownInMap.set(l.productId, (godownInMap.get(l.productId) || 0) + l.delta);
-        else if (l.refType === 'TRANSFER') transferInMap.set(l.productId, (transferInMap.get(l.productId) || 0) + l.delta);
-      } else if (l.delta < 0) {
-        if (l.refType === 'DAMAGE') damageOutMap.set(l.productId, (damageOutMap.get(l.productId) || 0) - l.delta);
-        else if (l.refType === 'TRANSFER' || l.refType === 'REQUEST') transferOutMap.set(l.productId, (transferOutMap.get(l.productId) || 0) - l.delta);
+    ledger.filter(l => l.location === counter).forEach(l => {
+      if (l.businessDate > date) {
+        postDateDeltaMap.set(l.productId, (postDateDeltaMap.get(l.productId) || 0) + l.delta);
+        return;
+      }
+      if (l.businessDate === date) {
+        if (l.delta > 0) {
+          if (l.refType === 'REQUEST') godownInMap.set(l.productId, (godownInMap.get(l.productId) || 0) + l.delta);
+          else if (l.refType === 'TRANSFER') transferInMap.set(l.productId, (transferInMap.get(l.productId) || 0) + l.delta);
+        } else if (l.delta < 0) {
+          if (l.refType === 'DAMAGE') damageOutMap.set(l.productId, (damageOutMap.get(l.productId) || 0) - l.delta);
+          else if (l.refType === 'TRANSFER' || l.refType === 'REQUEST') transferOutMap.set(l.productId, (transferOutMap.get(l.productId) || 0) - l.delta);
+        }
       }
     });
 
     const counterKey = counter.toLowerCase() as 'normal' | 'ac';
 
-    const lines = products.filter(p => p.active).map(p => {
+    const eligibleProducts = products.filter(p => {
       const liveQty = stock[p.productId]?.[counterKey] || 0;
       const gIn = godownInMap.get(p.productId) || 0;
       const tIn = transferInMap.get(p.productId) || 0;
       const tOut = transferOutMap.get(p.productId) || 0;
       const dOut = damageOutMap.get(p.productId) || 0;
+      return p.active || liveQty > 0 || gIn > 0 || tIn > 0 || tOut > 0 || dOut > 0;
+    });
 
-      const hasPriorClosing = openingMap.has(p.productId);
-      const avail = hasPriorClosing
-        ? Math.max(0, openingMap.get(p.productId)! + gIn + tIn - tOut - dOut)
-        : liveQty;
-      const open = hasPriorClosing
-        ? openingMap.get(p.productId)!
-        : Math.max(0, liveQty - gIn - tIn + tOut + dOut);
+    const lines = eligibleProducts.map(p => {
+      const liveQty = stock[p.productId]?.[counterKey] || 0;
+      const gIn = godownInMap.get(p.productId) || 0;
+      const tIn = transferInMap.get(p.productId) || 0;
+      const tOut = transferOutMap.get(p.productId) || 0;
+      const dOut = damageOutMap.get(p.productId) || 0;
+      const postDelta = postDateDeltaMap.get(p.productId) || 0;
+
+      // Anchor available stock to live Counter Stock (adjusted only for ledger entries dated strictly after `date`)
+      const avail = Math.max(0, liveQty - postDelta);
+      const derivedOpen = Math.max(0, avail - gIn - tIn + tOut + dOut);
+      const priorClosing = openingMap.get(p.productId);
+      const open =
+        priorClosing !== undefined && priorClosing + gIn + tIn - tOut - dOut === avail
+          ? priorClosing
+          : derivedOpen;
 
       return {
         productId: p.productId,
@@ -2351,10 +2376,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     });
 
-    const acCharges = counter === 'AC' ? (Number(data.acCharges) || 0) : 0;
-    const totalCollected = data.cashAmount + data.upiAmount + data.cardAmount + acCharges;
-    const expected = totalVal + acCharges;
-    const diff = Math.round((totalCollected - expected) * 100) / 100;
+    const rec = computeShiftReconciliation({
+      counter,
+      date: data.date,
+      grossSalesValue: totalVal,
+      cashAmount: data.cashAmount,
+      upiAmount: data.upiAmount,
+      cardAmount: data.cardAmount,
+      acCharges: data.acCharges,
+      operations: latestRef.current.operations,
+    });
+    const acCharges = rec.acCharges;
+    const diff = rec.staffDifference;
 
     const dirtySlices = ['dailySales', 'auditLog'];
     const moves = reportLines.filter(l => l.sold > 0).map(l => ({
@@ -2458,7 +2491,16 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       cardAmount: 0,
       cashierName: 'Historical Entry',
       helperName: 'Admin Recorded',
-      paymentDifference: Math.round((data.recordedAmount - totalVal) * 100) / 100,
+      paymentDifference: computeShiftReconciliation({
+        counter: data.counter,
+        date: data.date,
+        grossSalesValue: totalVal,
+        cashAmount: data.recordedAmount,
+        upiAmount: 0,
+        cardAmount: 0,
+        acCharges: 0,
+        operations: curState.operations,
+      }).staffDifference,
       paymentExplanation: data.reason,
       cutoffSeq: 0,
       submittedBy: currentUser.username,
@@ -2585,7 +2627,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       data.cashAmount !== undefined || data.upiAmount !== undefined || data.acCharges !== undefined
         ? Math.round((nextCash + nextUpi + (report.cardAmount || 0) + nextAcCharges) * 100) / 100
         : data.recordedAmount;
-    const nextDiff = Math.round((nextRecordedAmount - (nextSalesVal + nextAcCharges)) * 100) / 100;
+    const editRec = computeShiftReconciliation({
+      counter: report.counter,
+      date: report.date,
+      grossSalesValue: nextSalesVal,
+      cashAmount: nextCash,
+      upiAmount: nextUpi,
+      cardAmount: report.cardAmount || 0,
+      acCharges: nextAcCharges,
+      recordedAmountFallback: nextRecordedAmount,
+      operations: latestRef.current.operations,
+    });
+    const nextDiff = Math.round((nextRecordedAmount - editRec.expectedDrawerTotal) * 100) / 100;
     const nextCashier = data.cashierName !== undefined ? data.cashierName.trim() : report.cashierName;
     const nextHelper = data.helperName !== undefined ? data.helperName.trim() : report.helperName;
     const nextExplanation =
@@ -2792,6 +2845,29 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     await syncToServer(['deletedDailySales', 'auditLog'], { deletedDailySales: [reportId] });
   };
 
+  // Keep persisted Normal Counter report paymentDifference synced when EXPENSE/WAGE rows change
+  const resyncNormalSalesForDates = (
+    dates: string[],
+    nextOperations: DailyOperation[],
+    currentSales: DailySalesReport[]
+  ): { nextSales: DailySalesReport[]; changed: boolean } => {
+    const dateSet = new Set(dates.filter(Boolean));
+    if (dateSet.size === 0) return { nextSales: currentSales, changed: false };
+    let changed = false;
+    const nextSales = currentSales.map(rep => {
+      if (rep.counter !== 'NORMAL' || rep.status === 'Rejected' || !dateSet.has(rep.date)) {
+        return rep;
+      }
+      const nextDiff = getReportReconciliation(rep, nextOperations).staffDifference;
+      if (Math.abs((rep.paymentDifference || 0) - nextDiff) > 0.009) {
+        changed = true;
+        return { ...rep, paymentDifference: nextDiff };
+      }
+      return rep;
+    });
+    return { nextSales, changed };
+  };
+
   // Daily Operations
   const saveDailyOperation = async (data: {
     type: 'EXPENSE' | 'WAGE' | 'ROOM' | 'DAMAGE'; date: string; name: string;
@@ -2839,8 +2915,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       reviewedAt: now
     };
 
+    const nextOperations = [newOp, ...latestRef.current.operations];
+    const updates: Partial<WorkspaceSnapshot> = { operations: nextOperations };
+    if (data.type === 'EXPENSE' || data.type === 'WAGE') {
+      const synced = resyncNormalSalesForDates([data.date], nextOperations, latestRef.current.dailySales);
+      if (synced.changed) {
+        updates.dailySales = synced.nextSales;
+        dirtySlices.push('dailySales');
+      }
+    }
+
     const auditEntry = buildAuditEntry('DAILY_OPERATION_SAVED', opId, `${data.type} | ${data.date} | ${data.name} | ₹${data.amount || data.qty}`);
-    commitLocalState({ operations: [newOp, ...latestRef.current.operations] }, [auditEntry]);
+    commitLocalState(updates, [auditEntry]);
     await syncToServer(dirtySlices);
     return opId;
   };
@@ -2874,9 +2960,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     });
 
+    const nextOperations = [...newOps, ...latestRef.current.operations];
+    const dirtySlices = ['operations', 'auditLog'];
+    const updates: Partial<WorkspaceSnapshot> = { operations: nextOperations };
+    const synced = resyncNormalSalesForDates([data.date], nextOperations, latestRef.current.dailySales);
+    if (synced.changed) {
+      updates.dailySales = synced.nextSales;
+      dirtySlices.push('dailySales');
+    }
+
     const auditEntry = buildAuditEntry('DAILY_OPERATIONS_BATCH', newOps[0].operationId, `${data.type} batch: ${newOps.length} items | ₹${total}`);
-    commitLocalState({ operations: [...newOps, ...latestRef.current.operations] }, [auditEntry]);
-    await syncToServer(['operations', 'auditLog']);
+    commitLocalState(updates, [auditEntry]);
+    await syncToServer(dirtySlices);
     return { count: newOps.length, total: Math.round(total * 100) / 100 };
   };
 
@@ -2893,8 +2988,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
+    const nextOperations = latestRef.current.operations.filter(o => o.operationId !== operationId);
+    const updates: Partial<WorkspaceSnapshot> = { operations: nextOperations };
+    if (op.type === 'EXPENSE' || op.type === 'WAGE') {
+      const synced = resyncNormalSalesForDates([op.date], nextOperations, latestRef.current.dailySales);
+      if (synced.changed) {
+        updates.dailySales = synced.nextSales;
+        dirtySlices.push('dailySales');
+      }
+    }
+
     const auditEntry = buildAuditEntry('DAILY_OPERATION_DELETED', operationId, `${op.type} | ${op.date} | ${op.name} | ₹${op.amount || op.qty || 0}`);
-    commitLocalState({ operations: latestRef.current.operations.filter(o => o.operationId !== operationId) }, [auditEntry]);
+    commitLocalState(updates, [auditEntry]);
     await syncToServer(dirtySlices, { operations: [operationId] });
   };
 
@@ -2919,8 +3024,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         : o
     );
 
+    const updates: Partial<WorkspaceSnapshot> = { operations: nextOps };
+    if (op.type === 'EXPENSE' || op.type === 'WAGE') {
+      const synced = resyncNormalSalesForDates([op.date], nextOps, latestRef.current.dailySales);
+      if (synced.changed) {
+        updates.dailySales = synced.nextSales;
+        dirtySlices.push('dailySales');
+      }
+    }
+
     const auditEntry = buildAuditEntry(`DAILY_OPERATION_${decision}`, id, `${op.type} | ${remark || ''}`);
-    commitLocalState({ operations: nextOps }, [auditEntry]);
+    commitLocalState(updates, [auditEntry]);
     await syncToServer(dirtySlices);
   };
 

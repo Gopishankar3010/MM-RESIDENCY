@@ -175,7 +175,7 @@ export const ExpensesWagesView: React.FC = () => {
             Expenses & Wages
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Record operational costs and daily helper/cashier wage payouts for {businessDate}
+            Record operational costs and daily helper/cashier wage payouts for {businessDate} · Paid from Normal Counter cash and auto-credited in Daily Sales
           </p>
         </div>
 

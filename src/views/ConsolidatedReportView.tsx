@@ -17,6 +17,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { CounterLocation, DailySalesReport } from '../types';
+import { getReportReconciliation, roundCurrency } from '../utils/reconciliation';
 
 export const ConsolidatedReportView: React.FC = () => {
   const { currentUser, businessDate, dailySales, operations, purchases, adminDeleteDailySales } = useStock();
@@ -84,20 +85,23 @@ export const ConsolidatedReportView: React.FC = () => {
   const normalSale = getReportForCounter('NORMAL', selectedDate);
   const acSale = getReportForCounter('AC', selectedDate);
 
-  // Normal Counter Metrics
+  // Normal Counter Metrics (Shop Expenses & Wages are paid out of Normal Counter cash)
+  const normalRec = normalSale ? getReportReconciliation(normalSale, operations) : null;
   const normalCash = normalSale?.cashAmount || 0;
   const normalUpi = (normalSale?.upiAmount || 0) + (normalSale?.cardAmount || 0);
   const normalValue = normalSale?.totalSalesValue || 0;
   const normalTotalReceived = normalCash + normalUpi;
-  const normalDiff = normalSale?.paymentDifference || 0;
+  const normalShopOutflowsCredited = normalRec ? normalRec.shopOutflowsCredited : 0;
+  const normalDiff = normalRec ? normalRec.staffDifference : 0;
 
   // AC Counter Metrics (clean structure matching normal counter + shift AC charges)
+  const acRec = acSale ? getReportReconciliation(acSale, operations) : null;
   const acCash = acSale?.cashAmount || 0;
   const acUpi = (acSale?.upiAmount || 0) + (acSale?.cardAmount || 0);
   const acCharges = acSale?.acCharges || 0;
   const acValue = acSale?.totalSalesValue || 0;
   const acTotalReceived = acCash + acUpi + acCharges;
-  const acDiff = acSale?.paymentDifference || 0;
+  const acDiff = acRec ? acRec.staffDifference : 0;
 
   // Combined Bar totals
   const totalSalesCash = normalCash + acCash;
@@ -112,17 +116,18 @@ export const ConsolidatedReportView: React.FC = () => {
   const roomUpi = roomOps.filter(r => r.payment === 'UPI' || r.payment === 'Card').reduce((s, r) => s + r.amount, 0);
   const totalRoomRent = roomCash + roomUpi;
 
-  // Approved Expenses and Wages on selected date (only visible to Admin and Normal Counter)
+  // Approved Expenses and Wages on selected date (paid from Normal Counter cash drawer)
   const expenseOps = operations.filter(o => o.type === 'EXPENSE' && o.date === selectedDate && o.status === 'Approved');
   const wageOps = operations.filter(o => o.type === 'WAGE' && o.date === selectedDate && o.status === 'Approved');
 
   const totalExpenses = expenseOps.reduce((s, o) => s + o.amount, 0);
   const totalWages = wageOps.reduce((s, o) => s + o.amount, 0);
-  const totalOutflows = totalExpenses + totalWages;
+  const totalOutflows = roundCurrency(totalExpenses + totalWages);
+  const unabsorbedOutflows = Math.max(0, roundCurrency(totalOutflows - normalShopOutflowsCredited));
 
-  // Gross and Net Collections for Admin / Non-AC view
-  const totalInflows = totalSalesCash + totalSalesUpi + totalRoomRent + totalAcCharges;
-  const netSurplus = totalInflows - totalOutflows;
+  // Net Collections: Normal Cash+UPI is already net of Normal-cash shop expenses/wages once submitted
+  const totalInflows = roundCurrency(totalSalesCash + totalSalesUpi + totalRoomRent + totalAcCharges);
+  const netSurplus = roundCurrency(totalInflows - unabsorbedOutflows);
 
   // ==========================================
   // DATE-RANGE REPORTS & EXPORTS HUB STATE
@@ -242,18 +247,21 @@ export const ConsolidatedReportView: React.FC = () => {
       const nSale = getReportForCounter('NORMAL', date);
       const aSale = getReportForCounter('AC', date);
 
+      const nRec = nSale ? getReportReconciliation(nSale, operations) : null;
       const nVal = nSale?.totalSalesValue || 0;
       const nCash = nSale?.cashAmount || 0;
       const nUpi = (nSale?.upiAmount || 0) + (nSale?.cardAmount || 0);
       const nTotal = nCash + nUpi;
-      const nDiff = nSale?.paymentDifference || 0;
+      const nExpCredited = nRec ? nRec.shopOutflowsCredited : 0;
+      const nDiff = nRec ? nRec.staffDifference : 0;
 
+      const aRec = aSale ? getReportReconciliation(aSale, operations) : null;
       const aVal = aSale?.totalSalesValue || 0;
       const aCash = aSale?.cashAmount || 0;
       const aUpi = (aSale?.upiAmount || 0) + (aSale?.cardAmount || 0);
       const aCharges = aSale?.acCharges || 0;
       const aTotal = aCash + aUpi + aCharges;
-      const aDiff = aSale?.paymentDifference || 0;
+      const aDiff = aRec ? aRec.staffDifference : 0;
 
       const rOps = operations.filter(o => o.type === 'ROOM' && o.date === date && o.status === 'Approved');
       const rTotal = rOps.reduce((s, r) => s + r.amount, 0);
@@ -264,10 +272,12 @@ export const ConsolidatedReportView: React.FC = () => {
       const wOps = operations.filter(o => o.type === 'WAGE' && o.date === date && o.status === 'Approved');
       const wTotal = wOps.reduce((s, w) => s + w.amount, 0);
 
-      const barTotal = nVal + aVal;
-      const totalIn = nCash + nUpi + aCash + aUpi + aCharges + rTotal;
-      const totalOut = expTotal + wTotal;
-      const surplus = totalIn - totalOut;
+      const barTotal = roundCurrency(nVal + aVal);
+      const totalIn = roundCurrency(nCash + nUpi + aCash + aUpi + aCharges + rTotal);
+      const totalOut = roundCurrency(expTotal + wTotal);
+      const unabsorbedOut = Math.max(0, roundCurrency(totalOut - nExpCredited));
+      const surplus = roundCurrency(totalIn - unabsorbedOut);
+      const staffDiffTotal = roundCurrency(nDiff + aDiff);
 
       return {
         date,
@@ -277,6 +287,7 @@ export const ConsolidatedReportView: React.FC = () => {
         normalCash: nCash,
         normalUpi: nUpi,
         normalTotal: nTotal,
+        normalExpCredited: nExpCredited,
         normalDiff: nDiff,
         acValue: aVal,
         acCash: aCash,
@@ -284,6 +295,7 @@ export const ConsolidatedReportView: React.FC = () => {
         acCharges: aCharges,
         acTotalReceived: aTotal,
         acDiff: aDiff,
+        staffDiffTotal,
         barTotal,
         roomRent: rTotal,
         expenses: expTotal,
@@ -416,10 +428,11 @@ export const ConsolidatedReportView: React.FC = () => {
           'Cashier',
           'Helper',
           'Liquor Sales Value (Rs)',
+          'Shop Expenses & Wages Credited (Rs)',
           'Cash Received (Rs)',
           'UPI/Card Received (Rs)',
           'Total Received (Rs)',
-          'Difference (Rs)',
+          'Staff Difference (Rs)',
           'Status'
         ];
         const dataRows = filteredConsolidatedData.map(d => [
@@ -428,6 +441,7 @@ export const ConsolidatedReportView: React.FC = () => {
           d.nSale?.cashierName || '—',
           d.nSale?.helperName || '—',
           d.normalValue,
+          d.normalExpCredited,
           d.normalCash,
           d.normalUpi,
           d.normalTotal,
@@ -445,6 +459,7 @@ export const ConsolidatedReportView: React.FC = () => {
           'Room Rent (Rs)',
           'Expenses (Rs)',
           'Wages (Rs)',
+          'Staff Difference (Rs)',
           'Net Surplus (Rs)'
         ];
         const dataRows = filteredConsolidatedData.map(d => [
@@ -456,6 +471,7 @@ export const ConsolidatedReportView: React.FC = () => {
           d.roomRent,
           d.expenses,
           d.wages,
+          d.staffDiffTotal,
           d.netSurplus
         ]);
         exportCsv(`MM_Residency_Consolidated_Financials_${fromDate}_to_${toDate}.csv`, [headers, ...dataRows]);
@@ -859,7 +875,11 @@ export const ConsolidatedReportView: React.FC = () => {
                 <div className="font-mono text-lg font-black text-emerald-600 dark:text-emerald-400 mt-1">
                   {formatCurrency(normalCash)}
                 </div>
-                <span className="text-[10px] text-slate-400">Drawer physical cash</span>
+                <span className="text-[10px] text-slate-400">
+                  {normalShopOutflowsCredited > 0
+                    ? `Net of ${formatCurrency(normalShopOutflowsCredited)} shop exp/wages`
+                    : 'Drawer physical cash'}
+                </span>
               </div>
 
               <div className="print-card rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
@@ -876,7 +896,10 @@ export const ConsolidatedReportView: React.FC = () => {
                   {formatCurrency(normalTotalReceived)}
                 </div>
                 <span className="text-[10px] text-slate-400">
-                  Diff: {Math.abs(normalDiff) > 0.009 ? formatCurrency(normalDiff) : '✓ Matches'}
+                  Staff Diff:{' '}
+                  {Math.abs(normalDiff) > 0.009
+                    ? `${normalDiff > 0 ? '+' : ''}${formatCurrency(normalDiff)}`
+                    : '✓ Matches'}
                 </span>
               </div>
             </div>
@@ -912,7 +935,9 @@ export const ConsolidatedReportView: React.FC = () => {
                 <div className="font-mono text-lg font-black text-red-600 dark:text-red-400 mt-1">
                   {formatCurrency(totalOutflows)}
                 </div>
-                <span className="text-[10px] text-slate-400">Exp: {formatCurrency(totalExpenses)} · Wage: {formatCurrency(totalWages)}</span>
+                <span className="text-[10px] text-slate-400">
+                  Exp: {formatCurrency(totalExpenses)} · Wage: {formatCurrency(totalWages)} (Normal Cash)
+                </span>
               </div>
 
               <div className="print-card col-span-2 sm:col-span-1 rounded-xl border border-amber-300 bg-amber-50/70 p-4 shadow-xs dark:border-amber-700/60 dark:bg-amber-950/30">
@@ -922,7 +947,11 @@ export const ConsolidatedReportView: React.FC = () => {
                 <div className="font-mono text-xl font-black text-amber-950 dark:text-amber-200 mt-1">
                   {formatCurrency(netSurplus)}
                 </div>
-                <span className="text-[10px] text-amber-800 dark:text-amber-300">All inflows minus outflows</span>
+                <span className="text-[10px] text-amber-800 dark:text-amber-300">
+                  {normalShopOutflowsCredited > 0
+                    ? `Cash & UPI in hand (already net of ${formatCurrency(normalShopOutflowsCredited)} Normal exp/wages)`
+                    : 'All cash & UPI inflows minus outflows'}
+                </span>
               </div>
             </div>
           )}
@@ -959,7 +988,7 @@ export const ConsolidatedReportView: React.FC = () => {
                     <th className="py-3 px-4">Cash Received</th>
                     <th className="py-3 px-4">UPI / Card Received</th>
                     <th className="py-3 px-4 bg-emerald-50/40 dark:bg-emerald-950/20 font-bold">Total Received</th>
-                    <th className="py-3 px-4">Difference</th>
+                    <th className="py-3 px-4">Staff Difference</th>
                     <th className="py-3 px-4">Status</th>
                     {isAdmin && <th className="no-print py-3 px-4 text-right">Manage Report</th>}
                   </tr>
@@ -968,7 +997,14 @@ export const ConsolidatedReportView: React.FC = () => {
                   {/* Normal Counter Row (Hidden for AC user) */}
                   {activeCounterView !== 'AC' && (
                     <tr>
-                      <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">Normal Counter</td>
+                      <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
+                        <div>Normal Counter</div>
+                        {normalShopOutflowsCredited > 0 && (
+                          <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                            Exp &amp; Wages credited: -{formatCurrency(normalShopOutflowsCredited)}
+                          </div>
+                        )}
+                      </td>
                       <td className="py-3 px-4 font-mono font-bold">{formatCurrency(normalValue)}</td>
                       {activeCounterView === 'ALL' && (
                         <td className="py-3 px-4 text-slate-400 font-mono">—</td>
@@ -976,13 +1012,20 @@ export const ConsolidatedReportView: React.FC = () => {
                       <td className="py-3 px-4 font-mono">{formatCurrency(normalCash)}</td>
                       <td className="py-3 px-4 font-mono">{formatCurrency(normalUpi)}</td>
                       <td className="py-3 px-4 font-mono font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50/20 dark:bg-emerald-950/10">
-                        {formatCurrency(normalTotalReceived)}
+                        <div>{formatCurrency(normalTotalReceived)}</div>
+                        {normalShopOutflowsCredited > 0 && normalRec && (
+                          <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                            Expected: {formatCurrency(normalRec.expectedDrawerTotal)}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3 px-4 font-mono">
                         {Math.abs(normalDiff) > 0.009 ? (
-                          <span className="text-red-600 font-bold">{formatCurrency(normalDiff)}</span>
+                          <span className={normalDiff < 0 ? 'text-red-600 font-bold' : 'text-blue-600 font-bold'}>
+                            {normalDiff > 0 ? '+' : ''}{formatCurrency(normalDiff)}
+                          </span>
                         ) : (
-                          <span className="text-emerald-600">✓ Matches</span>
+                          <span className="text-emerald-600 font-semibold">✓ Matches</span>
                         )}
                       </td>
                       <td className="py-3 px-4">
@@ -1045,9 +1088,11 @@ export const ConsolidatedReportView: React.FC = () => {
                       </td>
                       <td className="py-3 px-4 font-mono">
                         {Math.abs(acDiff) > 0.009 ? (
-                          <span className="text-red-600 font-bold">{formatCurrency(acDiff)}</span>
+                          <span className={acDiff < 0 ? 'text-red-600 font-bold' : 'text-blue-600 font-bold'}>
+                            {acDiff > 0 ? '+' : ''}{formatCurrency(acDiff)}
+                          </span>
                         ) : (
-                          <span className="text-emerald-600">✓ Matches</span>
+                          <span className="text-emerald-600 font-semibold">✓ Matches</span>
                         )}
                       </td>
                       <td className="py-3 px-4">
@@ -1106,7 +1151,15 @@ export const ConsolidatedReportView: React.FC = () => {
                       <td className="py-3 px-4 font-mono text-emerald-600 dark:text-emerald-400">
                         {formatCurrency(totalCombinedReceived)}
                       </td>
-                      <td className="py-3 px-4 font-mono">{formatCurrency(normalDiff + acDiff)}</td>
+                      <td className="py-3 px-4 font-mono">
+                        {Math.abs(normalDiff + acDiff) > 0.009 ? (
+                          <span className={normalDiff + acDiff < 0 ? 'text-red-600' : 'text-blue-600'}>
+                            {normalDiff + acDiff > 0 ? '+' : ''}{formatCurrency(normalDiff + acDiff)}
+                          </span>
+                        ) : (
+                          <span className="text-emerald-600">✓ Matches</span>
+                        )}
+                      </td>
                       <td className="py-3 px-4 text-slate-500 text-[10px]">Verified</td>
                       {isAdmin && <td className="no-print py-3 px-4" />}
                     </tr>
@@ -1257,10 +1310,15 @@ export const ConsolidatedReportView: React.FC = () => {
               {/* Expenses & Wages Detail */}
               <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-3">
                 <div className="flex items-center justify-between border-b pb-2 dark:border-slate-800">
-                  <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                    Operating Deductions ({selectedDate})
-                  </h3>
-                  <span className="font-mono text-xs font-bold text-red-600">
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                      Operating Deductions ({selectedDate})
+                    </h3>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                      Paid from Normal Counter cash drawer · Automatically offset from Normal Counter staff difference
+                    </p>
+                  </div>
+                  <span className="font-mono text-xs font-bold text-red-600 whitespace-nowrap shrink-0">
                     Total: -{formatCurrency(totalOutflows)}
                   </span>
                 </div>
@@ -1704,10 +1762,11 @@ export const ConsolidatedReportView: React.FC = () => {
                         ) : isNormalUser ? (
                           <>
                             <th className="py-2.5 px-3">Liquor Sales</th>
+                            <th className="py-2.5 px-3 text-slate-600 dark:text-slate-400">Exp &amp; Wages</th>
                             <th className="py-2.5 px-3">Cash</th>
                             <th className="py-2.5 px-3">UPI</th>
                             <th className="py-2.5 px-3 text-right font-bold">Total Received</th>
-                            <th className="py-2.5 px-3">Diff</th>
+                            <th className="py-2.5 px-3">Staff Diff</th>
                             <th className="py-2.5 px-3">Status</th>
                           </>
                         ) : (
@@ -1719,6 +1778,7 @@ export const ConsolidatedReportView: React.FC = () => {
                             <th className="py-2.5 px-3">Room Rent</th>
                             <th className="py-2.5 px-3 text-red-600">Expenses</th>
                             <th className="py-2.5 px-3 text-red-600">Wages</th>
+                            <th className="py-2.5 px-3">Staff Diff</th>
                             <th className="py-2.5 px-3 text-right bg-amber-50 dark:bg-amber-950 font-bold">
                               Net Surplus
                             </th>
@@ -1743,7 +1803,9 @@ export const ConsolidatedReportView: React.FC = () => {
                               </td>
                               <td className="py-2.5 px-3 font-mono">
                                 {Math.abs(d.acDiff) > 0.009 ? (
-                                  <span className="text-red-600 font-bold">{formatCurrency(d.acDiff)}</span>
+                                  <span className={d.acDiff < 0 ? 'text-red-600 font-bold' : 'text-blue-600 font-bold'}>
+                                    {d.acDiff > 0 ? '+' : ''}{formatCurrency(d.acDiff)}
+                                  </span>
                                 ) : (
                                   <span className="text-emerald-600">✓</span>
                                 )}
@@ -1757,6 +1819,9 @@ export const ConsolidatedReportView: React.FC = () => {
                           ) : isNormalUser ? (
                             <>
                               <td className="py-2.5 px-3 font-mono font-bold">{formatCurrency(d.normalValue)}</td>
+                              <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">
+                                {d.normalExpCredited > 0 ? `-${formatCurrency(d.normalExpCredited)}` : '—'}
+                              </td>
                               <td className="py-2.5 px-3 font-mono">{formatCurrency(d.normalCash)}</td>
                               <td className="py-2.5 px-3 font-mono">{formatCurrency(d.normalUpi)}</td>
                               <td className="py-2.5 px-3 text-right font-mono font-black text-slate-900 dark:text-white">
@@ -1764,7 +1829,9 @@ export const ConsolidatedReportView: React.FC = () => {
                               </td>
                               <td className="py-2.5 px-3 font-mono">
                                 {Math.abs(d.normalDiff) > 0.009 ? (
-                                  <span className="text-red-600 font-bold">{formatCurrency(d.normalDiff)}</span>
+                                  <span className={d.normalDiff < 0 ? 'text-red-600 font-bold' : 'text-blue-600 font-bold'}>
+                                    {d.normalDiff > 0 ? '+' : ''}{formatCurrency(d.normalDiff)}
+                                  </span>
                                 ) : (
                                   <span className="text-emerald-600">✓</span>
                                 )}
@@ -1786,6 +1853,15 @@ export const ConsolidatedReportView: React.FC = () => {
                               <td className="py-2.5 px-3 font-mono text-emerald-600">{formatCurrency(d.roomRent)}</td>
                               <td className="py-2.5 px-3 font-mono text-red-600">{formatCurrency(d.expenses)}</td>
                               <td className="py-2.5 px-3 font-mono text-red-600">{formatCurrency(d.wages)}</td>
+                              <td className="py-2.5 px-3 font-mono">
+                                {Math.abs(d.staffDiffTotal) > 0.009 ? (
+                                  <span className={d.staffDiffTotal < 0 ? 'text-red-600 font-bold' : 'text-blue-600 font-bold'}>
+                                    {d.staffDiffTotal > 0 ? '+' : ''}{formatCurrency(d.staffDiffTotal)}
+                                  </span>
+                                ) : (
+                                  <span className="text-emerald-600">✓</span>
+                                )}
+                              </td>
                               <td className="py-2.5 px-3 text-right font-mono font-black text-amber-950 dark:text-amber-200 bg-amber-50/20 dark:bg-amber-950/20">
                                 {formatCurrency(d.netSurplus)}
                               </td>
