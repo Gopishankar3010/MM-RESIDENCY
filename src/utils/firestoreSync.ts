@@ -1742,8 +1742,16 @@ export async function syncSlicesToFirestore(
   }
 
   // 6. requests -> requests
-  if (dirty.has('requests')) {
+  if (dirty.has('requests') || (deletedIds?.requests && deletedIds.requests.length > 0)) {
     const known = ensureSet('requests');
+    const requestDeleteIds = deletedIds?.requests || [];
+    if (requestDeleteIds.length > 0) {
+      await commitOperationsInChunks(
+        db,
+        requestDeleteIds.map((delId) => ({ type: 'delete' as const, path: 'requests', id: delId }))
+      );
+      requestDeleteIds.forEach((delId) => known.delete(delId));
+    }
     const prevMap = new Map(prevSnapshot.requests.map((r) => [r.requestId, r]));
     for (const r of nextSnapshot.requests) {
       const prev = prevMap.get(r.requestId);
@@ -1776,8 +1784,16 @@ export async function syncSlicesToFirestore(
   }
 
   // 7. transfers -> transfers
-  if (dirty.has('transfers')) {
+  if (dirty.has('transfers') || (deletedIds?.transfers && deletedIds.transfers.length > 0)) {
     const known = ensureSet('transfers');
+    const transferDeleteIds = deletedIds?.transfers || [];
+    if (transferDeleteIds.length > 0) {
+      await commitOperationsInChunks(
+        db,
+        transferDeleteIds.map((delId) => ({ type: 'delete' as const, path: 'transfers', id: delId }))
+      );
+      transferDeleteIds.forEach((delId) => known.delete(delId));
+    }
     const prevMap = new Map(prevSnapshot.transfers.map((t) => [t.transferId, t]));
     for (const t of nextSnapshot.transfers) {
       const prev = prevMap.get(t.transferId);
@@ -1923,9 +1939,17 @@ export async function syncSlicesToFirestore(
     }
   }
 
-  // 10. ledger -> ledger (append-only)
-  if (dirty.has('ledger')) {
+  // 10. ledger -> ledger (append + targeted admin cleanup delete)
+  if (dirty.has('ledger') || (deletedIds?.ledger && deletedIds.ledger.length > 0)) {
     const known = ensureSet('ledger');
+    const ledgerDeleteIds = deletedIds?.ledger || [];
+    if (ledgerDeleteIds.length > 0) {
+      await commitOperationsInChunks(
+        db,
+        ledgerDeleteIds.map((delId) => ({ type: 'delete' as const, path: 'ledger', id: delId }))
+      );
+      ledgerDeleteIds.forEach((delId) => known.delete(delId));
+    }
     const newEntries = nextSnapshot.ledger.filter((l) => !known.has(l.ledgerId));
     if (newEntries.length > 0) {
       await commitOperationsInChunks(

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { CheckCircle2, ArrowRightLeft, Truck, Check, X, ShieldCheck, Printer, Trash2, AlertTriangle, Receipt, RotateCcw, Lock, Eye, EyeOff } from 'lucide-react';
+import { CheckCircle2, ArrowRightLeft, Truck, Check, X, ShieldCheck, Printer, Trash2, AlertTriangle, Receipt, RotateCcw, Lock, Eye, EyeOff, ChevronDown, ChevronRight } from 'lucide-react';
 import { RequestGroup, DailySalesReport, DeletedDailySalesReport, StockRequestItem } from '../types';
 
 export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onNavigateToSales }) => {
@@ -52,6 +52,11 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
   const [showReversePassword, setShowReversePassword] = useState(false);
   const [reverseError, setReverseError] = useState<string | null>(null);
   const [reversingRequests, setReversingRequests] = useState(false);
+  const [expandedApprovedBatches, setExpandedApprovedBatches] = useState<Record<string, boolean>>({});
+
+  const toggleApprovedBatch = (groupKey: string) => {
+    setExpandedApprovedBatches(prev => ({ ...prev, [groupKey]: !prev[groupKey] }));
+  };
 
   const formatCurrency = (val: number) =>
     '₹' + Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -243,7 +248,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
       const counterLabel = reverseRequestModal.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter';
       setStatusMsg({
         type: 'ok',
-        text: `Reversed ${res.reversed} approved request item(s) (${res.totalBottles} btls) from ${counterLabel} back to Central Godown and marked as Reversed.`
+        text: `Reversed and deleted ${res.reversed} Godown request item(s) (${res.totalBottles} btls) from ${counterLabel}, returned stock to Central Godown, and removed Daily Sales entries.`
       });
       setReverseRequestModal(null);
       setReverseReason('');
@@ -432,42 +437,70 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
         )}
       </div>
 
-      {/* 1b. Approved Godown Requests (Admin Single-Item or Batch Reversal) */}
+      {/* 1b. Approved Godown Requests (Collapsible Batches + Admin Reversal/Deletion) */}
       <div className="print-card rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b pb-3 dark:border-slate-800">
           <div className="flex items-center gap-2">
             <RotateCcw className="h-4 w-4 text-amber-600 dark:text-amber-400" />
             <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-              Approved Godown Requests ({approvedRequests.length})
+              Approved Godown Requests ({approvedRequestGroups.length} {approvedRequestGroups.length === 1 ? 'batch' : 'batches'} · {approvedRequests.length} items)
             </h2>
           </div>
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            Reverse a single item or entire batch to return bottles from Counter back to Central Godown
+            Click any batch dropdown to view items · Reversing deletes the request and returns stock to Godown
           </span>
         </div>
 
         {approvedRequestGroups.length > 0 ? (
-          <div className="divide-y divide-slate-200 dark:divide-slate-800">
+          <div className="space-y-2">
             {approvedRequestGroups.map(g => {
               const allIds = g.items.map(i => i.requestId);
               const counterLabel = g.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter';
               const approver = g.items[0]?.reviewedBy || 'admin';
+              const isExpanded = Boolean(expandedApprovedBatches[g.groupKey]);
 
               return (
-                <div key={g.groupKey} className="print-avoid-break py-3.5 first:pt-0 last:pb-0 space-y-2.5 text-xs">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div className="space-y-0.5">
-                      <div className="font-bold text-slate-900 dark:text-white">
-                        {counterLabel} · <span className="font-mono tabular-nums">{g.items.length}</span> item(s) ·{' '}
-                        <span className="font-mono tabular-nums">{g.totalBottles}</span> btls
-                      </div>
-                      <div className="text-slate-500 dark:text-slate-400">
-                        Date: <span className="font-mono tabular-nums">{g.date}</span> · Reason: <strong className="text-slate-700 dark:text-slate-300">{g.reason}</strong> · Requested by {g.by} · Approved by {approver}
+                <div
+                  key={g.groupKey}
+                  className="print-avoid-break rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden text-xs"
+                >
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                    onClick={() => toggleApprovedBatch(g.groupKey)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        toggleApprovedBatch(g.groupKey);
+                      }
+                    }}
+                    className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 bg-slate-50/70 hover:bg-slate-100/80 dark:bg-slate-800/40 dark:hover:bg-slate-800/70 px-3.5 py-2.5 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-white border border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
+                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                      </span>
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-1.5">
+                          <span>{counterLabel}</span>
+                          <span className="text-slate-400" aria-hidden="true">·</span>
+                          <span className="font-mono tabular-nums">{g.items.length} item(s)</span>
+                          <span className="text-slate-400" aria-hidden="true">·</span>
+                          <span className="font-mono tabular-nums text-amber-700 dark:text-amber-300">{g.totalBottles} btls</span>
+                        </div>
+                        <div className="text-slate-500 dark:text-slate-400 truncate">
+                          Date: <span className="font-mono tabular-nums">{g.date}</span> · Reason:{' '}
+                          <strong className="text-slate-700 dark:text-slate-300">{g.reason}</strong> · By {g.by} · Approved by {approver}
+                        </div>
                       </div>
                     </div>
 
-                    {g.items.length > 1 && (
-                      <div className="no-print flex items-center gap-2 shrink-0">
+                    <div
+                      className="no-print flex items-center gap-2 shrink-0 pl-7 sm:pl-0"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {g.items.length > 1 ? (
                         <button
                           type="button"
                           onClick={() =>
@@ -476,7 +509,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                               counter: g.counter,
                               date: g.date,
                               totalBottles: g.totalBottles,
-                              title: `Reverse Entire Batch (${counterLabel})`,
+                              title: `Reverse & Delete Entire Batch (${counterLabel})`,
                               summary: `${g.items.length} items · ${g.totalBottles} bottles (${g.date})`
                             })
                           }
@@ -485,50 +518,79 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                           <RotateCcw className="h-3.5 w-3.5" />
                           <span>Reverse Batch ({g.totalBottles} btls)</span>
                         </button>
-                      </div>
-                    )}
-                  </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openReverseModal({
+                              ids: allIds,
+                              counter: g.counter,
+                              date: g.date,
+                              totalBottles: g.totalBottles,
+                              title: `Reverse & Delete Request (${counterLabel})`,
+                              summary: `${g.items[0].productName} · ${g.totalBottles} bottles (${g.date})`
+                            })
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] font-bold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200 dark:hover:bg-amber-900/60 cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          <span>Reverse ({g.totalBottles} btls)</span>
+                        </button>
+                      )}
 
-                  <div className="divide-y divide-slate-100 dark:divide-slate-800/80 border-t border-slate-100 dark:border-slate-800/80 pl-3">
-                    {g.items.map((item: StockRequestItem) => (
-                      <div
-                        key={item.requestId}
-                        className="py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
+                      <button
+                        type="button"
+                        onClick={() => toggleApprovedBatch(g.groupKey)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
                       >
-                        <div className="text-[11px] text-slate-700 dark:text-slate-300">
-                          <span className="font-bold text-slate-900 dark:text-white">{item.productName}</span>{' '}
-                          <span className="text-slate-400" aria-hidden="true">·</span>{' '}
-                          <span className="font-mono tabular-nums font-bold">{item.qty} btls</span>{' '}
-                          <span className="text-slate-500 dark:text-slate-400">
-                            ({item.enteredQty} {item.unit.toLowerCase()})
-                          </span>
-                          {item.remark ? (
-                            <span className="text-slate-500 dark:text-slate-400"> · Note: {item.remark}</span>
-                          ) : null}
-                        </div>
-
-                        <div className="no-print shrink-0">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              openReverseModal({
-                                ids: [item.requestId],
-                                counter: item.counter,
-                                date: item.date,
-                                totalBottles: item.qty,
-                                title: `Reverse Approved Item (${counterLabel})`,
-                                summary: `${item.productName} · ${item.qty} bottles (${item.date})`
-                              })
-                            }
-                            className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200 dark:hover:bg-amber-900/60 cursor-pointer whitespace-nowrap shrink-0"
-                          >
-                            <RotateCcw className="h-3 w-3" />
-                            <span>{g.items.length === 1 ? `Reverse (${item.qty} btls)` : 'Reverse Item'}</span>
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                        <span>{isExpanded ? 'Hide' : 'Items'}</span>
+                        {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      </button>
+                    </div>
                   </div>
+
+                  {isExpanded && (
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800/80 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5">
+                      {g.items.map((item: StockRequestItem) => (
+                        <div
+                          key={item.requestId}
+                          className="py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
+                        >
+                          <div className="text-[11px] text-slate-700 dark:text-slate-300">
+                            <span className="font-bold text-slate-900 dark:text-white">{item.productName}</span>{' '}
+                            <span className="text-slate-400" aria-hidden="true">·</span>{' '}
+                            <span className="font-mono tabular-nums font-bold">{item.qty} btls</span>{' '}
+                            <span className="text-slate-500 dark:text-slate-400">
+                              ({item.enteredQty} {item.unit.toLowerCase()})
+                            </span>
+                            {item.remark ? (
+                              <span className="text-slate-500 dark:text-slate-400"> · Note: {item.remark}</span>
+                            ) : null}
+                          </div>
+
+                          <div className="no-print shrink-0">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openReverseModal({
+                                  ids: [item.requestId],
+                                  counter: item.counter,
+                                  date: item.date,
+                                  totalBottles: item.qty,
+                                  title: `Reverse & Delete Item (${counterLabel})`,
+                                  summary: `${item.productName} · ${item.qty} bottles (${item.date})`
+                                })
+                              }
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200 dark:hover:bg-amber-900/60 cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              <span>Reverse Item</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -960,7 +1022,8 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
             <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
               Returns <strong className="font-mono tabular-nums">{reverseRequestModal.totalBottles} bottles</strong> from{' '}
               <strong>{reverseRequestModal.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}</strong> back to{' '}
-              <strong>Central Godown</strong> and marks the request as <strong>Reversed</strong>.
+              <strong>Central Godown</strong>, deletes the request from Godown, and removes its{' '}
+              <strong>Godown In</strong> and <strong>Trans Out</strong> impact from Daily Sales.
             </div>
 
             {reverseError && (
@@ -1042,7 +1105,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                 disabled={reversingRequests || !reversePassword}
                 className="rounded-lg bg-amber-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap shrink-0"
               >
-                {reversingRequests ? 'Reversing...' : 'Confirm Reverse & Return Stock'}
+                {reversingRequests ? 'Deleting & Returning...' : 'Confirm Delete & Return Stock'}
               </button>
             </div>
           </form>

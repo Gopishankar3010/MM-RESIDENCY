@@ -1908,6 +1908,7 @@ export const ConsolidatedReportView: React.FC = () => {
                 <thead className="bg-slate-50 dark:bg-slate-800 font-bold uppercase text-[10px] text-slate-500 border-b border-slate-200 dark:border-slate-700">
                   <tr>
                     <th className="py-2 px-3">Product</th>
+                    <th className="py-2 px-3 text-right">Open</th>
                     <th className="py-2 px-3 text-right">Avail</th>
                     <th className="py-2 px-3 text-right">Closing</th>
                     <th className="py-2 px-3 text-right">Sold</th>
@@ -1916,14 +1917,15 @@ export const ConsolidatedReportView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {inspectingReport.lines.filter(l => l.sold > 0 || l.available > 0).map(l => (
+                  {inspectingReport.lines.filter(l => l.sold > 0 || l.available > 0 || l.opening > 0).map(l => (
                     <tr key={l.lineId}>
                       <td className="py-2 px-3 font-semibold text-slate-900 dark:text-white">{l.name}</td>
-                      <td className="py-2 px-3 text-right font-mono">{l.available}</td>
-                      <td className="py-2 px-3 text-right font-mono">{l.closing}</td>
-                      <td className="py-2 px-3 text-right font-mono font-bold text-blue-600 dark:text-blue-400">{l.sold}</td>
-                      <td className="py-2 px-3 text-right font-mono">{formatCurrency(l.price)}</td>
-                      <td className="py-2 px-3 text-right font-mono font-bold">{formatCurrency(l.value)}</td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums">{l.opening}</td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums">{l.available}</td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums">{l.closing}</td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums font-bold text-blue-600 dark:text-blue-400">{l.sold}</td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums">{formatCurrency(l.price)}</td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums font-bold">{formatCurrency(l.value)}</td>
                     </tr>
                   ))}
                 </tbody>

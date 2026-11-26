@@ -250,6 +250,7 @@ export const DailySalesView: React.FC = () => {
   const [confirmingDeleteReport, setConfirmingDeleteReport] = useState(false);
   const [deleteReportReason, setDeleteReportReason] = useState('');
   const [deletingReport, setDeletingReport] = useState(false);
+  const [inspectShowAllLines, setInspectShowAllLines] = useState(false);
 
   // Admin historical entry modal
   const [showHistoricalModal, setShowHistoricalModal] = useState(false);
@@ -550,8 +551,10 @@ export const DailySalesView: React.FC = () => {
     };
   });
 
-  // Show only products with available stock (> 0) on the sales sheet
-  const availableLineCalculations = lineCalculations.filter(l => l.available > 0);
+  // Show products with available stock (> 0) or carried-over opening/movement activity on the sales sheet
+  const availableLineCalculations = lineCalculations.filter(
+    l => l.available > 0 || l.opening > 0 || l.inQty > 0 || l.outQty > 0
+  );
   const totalAvailableBottles = availableLineCalculations.reduce((sum, l) => sum + l.available, 0);
 
   const categories = Array.from(new Set(availableLineCalculations.map(l => l.category || 'Others'))).sort((a, b) => {
@@ -737,6 +740,7 @@ export const DailySalesView: React.FC = () => {
     setIsEditingReport(false);
     setConfirmingDeleteReport(false);
     setDeleteReportReason('');
+    setInspectShowAllLines(false);
     setModalError(null);
   };
 
@@ -2297,6 +2301,22 @@ export const DailySalesView: React.FC = () => {
                 })()}
 
                 {/* Lines List */}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-600 dark:text-slate-400">
+                    {inspectShowAllLines
+                      ? `Showing all ${activeViewingReport.lines.length} product rows`
+                      : `Showing ${activeViewingReport.lines.filter(l => l.sold > 0).length} sold item(s)`}
+                  </span>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={inspectShowAllLines}
+                      onChange={e => setInspectShowAllLines(e.target.checked)}
+                      className="rounded border-slate-300"
+                    />
+                    <span>Show all items (including 0 sold)</span>
+                  </label>
+                </div>
                 <div className="rounded-xl border border-slate-200 overflow-hidden dark:border-slate-800">
                   <div className="overflow-x-auto max-h-[300px]">
                     <table className="w-full text-left text-xs">
@@ -2313,26 +2333,32 @@ export const DailySalesView: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                        {activeViewingReport.lines.filter(l => l.sold > 0).length === 0 ? (
-                          <tr>
-                            <td colSpan={8} className="p-4 text-center text-slate-400">
-                              No sold items recorded in this report.
-                            </td>
-                          </tr>
-                        ) : (
-                          activeViewingReport.lines.filter(l => l.sold > 0).map(l => (
+                        {(() => {
+                          const visibleInspectLines = inspectShowAllLines
+                            ? activeViewingReport.lines
+                            : activeViewingReport.lines.filter(l => l.sold > 0);
+                          if (visibleInspectLines.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={8} className="p-4 text-center text-slate-400">
+                                  No sold items recorded in this report.
+                                </td>
+                              </tr>
+                            );
+                          }
+                          return visibleInspectLines.map(l => (
                             <tr key={l.productId}>
                               <td className="p-2.5 font-bold text-slate-900 dark:text-white">{l.name}</td>
-                              <td className="p-2.5 font-mono">{l.opening}</td>
-                              <td className="p-2.5 font-mono text-emerald-600">{l.inQty}</td>
-                              <td className="p-2.5 font-mono text-red-600">{l.outQty}</td>
-                              <td className="p-2.5 font-mono">{l.closing}</td>
-                              <td className="p-2.5 font-mono font-bold text-blue-600">{l.sold}</td>
-                              <td className="p-2.5 font-mono text-right">{formatCurrency(l.price)}</td>
-                              <td className="p-2.5 font-mono font-bold text-right">{formatCurrency(l.value)}</td>
+                              <td className="p-2.5 font-mono tabular-nums">{l.opening}</td>
+                              <td className="p-2.5 font-mono tabular-nums text-emerald-600">{l.inQty}</td>
+                              <td className="p-2.5 font-mono tabular-nums text-red-600">{l.outQty}</td>
+                              <td className="p-2.5 font-mono tabular-nums">{l.closing}</td>
+                              <td className="p-2.5 font-mono tabular-nums font-bold text-blue-600">{l.sold}</td>
+                              <td className="p-2.5 font-mono tabular-nums text-right">{formatCurrency(l.price)}</td>
+                              <td className="p-2.5 font-mono tabular-nums font-bold text-right">{formatCurrency(l.value)}</td>
                             </tr>
-                          ))
-                        )}
+                          ));
+                        })()}
                       </tbody>
                     </table>
                   </div>
