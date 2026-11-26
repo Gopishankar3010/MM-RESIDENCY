@@ -23,7 +23,11 @@ import {
 } from 'lucide-react';
 import { DailySalesReport, CounterLocation } from '../types';
 import { CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
-import { computeShiftReconciliation, getReportReconciliation } from '../utils/reconciliation';
+import {
+  computeShiftReconciliation,
+  getNormalCashBreakdownForDate,
+  getReportReconciliation
+} from '../utils/reconciliation';
 
 interface DailySalesDraft {
   closingInputs: Record<string, string>;
@@ -575,6 +579,10 @@ export const DailySalesView: React.FC = () => {
   const shopOutflowsTotal = shiftReconciliation.shopOutflowsTotal;
   const shopOutflowsCredited = shiftReconciliation.shopOutflowsCredited;
   const paymentDiff = shiftReconciliation.staffDifference;
+  const dayExpenseBreakdown =
+    counter === 'NORMAL'
+      ? getNormalCashBreakdownForDate(operations, reportDate)
+      : { expensesTotal: 0, wagesTotal: 0, combinedTotal: 0 };
 
   const filteredLines = sortProductsCategoryWise(
     availableLineCalculations.filter(l => {
@@ -1405,7 +1413,7 @@ export const DailySalesView: React.FC = () => {
                   <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                     Payment Collection Breakdown
                   </h3>
-                  <div className={`grid ${counter === 'AC' ? 'grid-cols-3' : 'grid-cols-2'} gap-3`}>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
                         Cash Received (₹)
@@ -1416,7 +1424,7 @@ export const DailySalesView: React.FC = () => {
                         step="0.01"
                         value={cashAmount}
                         onChange={e => setCashAmount(e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 font-mono text-xs font-bold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 font-mono tabular-nums text-xs font-bold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                       />
                     </div>
                     <div>
@@ -1429,10 +1437,30 @@ export const DailySalesView: React.FC = () => {
                         step="0.01"
                         value={upiAmount}
                         onChange={e => setUpiAmount(e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 font-mono text-xs font-bold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 font-mono tabular-nums text-xs font-bold text-slate-800 outline-none focus:border-amber-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                       />
                     </div>
-                    {counter === 'AC' && (
+                    {counter === 'NORMAL' ? (
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                            Expenses &amp; Wages (₹)
+                          </label>
+                          <span className="text-[10px] font-medium text-slate-400 dark:text-slate-500">
+                            Synced
+                          </span>
+                        </div>
+                        <div
+                          aria-readonly="true"
+                          className="w-full rounded-lg border border-slate-200 bg-slate-100/80 px-3 py-1.5 font-mono tabular-nums text-xs font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-100"
+                        >
+                          {formatCurrency(dayExpenseBreakdown.combinedTotal)}
+                        </div>
+                        <p className="mt-1 text-[10px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                          Exp: {formatCurrency(dayExpenseBreakdown.expensesTotal)} · Wages: {formatCurrency(dayExpenseBreakdown.wagesTotal)}
+                        </p>
+                      </div>
+                    ) : (
                       <div>
                         <label className="block text-[11px] font-bold text-purple-700 dark:text-purple-300 mb-1">
                           AC Charges Total (₹)
@@ -1444,7 +1472,7 @@ export const DailySalesView: React.FC = () => {
                           placeholder="0.00"
                           value={acChargesAmount}
                           onChange={e => setAcChargesAmount(e.target.value)}
-                          className="w-full rounded-lg border border-purple-300 bg-purple-50/50 px-3 py-1.5 font-mono text-xs font-bold text-purple-900 outline-none focus:border-purple-500 dark:border-purple-700 dark:bg-slate-800 dark:text-purple-200"
+                          className="w-full rounded-lg border border-purple-300 bg-purple-50/50 px-3 py-1.5 font-mono tabular-nums text-xs font-bold text-purple-900 outline-none focus:border-purple-500 dark:border-purple-700 dark:bg-slate-800 dark:text-purple-200"
                         />
                       </div>
                     )}
@@ -1540,25 +1568,35 @@ export const DailySalesView: React.FC = () => {
 
               {/* Bottom Sticky Submission Bar */}
               <div className="no-print sticky bottom-3 rounded-xl border border-slate-300 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-900 flex flex-wrap items-center justify-between gap-4 z-20">
-                <div className="flex items-center gap-4 text-xs">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
                   <div>
-                    <span className="text-slate-500">Bottles Sold:</span>
-                    <span className="ml-1 font-mono font-black text-slate-900 dark:text-white">
+                    <span className="text-slate-500 dark:text-slate-400">Bottles Sold:</span>
+                    <span className="ml-1 font-mono tabular-nums font-black text-slate-900 dark:text-white">
                       {formCalculatedSoldBottles} btls
                     </span>
                   </div>
                   <div>
-                    <span className="text-slate-500">Calculated Sales:</span>
-                    <span className="ml-1 font-mono font-black text-emerald-600">
+                    <span className="text-slate-500 dark:text-slate-400">Calculated Sales:</span>
+                    <span className="ml-1 font-mono tabular-nums font-black text-emerald-600 dark:text-emerald-400">
                       {formatCurrency(formCalculatedTotalValue)}
                     </span>
                   </div>
                   <div>
-                    <span className="text-slate-500">Total Collected:</span>
-                    <span className="ml-1 font-mono font-black text-slate-900 dark:text-white">
+                    <span className="text-slate-500 dark:text-slate-400">
+                      {counter === 'NORMAL' ? 'Cash + UPI:' : 'Total Collected:'}
+                    </span>
+                    <span className="ml-1 font-mono tabular-nums font-black text-slate-900 dark:text-white">
                       {formatCurrency(totalPaymentReceived)}
                     </span>
                   </div>
+                  {counter === 'NORMAL' && (
+                    <div>
+                      <span className="text-slate-500 dark:text-slate-400">Expense &amp; Wages:</span>
+                      <span className="ml-1 font-mono tabular-nums font-black text-slate-900 dark:text-white">
+                        {formatCurrency(dayExpenseBreakdown.combinedTotal)}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -2633,45 +2671,59 @@ export const DailySalesView: React.FC = () => {
             </div>
 
             {/* Financial Summary Tiles */}
-            <div className={`grid grid-cols-2 ${counter === 'AC' || shopOutflowsCredited > 0 ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2.5 text-xs`}>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs">
               <div className="rounded-xl bg-amber-50/70 p-3 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40">
                 <span className="text-[10px] font-bold text-amber-800 dark:text-amber-300 uppercase">Bottles Sold</span>
-                <div className="font-mono text-base font-black text-amber-950 dark:text-amber-200 mt-0.5">
+                <div className="font-mono tabular-nums text-base font-black text-amber-950 dark:text-amber-200 mt-0.5">
                   {formCalculatedSoldBottles} btls
                 </div>
               </div>
               <div className="rounded-xl bg-emerald-50/70 p-3 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-900/40">
                 <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase">Liquor Sales</span>
-                <div className="font-mono text-base font-black text-emerald-700 dark:text-emerald-300 mt-0.5">
+                <div className="font-mono tabular-nums text-base font-black text-emerald-700 dark:text-emerald-300 mt-0.5">
                   {formatCurrency(formCalculatedTotalValue)}
                 </div>
               </div>
-              {counter === 'NORMAL' && shopOutflowsCredited > 0 && (
-                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase">Exp &amp; Wages</span>
-                  <div className="font-mono text-base font-bold text-slate-900 dark:text-white mt-0.5">
-                    -{formatCurrency(shopOutflowsCredited)}
+              {counter === 'NORMAL' ? (
+                <>
+                  <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Cash + UPI</span>
+                    <div className="font-mono tabular-nums text-base font-bold text-slate-900 dark:text-white mt-0.5">
+                      {formatCurrency(totalPaymentReceived)}
+                    </div>
+                    <span className="text-[10px] font-mono tabular-nums text-slate-400 dark:text-slate-500">
+                      Cash {formatCurrency(parsedCash)} · UPI {formatCurrency(parsedUpi)}
+                    </span>
                   </div>
-                  <span className="text-[10px] text-slate-400">Expected: {formatCurrency(expectedTotal)}</span>
-                </div>
-              )}
-              {counter === 'AC' && (
-                <div className="rounded-xl bg-purple-50/70 p-3 dark:bg-purple-950/30 border border-purple-200/60 dark:border-purple-900/40">
-                  <span className="text-[10px] font-bold text-purple-800 dark:text-purple-300 uppercase">AC Charges</span>
-                  <div className="font-mono text-base font-black text-purple-700 dark:text-purple-300 mt-0.5">
-                    {formatCurrency(parsedAcCharges)}
+                  <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Expense &amp; Wages</span>
+                    <div className="font-mono tabular-nums text-base font-bold text-slate-900 dark:text-white mt-0.5">
+                      {formatCurrency(dayExpenseBreakdown.combinedTotal)}
+                    </div>
+                    <span className="text-[10px] font-mono tabular-nums text-slate-400 dark:text-slate-500">
+                      Exp {formatCurrency(dayExpenseBreakdown.expensesTotal)} · Wages {formatCurrency(dayExpenseBreakdown.wagesTotal)}
+                    </span>
                   </div>
-                </div>
+                </>
+              ) : (
+                <>
+                  <div className="rounded-xl bg-purple-50/70 p-3 dark:bg-purple-950/30 border border-purple-200/60 dark:border-purple-900/40">
+                    <span className="text-[10px] font-bold text-purple-800 dark:text-purple-300 uppercase">AC Charges</span>
+                    <div className="font-mono tabular-nums text-base font-black text-purple-700 dark:text-purple-300 mt-0.5">
+                      {formatCurrency(parsedAcCharges)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Total Received</span>
+                    <div className="font-mono tabular-nums text-base font-bold text-slate-900 dark:text-white mt-0.5">
+                      {formatCurrency(totalPaymentReceived)}
+                    </div>
+                  </div>
+                </>
               )}
               <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
-                <span className="text-[10px] font-bold text-slate-500 uppercase">Total Received</span>
-                <div className="font-mono text-base font-bold text-slate-900 dark:text-white mt-0.5">
-                  {formatCurrency(totalPaymentReceived)}
-                </div>
-              </div>
-              <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
-                <span className="text-[10px] font-bold text-slate-500 uppercase">Staff Difference</span>
-                <div className={`font-mono text-xs font-bold mt-1 ${Math.abs(paymentDiff) > 0.009 ? (paymentDiff > 0 ? 'text-blue-600' : 'text-red-600') : 'text-emerald-600'}`}>
+                <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Staff Difference</span>
+                <div className={`font-mono tabular-nums text-xs font-bold mt-1 ${Math.abs(paymentDiff) > 0.009 ? (paymentDiff > 0 ? 'text-blue-600' : 'text-red-600') : 'text-emerald-600'}`}>
                   {Math.abs(paymentDiff) <= 0.009 ? '✓ Exact Match' : `${paymentDiff > 0 ? '+' : ''}${formatCurrency(paymentDiff)}`}
                 </div>
               </div>

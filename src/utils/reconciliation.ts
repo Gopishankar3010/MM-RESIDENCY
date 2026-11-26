@@ -3,6 +3,37 @@ import { CounterLocation, DailyOperation, DailySalesReport } from '../types';
 export const roundCurrency = (value: number): number =>
   Math.round((Number(value) || 0) * 100) / 100;
 
+export interface NormalCashOutflowBreakdown {
+  expensesTotal: number;
+  wagesTotal: number;
+  combinedTotal: number;
+}
+
+/**
+ * Approved Shop Expenses and Staff Wages totals for `date`.
+ * Paid directly out of the Normal Counter cash drawer.
+ */
+export const getNormalCashBreakdownForDate = (
+  operations: DailyOperation[],
+  date: string
+): NormalCashOutflowBreakdown => {
+  if (!date) return { expensesTotal: 0, wagesTotal: 0, combinedTotal: 0 };
+  let expensesTotal = 0;
+  let wagesTotal = 0;
+  operations.forEach(o => {
+    if (o.date !== date || o.status !== 'Approved') return;
+    if (o.type === 'EXPENSE') expensesTotal += Number(o.amount) || 0;
+    else if (o.type === 'WAGE') wagesTotal += Number(o.amount) || 0;
+  });
+  const cleanExp = roundCurrency(expensesTotal);
+  const cleanWages = roundCurrency(wagesTotal);
+  return {
+    expensesTotal: cleanExp,
+    wagesTotal: cleanWages,
+    combinedTotal: roundCurrency(cleanExp + cleanWages),
+  };
+};
+
 /**
  * Total approved Shop Expenses & Staff Wages on `date`.
  * Staff pay these directly out of the Normal Counter cash drawer.
@@ -10,19 +41,7 @@ export const roundCurrency = (value: number): number =>
 export const getNormalCashOutflowsForDate = (
   operations: DailyOperation[],
   date: string
-): number => {
-  if (!date) return 0;
-  return roundCurrency(
-    operations
-      .filter(
-        o =>
-          (o.type === 'EXPENSE' || o.type === 'WAGE') &&
-          o.date === date &&
-          o.status === 'Approved'
-      )
-      .reduce((sum, o) => sum + (Number(o.amount) || 0), 0)
-  );
-};
+): number => getNormalCashBreakdownForDate(operations, date).combinedTotal;
 
 /**
  * Portion of Shop Expenses & Wages on `date` credited against Normal Counter
