@@ -1525,34 +1525,43 @@ export async function syncSlicesToFirestore(
     if (deleteOps.length > 0) {
       await commitOperationsInChunks(db, deleteOps);
     }
-    // Reset stock & suppliers
+    // Reset changed stock balances in batches
     const stockKnown = ensureSet('stock');
+    const stockOps: Array<{ type: 'set' | 'update' | 'delete'; path: string; id: string; data?: Record<string, any> }> = [];
     for (const [pid, lvl] of Object.entries(nextSnapshot.stock)) {
-      const ref = doc(db, 'stock', pid);
-      try {
+      const prev = prevSnapshot.stock[pid];
+      if (
+        !stockKnown.has(pid) ||
+        !prev ||
+        prev.godown !== lvl.godown ||
+        prev.normal !== lvl.normal ||
+        prev.ac !== lvl.ac
+      ) {
         if (stockKnown.has(pid)) {
-          await updateDoc(ref, {
-            godown: nonNegNum(lvl.godown, 0),
-            normal: nonNegNum(lvl.normal, 0),
-            ac: nonNegNum(lvl.ac, 0),
-            updatedAt: serverTimestamp(),
+          stockOps.push({
+            type: 'update',
+            path: 'stock',
+            id: pid,
+            data: {
+              godown: nonNegNum(lvl.godown, 0),
+              normal: nonNegNum(lvl.normal, 0),
+              ac: nonNegNum(lvl.ac, 0),
+              updatedAt: serverTimestamp(),
+            },
           });
         } else {
-          await setDoc(ref, toStockDoc(pid, lvl, memberEmails));
+          stockOps.push({
+            type: 'set',
+            path: 'stock',
+            id: pid,
+            data: toStockDoc(pid, lvl, memberEmails),
+          });
           stockKnown.add(pid);
         }
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, `stock/${pid}`);
       }
     }
-    try {
-      await updateDoc(doc(db, 'workspace_meta', 'main'), {
-        suppliers: nextSnapshot.suppliers.slice(0, 100),
-        deletedProductIds: (nextSnapshot.deletedProductIds || []).slice(0, 1000),
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, 'workspace_meta/main');
+    if (stockOps.length > 0) {
+      await commitOperationsInChunks(db, stockOps);
     }
   }
 
@@ -1654,7 +1663,7 @@ export async function syncSlicesToFirestore(
   }
 
   // 4. stock -> stock
-  if (dirty.has('stock') || (deletedIds?.stock && deletedIds.stock.length > 0)) {
+  if ((!isReset && dirty.has('stock')) || (deletedIds?.stock && deletedIds.stock.length > 0)) {
     const known = ensureSet('stock');
     for (const delId of deletedIds?.stock || []) {
       try {

@@ -106,7 +106,27 @@ interface StockContextType {
   // Products & Stock Adjustments
   saveProduct: (p: Partial<Product> & { name: string; category: string; sizeML: number; casePack: number; sellingPrice: number }) => Promise<string>;
   deleteProduct: (productId: string) => Promise<void>;
-  adminAdjustStock: (data: { productId: string; godown: number; normal: number; ac: number; reason?: string }) => Promise<void>;
+  adminAdjustStock: (data: {
+    productId: string;
+    godown: number;
+    normal: number;
+    ac: number;
+    effectiveDate?: string;
+    reason?: string;
+  }) => Promise<void>;
+  syncCounterStockToDailySales: () => Promise<{ updated: number; counters: string[] }>;
+  getCounterDatePreview: (
+    counter: CounterLocation,
+    date: string,
+    productId: string
+  ) => {
+    hasReport: boolean;
+    reportStatus: 'Open' | 'Approved' | 'Pending';
+    currentOpening: number;
+    currentAvailable: number;
+    dayNetMovement: number;
+    liveCounterStock: number;
+  };
 
   // Purchases
   submitPurchaseBatch: (batch: {
@@ -513,6 +533,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const pendingDirtySlicesRef = React.useRef<Set<string>>(new Set());
   const repairedOpeningsSigRef = React.useRef<string>('');
   const cleanedNov24Ref = React.useRef<boolean>(false);
+  const syncedCounterStockRef = React.useRef<boolean>(false);
+  const freshStartResetRef = React.useRef<boolean>(false);
   const seenPendingIdsRef = React.useRef<Set<string> | null>(null);
   const activeMemberEmailsRef = React.useRef<string[]>([]);
   const verifiedEmailRef = React.useRef<string | undefined>(undefined);
@@ -812,13 +834,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             allDirty.forEach(s => pendingDirtySlicesRef.current.add(s));
             throw err;
           }
-          const updatedSynced: WorkspaceSnapshot = { ...lastSyncedSnapshotRef.current };
-          allDirty.forEach((slice) => {
-            if (slice in nextSnap) {
-              (updatedSynced as any)[slice] = (nextSnap as any)[slice];
-            }
-          });
-          lastSyncedSnapshotRef.current = updatedSynced;
+          if (isReset) {
+            lastSyncedSnapshotRef.current = { ...nextSnap };
+          } else {
+            const updatedSynced: WorkspaceSnapshot = { ...lastSyncedSnapshotRef.current };
+            allDirty.forEach((slice) => {
+              if (slice in nextSnap) {
+                (updatedSynced as any)[slice] = (nextSnap as any)[slice];
+              }
+            });
+            lastSyncedSnapshotRef.current = updatedSynced;
+          }
           setSyncStatus('synced');
           setLastSyncTime(new Date().toLocaleTimeString());
         })
@@ -1681,12 +1707,144 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   };
 
-  // Admin direct stock adjustment
+  // Helper: compute Counter opening / movement / preview for any date (even if pending receipts exist)
+  const computeCounterLineSnapshot = (
+    counter: CounterLocation,
+    date: string,
+    productId: string,
+    snap: WorkspaceSnapshot = latestRef.current
+  ) => {
+    const existingReport = snap.dailySales.find(
+      r =>
+        r.counter === counter &&
+        r.date === date &&
+        r.status !== 'Rejected' &&
+        !r.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY')
+    );
+    const counterKey = counter.toLowerCase() as 'normal' | 'ac';
+    const liveCounterStock = snap.stock[productId]?.[counterKey] || 0;
+
+    if (existingReport) {
+      const repLine = existingReport.lines.find(l => l.productId === productId);
+      const opening = repLine?.opening || 0;
+      const inQty = repLine ? (repLine.inQty ?? ((repLine.godownIn || 0) + (repLine.transferIn || 0))) : 0;
+      const outQty = repLine ? (repLine.outQty ?? ((repLine.transferOut || 0) + (repLine.damageOut || 0))) : 0;
+      const available = repLine ? repLine.available : 0;
+      return {
+        hasReport: true,
+        reportStatus: existingReport.status as 'Approved' | 'Pending',
+        report: existingReport,
+        currentOpening: opening,
+        currentAvailable: available,
+        dayNetMovement: inQty - outQty,
+        soldQty: repLine?.sold || 0,
+        liveCounterStock,
+      };
+    }
+
+    const lastApproved = snap.dailySales
+      .filter(
+        r =>
+          r.counter === counter &&
+          r.status === 'Approved' &&
+          r.date < date &&
+          !r.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY')
+      )
+      .sort((a, b) => b.date.localeCompare(a.date) || (b.submittedAt || '').localeCompare(a.submittedAt || ''))[0];
+
+    const priorLine = lastApproved?.lines.find(l => l.productId === productId);
+    let openAdj = 0;
+    let gIn = 0;
+    let tIn = 0;
+    let tOut = 0;
+    let dOut = 0;
+    let postDelta = 0;
+
+    snap.ledger
+      .filter(l => l.location === counter && l.productId === productId)
+      .forEach(l => {
+        if (l.refType === 'OPENING') {
+          if (!l.refId.startsWith('OPEN-ADJ-')) return;
+          if (l.businessDate > date) {
+            postDelta += l.delta;
+            return;
+          }
+          const afterPrior =
+            !lastApproved ||
+            l.businessDate > lastApproved.date ||
+            (l.businessDate === lastApproved.date &&
+              (lastApproved.cutoffSeq || 0) > 0 &&
+              (l.seq || 0) > lastApproved.cutoffSeq);
+          if (afterPrior) {
+            openAdj += l.delta;
+          }
+          return;
+        }
+
+        if (l.businessDate > date) {
+          postDelta += l.delta;
+          return;
+        }
+
+        const isOnShiftDate = l.businessDate === date;
+        const isPostReportCarryOver =
+          Boolean(lastApproved) &&
+          l.refType !== 'SALE' &&
+          l.refType !== 'SALES_CORRECTION' &&
+          ((l.businessDate > lastApproved!.date && l.businessDate < date) ||
+            (l.businessDate === lastApproved!.date &&
+              (lastApproved!.cutoffSeq || 0) > 0 &&
+              (l.seq || 0) > lastApproved!.cutoffSeq));
+
+        if (isOnShiftDate || isPostReportCarryOver) {
+          if (l.delta > 0) {
+            if (l.refType === 'REQUEST') gIn += l.delta;
+            else if (l.refType === 'TRANSFER' || l.refType === 'ADJUSTMENT') tIn += l.delta;
+          } else if (l.delta < 0) {
+            if (l.refType === 'DAMAGE') dOut -= l.delta;
+            else if (l.refType === 'TRANSFER' || l.refType === 'REQUEST' || l.refType === 'ADJUSTMENT') tOut -= l.delta;
+          }
+        }
+      });
+
+    const dayNetMovement = gIn + tIn - tOut - dOut;
+    const liveAvailAtDate = Math.max(0, liveCounterStock - postDelta);
+    const derivedOpen = Math.max(0, liveAvailAtDate - dayNetMovement);
+    const baseOpen = priorLine !== undefined ? priorLine.closing : lastApproved ? 0 : Math.max(0, derivedOpen - openAdj);
+    const currentOpening = Math.max(0, baseOpen + openAdj);
+    const currentAvailable = Math.max(0, currentOpening + dayNetMovement);
+
+    return {
+      hasReport: false,
+      reportStatus: 'Open' as const,
+      report: undefined,
+      currentOpening,
+      currentAvailable,
+      dayNetMovement,
+      soldQty: 0,
+      liveCounterStock,
+    };
+  };
+
+  const getCounterDatePreview = (counter: CounterLocation, date: string, productId: string) => {
+    const info = computeCounterLineSnapshot(counter, date, productId, latestRef.current);
+    return {
+      hasReport: info.hasReport,
+      reportStatus: info.reportStatus,
+      currentOpening: info.currentOpening,
+      currentAvailable: info.currentAvailable,
+      dayNetMovement: info.dayNetMovement,
+      liveCounterStock: info.liveCounterStock,
+    };
+  };
+
+  // Admin direct stock adjustment (updates effectiveDate's Opening Stock directly for counters)
   const adminAdjustStock = async (data: {
     productId: string;
     godown: number;
     normal: number;
     ac: number;
+    effectiveDate?: string;
     reason?: string;
   }) => {
     if (currentUser?.role !== 'ADMIN') {
@@ -1695,27 +1853,159 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const prod = latestRef.current.products.find(p => p.productId === data.productId);
     if (!prod) throw new Error('Product not found.');
 
+    const effDate = (data.effectiveDate || '').trim() || businessDate || getTodayISO();
     const nextGodown = Math.max(0, Math.floor(Number(data.godown) || 0));
     const nextNormal = Math.max(0, Math.floor(Number(data.normal) || 0));
     const nextAc = Math.max(0, Math.floor(Number(data.ac) || 0));
 
     const cur = latestRef.current.stock[data.productId] || { godown: 0, normal: 0, ac: 0 };
-    const moves: { loc: StockLocation; productId: string; delta: number }[] = [];
-    if (nextGodown !== (cur.godown || 0)) moves.push({ loc: 'GODOWN', productId: data.productId, delta: nextGodown - (cur.godown || 0) });
-    if (nextNormal !== (cur.normal || 0)) moves.push({ loc: 'NORMAL', productId: data.productId, delta: nextNormal - (cur.normal || 0) });
-    if (nextAc !== (cur.ac || 0)) moves.push({ loc: 'AC', productId: data.productId, delta: nextAc - (cur.ac || 0) });
+    const godownDelta = nextGodown - (cur.godown || 0);
+    const normalDelta = nextNormal - (cur.normal || 0);
+    const acDelta = nextAc - (cur.ac || 0);
 
-    if (moves.length === 0) return;
+    if (godownDelta === 0 && normalDelta === 0 && acDelta === 0) return;
 
-    const refId = `ADJ-${Date.now().toString().slice(-6)}`;
-    applyMovements(moves, 'ADJUSTMENT', refId, businessDate);
-    const auditEntry = buildAuditEntry(
-      'ADMIN_STOCK_EDITED',
-      refId,
-      `${prod.name} ${prod.sizeML}ml | Godown: ${cur.godown || 0}→${nextGodown}, Normal: ${cur.normal || 0}→${nextNormal}, AC: ${cur.ac || 0}→${nextAc}${data.reason?.trim() ? ` | Reason: ${data.reason.trim()}` : ''}`
-    );
+    const counterPlans: {
+      counter: CounterLocation;
+      delta: number;
+      nextQty: number;
+      preview: ReturnType<typeof computeCounterLineSnapshot>;
+    }[] = [];
+
+    if (normalDelta !== 0) {
+      counterPlans.push({
+        counter: 'NORMAL',
+        delta: normalDelta,
+        nextQty: nextNormal,
+        preview: computeCounterLineSnapshot('NORMAL', effDate, data.productId, latestRef.current),
+      });
+    }
+    if (acDelta !== 0) {
+      counterPlans.push({
+        counter: 'AC',
+        delta: acDelta,
+        nextQty: nextAc,
+        preview: computeCounterLineSnapshot('AC', effDate, data.productId, latestRef.current),
+      });
+    }
+
+    // Pre-validate every counter edit before mutating stock/ledger/reports
+    for (const plan of counterPlans) {
+      const newOpening = plan.preview.currentOpening + plan.delta;
+      if (newOpening < 0) {
+        throw new Error(
+          `Cannot reduce ${plan.counter} stock on ${effDate} by ${-plan.delta}: Opening Stock on ${effDate} is only ${plan.preview.currentOpening} btls.`
+        );
+      }
+      if (plan.preview.hasReport && plan.preview.report) {
+        const newAvail = Math.max(0, newOpening + plan.preview.dayNetMovement);
+        if (newAvail < plan.preview.soldQty) {
+          throw new Error(
+            `Cannot set ${plan.counter} stock on ${effDate} to ${plan.nextQty}: ${plan.preview.soldQty} btls are already recorded as sold on ${plan.preview.report.reportId}.`
+          );
+        }
+      }
+    }
+
+    const baseStamp = Date.now().toString().slice(-6);
+    const refId = `ADJ-${baseStamp}`;
+    const dirtySlices = ['stock', 'ledger', 'auditLog'];
+    let updatedSalesList = [...latestRef.current.dailySales];
+    let salesTouched = false;
+    const now = getNowTimestamp();
+
+    if (godownDelta !== 0) {
+      applyMovements([{ loc: 'GODOWN', productId: data.productId, delta: godownDelta }], 'ADJUSTMENT', refId, effDate);
+    }
+
+    for (const plan of counterPlans) {
+      if (plan.preview.hasReport && plan.preview.report) {
+        const targetRep = plan.preview.report;
+        const openRefId = `OPEN-RPT-${targetRep.reportId}`.slice(0, 80);
+        applyMovements(
+          [{ loc: plan.counter, productId: data.productId, delta: plan.delta }],
+          'OPENING',
+          openRefId,
+          effDate
+        );
+
+        const cleanReason = data.reason?.trim() ? ` (${data.reason.trim()})` : '';
+        const editNote = `Opening edited (${currentUser.username}): ${prod.name} ${plan.preview.currentOpening}→${plan.preview.currentOpening + plan.delta}${cleanReason}`;
+        const nextRemark = `${targetRep.remark ? targetRep.remark + ' | ' : ''}${editNote}`.slice(0, 300);
+
+        updatedSalesList = updatedSalesList.map(r => {
+          if (r.reportId !== targetRep.reportId) return r;
+          const hasLine = r.lines.some(l => l.productId === data.productId);
+          let nextLines = r.lines.map(l => {
+            if (l.productId !== data.productId) return l;
+            const newOpen = Math.max(0, l.opening + plan.delta);
+            const inQty = l.inQty ?? ((l.godownIn || 0) + (l.transferIn || 0));
+            const outQty = l.outQty ?? ((l.transferOut || 0) + (l.damageOut || 0));
+            const newAvail = Math.max(0, newOpen + inQty - outQty);
+            const newClosing = Math.max(0, newAvail - (l.sold || 0));
+            return {
+              ...l,
+              opening: newOpen,
+              available: newAvail,
+              closing: newClosing,
+            };
+          });
+          if (!hasLine && plan.delta > 0 && nextLines.length < 300) {
+            nextLines = [
+              ...nextLines,
+              {
+                lineId: `SLN-${r.reportId.slice(4, 10)}-A${String(nextLines.length + 1).padStart(2, '0')}`,
+                reportId: r.reportId,
+                productId: prod.productId,
+                name: `${prod.name} ${prod.sizeML}ml`,
+                category: prod.category,
+                sizeML: prod.sizeML,
+                casePack: bottlesPerCase_(prod),
+                opening: plan.delta,
+                godownIn: 0,
+                transferIn: 0,
+                transferOut: 0,
+                damageOut: 0,
+                inQty: 0,
+                outQty: 0,
+                available: plan.delta,
+                closing: plan.delta,
+                sold: 0,
+                price: prod.sellingPrice,
+                value: 0,
+              },
+            ];
+          }
+          return {
+            ...r,
+            lines: nextLines,
+            editedBy: currentUser.username,
+            editedAt: now,
+            remark: nextRemark,
+          };
+        });
+        salesTouched = true;
+      } else {
+        const openAdjRefId = `OPEN-ADJ-${baseStamp}-${plan.counter}`.slice(0, 80);
+        applyMovements(
+          [{ loc: plan.counter, productId: data.productId, delta: plan.delta }],
+          'OPENING',
+          openAdjRefId,
+          effDate
+        );
+      }
+    }
+
+    if (salesTouched) {
+      const { nextSales: cascadedSales } = reconcileReportOpeningsChain(updatedSalesList, latestRef.current.ledger);
+      commitLocalState({ dailySales: cascadedSales });
+      dirtySlices.push('dailySales');
+    }
+
+    const auditDetails = `${prod.name} ${prod.sizeML}ml (${effDate} Opening) | Godown: ${cur.godown || 0}→${nextGodown}, Normal: ${cur.normal || 0}→${nextNormal}, AC: ${cur.ac || 0}→${nextAc}${data.reason?.trim() ? ` | Reason: ${data.reason.trim()}` : ''}`.slice(0, 500);
+    const auditEntry = buildAuditEntry('ADMIN_STOCK_EDITED', refId, auditDetails);
     commitLocalState({}, [auditEntry]);
-    await syncToServer(['stock', 'ledger', 'auditLog']);
+    await syncToServer(dirtySlices);
   };
 
   // Purchases
@@ -2333,11 +2623,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   };
 
-  // Keep subsequent reports' opening balances aligned with the previous approved day's closing stock
+  // Keep subsequent reports' opening balances aligned with the previous approved day's closing stock (+ any OPEN-ADJ edits)
   const reconcileReportOpeningsChain = (
-    reports: DailySalesReport[]
+    reports: DailySalesReport[],
+    ledgerData: StockLedgerEntry[] = latestRef.current.ledger
   ): { nextSales: DailySalesReport[]; changed: boolean; signature: string } => {
     const prevClosingByCounter = new Map<CounterLocation, Map<string, DailySalesReport['lines'][number]>>();
+    const prevApprovedByCounter = new Map<CounterLocation, DailySalesReport>();
     const ordered = [...reports].sort(
       (a, b) =>
         String(a.date || '').localeCompare(String(b.date || '')) ||
@@ -2354,18 +2646,42 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       const prevMap = prevClosingByCounter.get(rep.counter);
+      const prevApproved = prevApprovedByCounter.get(rep.counter);
       let nextRep = rep;
 
       if (prevMap && prevMap.size > 0) {
+        const repOpenAdjMap = new Map<string, number>();
+        ledgerData.forEach(l => {
+          if (
+            l.location !== rep.counter ||
+            l.refType !== 'OPENING' ||
+            !l.refId.startsWith('OPEN-ADJ-') ||
+            l.businessDate > rep.date
+          ) {
+            return;
+          }
+          const afterPrev =
+            !prevApproved ||
+            l.businessDate > prevApproved.date ||
+            (l.businessDate === prevApproved.date &&
+              (prevApproved.cutoffSeq || 0) > 0 &&
+              (l.seq || 0) > prevApproved.cutoffSeq);
+          const beforeRepCutoff = (rep.cutoffSeq || 0) === 0 || (l.seq || 0) <= rep.cutoffSeq;
+          if (afterPrev && beforeRepCutoff) {
+            repOpenAdjMap.set(l.productId, (repOpenAdjMap.get(l.productId) || 0) + l.delta);
+          }
+        });
+
         let repChanged = false;
         const seenProductIds = new Set<string>();
 
         const nextLines = rep.lines.map(l => {
           seenProductIds.add(l.productId);
           const prevLine = prevMap.get(l.productId);
-          if (!prevLine) return l;
+          const openAdj = repOpenAdjMap.get(l.productId) || 0;
+          if (!prevLine && openAdj === 0) return l;
 
-          const expectedOpening = prevLine.closing;
+          const expectedOpening = Math.max(0, (prevLine ? prevLine.closing : 0) + openAdj);
           const inQty = l.inQty ?? ((l.godownIn || 0) + (l.transferIn || 0));
           const outQty = l.outQty ?? ((l.transferOut || 0) + (l.damageOut || 0));
           const recomputedAvail = Math.max(0, expectedOpening + inQty - outQty);
@@ -2396,7 +2712,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           let extraIdx = 0;
           for (const [pid, prevLine] of prevMap.entries()) {
             if (nextLines.length >= 300) break;
-            if (!seenProductIds.has(pid) && (prevLine.closing || 0) > 0) {
+            const openAdj = repOpenAdjMap.get(pid) || 0;
+            const expectedOpen = Math.max(0, (prevLine.closing || 0) + openAdj);
+            if (!seenProductIds.has(pid) && expectedOpen > 0) {
               extraIdx += 1;
               repChanged = true;
               nextLines.push({
@@ -2407,15 +2725,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 category: prevLine.category,
                 sizeML: prevLine.sizeML,
                 casePack: prevLine.casePack,
-                opening: prevLine.closing,
+                opening: expectedOpen,
                 godownIn: 0,
                 transferIn: 0,
                 transferOut: 0,
                 damageOut: 0,
                 inQty: 0,
                 outQty: 0,
-                available: prevLine.closing,
-                closing: prevLine.closing,
+                available: expectedOpen,
+                closing: expectedOpen,
                 sold: 0,
                 price: prevLine.price,
                 value: 0,
@@ -2435,6 +2753,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const nextMap = new Map<string, DailySalesReport['lines'][number]>();
         nextRep.lines.forEach(l => nextMap.set(l.productId, l));
         prevClosingByCounter.set(nextRep.counter, nextMap);
+        prevApprovedByCounter.set(nextRep.counter, nextRep);
       }
     }
 
@@ -2454,16 +2773,80 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return { nextSales, changed: true, signature };
   };
 
+  // One-time idempotent fresh-start reset: clear all transactional entries and restore original uploaded starting stocks
+  // while keeping current products, edited prices, staff accounts, suppliers, and dropdown options intact.
   useEffect(() => {
-    if (cloudAccessStatus !== 'connected' || !currentUser || pendingDirtySlicesRef.current.has('dailySales')) {
+    if (
+      cloudAccessStatus !== 'connected' ||
+      !isServerHydratedRef.current ||
+      !currentUser ||
+      freshStartResetRef.current
+    ) {
       return;
     }
-    const { nextSales, changed, signature } = reconcileReportOpeningsChain(dailySales);
+    if (auditLog.some(a => a.action === 'FRESH_START_RESET_2026_11_27_V1')) {
+      freshStartResetRef.current = true;
+      return;
+    }
+
+    const curState = latestRef.current;
+    const restoredStock = buildInitialStockMap(curState.deletedProductIds || []);
+    curState.products.forEach(p => {
+      if (!restoredStock[p.productId]) {
+        const initial = INITIAL_STOCK[p.productId];
+        restoredStock[p.productId] = initial ? { ...initial } : { godown: 0, normal: 0, ac: 0 };
+      }
+    });
+
+    const markerAudit: AuditLogEntry = {
+      auditId: `AUD-FRESH-20261127-${uniqueSuffix()}`,
+      timestamp: getNowTimestamp(),
+      userId: currentUser.userId,
+      username: currentUser.username,
+      role: currentUser.role,
+      action: 'FRESH_START_RESET_2026_11_27_V1',
+      refId: 'FRESH-START',
+      details: 'Cleared all previous requests, transfers, daily sales, purchases, expenses, wages, damages, rooms, and ledger; restored original uploaded starting stocks.',
+    };
+
+    freshStartResetRef.current = true;
+    cleanedNov24Ref.current = true;
+    syncedCounterStockRef.current = true;
+    repairedOpeningsSigRef.current = '';
+
+    commitLocalState({
+      stock: restoredStock,
+      purchases: [],
+      requests: [],
+      transfers: [],
+      dailySales: [],
+      deletedDailySales: [],
+      operations: [],
+      ledger: [],
+      auditLog: [markerAudit],
+    });
+    void syncToServer(
+      ['stock', 'purchases', 'requests', 'transfers', 'dailySales', 'deletedDailySales', 'operations', 'ledger', 'auditLog'],
+      undefined,
+      true
+    );
+  }, [cloudAccessStatus, currentUser, auditLog, syncToServer]);
+
+  useEffect(() => {
+    if (
+      cloudAccessStatus !== 'connected' ||
+      !currentUser ||
+      !freshStartResetRef.current ||
+      pendingDirtySlicesRef.current.has('dailySales')
+    ) {
+      return;
+    }
+    const { nextSales, changed, signature } = reconcileReportOpeningsChain(dailySales, ledger);
     if (!changed || signature === repairedOpeningsSigRef.current) return;
     repairedOpeningsSigRef.current = signature;
     commitLocalState({ dailySales: nextSales });
     void syncToServer(['dailySales']);
-  }, [cloudAccessStatus, currentUser, dailySales, syncToServer]);
+  }, [cloudAccessStatus, currentUser, dailySales, ledger, syncToServer]);
 
   // One-time idempotent cleanup: delete all Transfer Out entries affecting 2026-11-24 (Normal & AC) and restore stock
   useEffect(() => {
@@ -2471,6 +2854,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       cloudAccessStatus !== 'connected' ||
       !isServerHydratedRef.current ||
       !currentUser ||
+      !freshStartResetRef.current ||
       cleanedNov24Ref.current ||
       pendingDirtySlicesRef.current.has('ledger') ||
       pendingDirtySlicesRef.current.has('transfers') ||
@@ -2662,6 +3046,158 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   }, [cloudAccessStatus, currentUser, auditLog, ledger, transfers, requests, dailySales, syncToServer]);
 
+  // Core Counter Stock <-> Daily Sales alignment routine (sets Live Counter Stock = latest Approved Closing + valid post-cutoff movements)
+  const performCounterStockAlignment = React.useCallback(
+    (auditAction: string, actorUser?: User): { updated: number; counters: string[] } => {
+      const curState = latestRef.current;
+      const nextStock: Record<string, { godown: number; normal: number; ac: number }> = { ...curState.stock };
+      const touchedCounters = new Set<string>();
+      const newSyncLedger: StockLedgerEntry[] = [];
+      let updatedCount = 0;
+      let nextSeq = curState.ledger.reduce((m, l) => Math.max(m, l.seq || 0), 0) + 1;
+      const existingLedgerIds = curState.ledger.map(l => l.ledgerId);
+      const now = getNowTimestamp();
+
+      (['NORMAL', 'AC'] as CounterLocation[]).forEach(counter => {
+        const lastApproved = curState.dailySales
+          .filter(
+            r =>
+              r.counter === counter &&
+              r.status === 'Approved' &&
+              !r.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY')
+          )
+          .sort((a, b) => b.date.localeCompare(a.date) || (b.submittedAt || '').localeCompare(a.submittedAt || ''))[0];
+
+        if (!lastApproved) return;
+
+        const baseClosingMap = new Map<string, number>();
+        lastApproved.lines.forEach(l => baseClosingMap.set(l.productId, l.closing));
+
+        const postCutoffMap = new Map<string, number>();
+        const totalLedgerMap = new Map<string, number>();
+
+        curState.ledger
+          .filter(l => l.location === counter)
+          .forEach(l => {
+            totalLedgerMap.set(l.productId, (totalLedgerMap.get(l.productId) || 0) + l.delta);
+
+            if (l.refType === 'OPENING') {
+              const includeOpenAdj = l.refId.startsWith('OPEN-ADJ-');
+              const includePostReportOpen = l.refId.startsWith('OPEN-RPT-') && l.businessDate > lastApproved.date;
+              if (!includeOpenAdj && !includePostReportOpen) return;
+            }
+
+            const isAfterCutoff =
+              l.businessDate > lastApproved.date ||
+              (l.businessDate === lastApproved.date &&
+                (lastApproved.cutoffSeq || 0) > 0 &&
+                (l.seq || 0) > lastApproved.cutoffSeq);
+
+            if (isAfterCutoff) {
+              postCutoffMap.set(l.productId, (postCutoffMap.get(l.productId) || 0) + l.delta);
+            }
+          });
+
+        const counterKey = counter.toLowerCase() as 'normal' | 'ac';
+
+        curState.products.forEach(p => {
+          const baseClose = baseClosingMap.get(p.productId) || 0;
+          const postNet = postCutoffMap.get(p.productId) || 0;
+          const expectedQty = Math.max(0, baseClose + postNet);
+          const curLevel = nextStock[p.productId] || { godown: 0, normal: 0, ac: 0 };
+          const curQty = curLevel[counterKey] || 0;
+
+          if (curQty !== expectedQty) {
+            nextStock[p.productId] = {
+              ...curLevel,
+              [counterKey]: expectedQty,
+            };
+            updatedCount += 1;
+            touchedCounters.add(counter);
+          }
+
+          const ledgerSum = totalLedgerMap.get(p.productId) || 0;
+          const ledgerDiff = expectedQty - ledgerSum;
+          if (ledgerDiff !== 0) {
+            const ledId = `${nextPrefixedId('LED', existingLedgerIds, 6, newSyncLedger.length)}-${uniqueSuffix()}`;
+            newSyncLedger.push({
+              seq: nextSeq++,
+              ledgerId: ledId,
+              timestamp: now,
+              location: counter,
+              productId: p.productId,
+              productName: `${p.name} ${p.sizeML}ml`,
+              delta: ledgerDiff,
+              balanceAfter: expectedQty,
+              refType: 'OPENING',
+              refId: 'OPENING-SYNC',
+              approvedBy: (actorUser || currentUser)?.username || 'system',
+              businessDate: lastApproved.date,
+            });
+          }
+        });
+      });
+
+      if (updatedCount === 0 && newSyncLedger.length === 0) {
+        return { updated: 0, counters: [] };
+      }
+
+      const countersArr = Array.from(touchedCounters);
+      const dirtySlices = ['auditLog'];
+      if (updatedCount > 0) dirtySlices.push('stock');
+      if (newSyncLedger.length > 0) dirtySlices.push('ledger');
+
+      const auditEntry = buildAuditEntry(
+        auditAction,
+        'COUNTER-DAILY-SALES-SYNC',
+        `Aligned ${updatedCount} counter stock balance(s) (${countersArr.join(' & ') || 'None'}) to match Daily Sales closing-to-opening chain + post-cutoff movements.`.slice(0, 500),
+        actorUser
+      );
+
+      commitLocalState(
+        {
+          ...(updatedCount > 0 ? { stock: nextStock } : {}),
+          ...(newSyncLedger.length > 0 ? { ledger: [...newSyncLedger, ...curState.ledger] } : {}),
+        },
+        [auditEntry]
+      );
+      void syncToServer(dirtySlices);
+
+      return { updated: updatedCount, counters: countersArr };
+    },
+    [currentUser, syncToServer]
+  );
+
+  // One-time auto-sync after Nov 24 cleanup: ensure Live Counter Stock matches Daily Sales (23rd closing -> 24th opening)
+  useEffect(() => {
+    if (
+      cloudAccessStatus !== 'connected' ||
+      !isServerHydratedRef.current ||
+      !currentUser ||
+      !cleanedNov24Ref.current ||
+      syncedCounterStockRef.current ||
+      pendingDirtySlicesRef.current.has('stock') ||
+      pendingDirtySlicesRef.current.has('ledger') ||
+      pendingDirtySlicesRef.current.has('dailySales')
+    ) {
+      return;
+    }
+    if (auditLog.some(a => a.action === 'SYNC_COUNTER_STOCK_TO_DAILY_SALES_V1')) {
+      syncedCounterStockRef.current = true;
+      return;
+    }
+
+    syncedCounterStockRef.current = true;
+    performCounterStockAlignment('SYNC_COUNTER_STOCK_TO_DAILY_SALES_V1');
+  }, [cloudAccessStatus, currentUser, auditLog, dailySales, ledger, stock, performCounterStockAlignment]);
+
+  const syncCounterStockToDailySales = async (): Promise<{ updated: number; counters: string[] }> => {
+    if (currentUser?.role !== 'ADMIN') {
+      throw new Error('Admin permission required to sync counter stock.');
+    }
+    return performCounterStockAlignment('COUNTER_STOCK_SYNCED_TO_DAILY_SALES', currentUser);
+  };
+
   // Daily Sales Computations
   const getReportFormLines = (counter: CounterLocation, date: string) => {
     const existing = dailySales.find(r => r.counter === counter && r.date === date && r.status !== 'Rejected');
@@ -2693,6 +3229,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lastApproved.lines.forEach(l => openingMap.set(l.productId, l.closing));
     }
 
+    const openingAdjMap = new Map<string, number>();
     const godownInMap = new Map<string, number>();
     const transferInMap = new Map<string, number>();
     const transferOutMap = new Map<string, number>();
@@ -2700,8 +3237,25 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const postDateDeltaMap = new Map<string, number>();
 
     ledger.filter(l => l.location === counter).forEach(l => {
-      // Never treat baseline ledger-sync OPENING entries as date-scoped stock movements
-      if (l.refType === 'OPENING') return;
+      // Handle OPENING entries: baseline OPENING-SYNC / report-baked OPEN-RPT are skipped;
+      // date-scoped OPEN-ADJ entries directly modify that day's Opening Stock without touching Trans In/Out
+      if (l.refType === 'OPENING') {
+        if (!l.refId.startsWith('OPEN-ADJ-')) return;
+        if (l.businessDate > date) {
+          postDateDeltaMap.set(l.productId, (postDateDeltaMap.get(l.productId) || 0) + l.delta);
+          return;
+        }
+        const afterPrior =
+          !lastApproved ||
+          l.businessDate > lastApproved.date ||
+          (l.businessDate === lastApproved.date &&
+            (lastApproved.cutoffSeq || 0) > 0 &&
+            (l.seq || 0) > lastApproved.cutoffSeq);
+        if (afterPrior) {
+          openingAdjMap.set(l.productId, (openingAdjMap.get(l.productId) || 0) + l.delta);
+        }
+        return;
+      }
 
       if (l.businessDate > date) {
         postDateDeltaMap.set(l.productId, (postDateDeltaMap.get(l.productId) || 0) + l.delta);
@@ -2744,8 +3298,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const tOut = transferOutMap.get(p.productId) || 0;
       const dOut = damageOutMap.get(p.productId) || 0;
       const priorClose = openingMap.get(p.productId) || 0;
+      const openAdj = openingAdjMap.get(p.productId) || 0;
       const postDelta = postDateDeltaMap.get(p.productId) || 0;
-      return p.active || liveQty > 0 || gIn > 0 || tIn > 0 || tOut > 0 || dOut > 0 || priorClose > 0 || postDelta !== 0;
+      return p.active || liveQty > 0 || gIn > 0 || tIn > 0 || tOut > 0 || dOut > 0 || priorClose > 0 || openAdj !== 0 || postDelta !== 0;
     });
 
     const lines = eligibleProducts.map(p => {
@@ -2754,13 +3309,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const tIn = transferInMap.get(p.productId) || 0;
       const tOut = transferOutMap.get(p.productId) || 0;
       const dOut = damageOutMap.get(p.productId) || 0;
+      const openAdj = openingAdjMap.get(p.productId) || 0;
       const postDelta = postDateDeltaMap.get(p.productId) || 0;
 
       const netMovement = gIn + tIn - tOut - dOut;
       const liveAvailAtDate = Math.max(0, liveQty - postDelta);
       const derivedOpen = Math.max(0, liveAvailAtDate - netMovement);
       const priorClosing = openingMap.get(p.productId);
-      const open = priorClosing !== undefined ? priorClosing : (lastApproved ? 0 : derivedOpen);
+      const baseOpen = priorClosing !== undefined ? priorClosing : (lastApproved ? 0 : Math.max(0, derivedOpen - openAdj));
+      const open = Math.max(0, baseOpen + openAdj);
       const avail = Math.max(0, open + netMovement);
 
       return {
@@ -3867,6 +4424,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         saveProduct,
         deleteProduct,
         adminAdjustStock,
+        syncCounterStockToDailySales,
+        getCounterDatePreview,
         submitPurchaseBatch,
         reviewPurchaseBill,
         editPurchaseRecord,

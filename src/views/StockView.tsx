@@ -1,19 +1,37 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { StockItem } from '../types';
-import { Search, Printer, X, Filter, Edit3, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Search, Printer, X, Filter, Edit3, CheckCircle2, AlertCircle, RefreshCw, Calendar } from 'lucide-react';
 import { CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
 
+function addDaysISO(dateStr: string, days: number): string {
+  const parts = String(dateStr || '').split('-').map(Number);
+  if (parts.length !== 3 || parts.some(n => !Number.isFinite(n))) return dateStr;
+  const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + days));
+  return dt.toISOString().slice(0, 10);
+}
+
 export const StockView: React.FC = () => {
-  const { stockItems, currentUser, adminAdjustStock, saveProduct } = useStock();
+  const {
+    stockItems,
+    currentUser,
+    dailySales,
+    businessDate,
+    adminAdjustStock,
+    syncCounterStockToDailySales,
+    getCounterDatePreview,
+    saveProduct
+  } = useStock();
   const isAdmin = currentUser?.role === 'ADMIN';
 
   const [search, setSearch] = useState('');
   const [selectedCat, setSelectedCat] = useState('');
   const [showAllStocks, setShowAllStocks] = useState(false);
+  const [syncingCounters, setSyncingCounters] = useState(false);
 
   // Admin Edit Stock & Price Modal state
   const [editingItem, setEditingItem] = useState<StockItem | null>(null);
+  const [editEffectiveDate, setEditEffectiveDate] = useState('');
   const [editGodown, setEditGodown] = useState('0');
   const [editNormal, setEditNormal] = useState('0');
   const [editAc, setEditAc] = useState('0');
@@ -100,14 +118,45 @@ export const StockView: React.FC = () => {
     return `${cases} ${cases === 1 ? 'case' : 'cases'} + ${btls} btls`;
   };
 
+  const getDefaultEffectiveDate = () => {
+    const latestApproved = dailySales
+      .filter(r => r.status === 'Approved' && !r.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY'))
+      .sort((a, b) => b.date.localeCompare(a.date))[0];
+    if (latestApproved?.date) {
+      const nextDay = addDaysISO(latestApproved.date, 1);
+      if (businessDate && nextDay <= businessDate) return nextDay;
+      return nextDay;
+    }
+    return businessDate || new Date().toISOString().slice(0, 10);
+  };
+
   const openEditModal = (item: StockItem) => {
     setEditingItem(item);
+    setEditEffectiveDate(getDefaultEffectiveDate());
     setEditGodown(String(item.godown));
     setEditNormal(String(item.normal));
     setEditAc(String(item.ac));
     setEditPrice(String(item.price));
     setEditReason('');
     setStatusMsg(null);
+  };
+
+  const handleSyncCounters = async () => {
+    try {
+      setSyncingCounters(true);
+      const res = await syncCounterStockToDailySales();
+      setStatusMsg({
+        type: 'ok',
+        text:
+          res.updated > 0
+            ? `Synced ${res.updated} counter stock balance${res.updated === 1 ? '' : 's'} (${res.counters.join(' & ')}) to match Daily Sales.`
+            : 'Counter Stock (Normal & AC) already matches Daily Sales balances.'
+      });
+    } catch (err: any) {
+      setStatusMsg({ type: 'err', text: err?.message || 'Failed to sync counter stock with Daily Sales.' });
+    } finally {
+      setSyncingCounters(false);
+    }
   };
 
   const handleSaveEdit = async (e: React.FormEvent) => {
@@ -118,6 +167,7 @@ export const StockView: React.FC = () => {
     const n = Math.floor(Number(editNormal));
     const a = Math.floor(Number(editAc));
     const p = editPrice.trim() === '' ? NaN : Math.round((Number(editPrice) + Number.EPSILON) * 100) / 100;
+    const effDate = editEffectiveDate.trim() || getDefaultEffectiveDate();
 
     if (Number.isNaN(g) || Number.isNaN(n) || Number.isNaN(a) || g < 0 || n < 0 || a < 0) {
       setStatusMsg({ type: 'err', text: 'Stock quantities must be 0 or positive whole bottle counts.' });
@@ -139,6 +189,7 @@ export const StockView: React.FC = () => {
           godown: g,
           normal: n,
           ac: a,
+          effectiveDate: effDate,
           reason: editReason
         });
       }
@@ -155,7 +206,7 @@ export const StockView: React.FC = () => {
       }
 
       const changes: string[] = [];
-      if (stockChanged) changes.push(`Stock → Godown: ${g}, Normal: ${n}, AC: ${a}`);
+      if (stockChanged) changes.push(`Stock (${effDate} Opening) → Godown: ${g}, Normal: ${n}, AC: ${a}`);
       if (priceChanged) changes.push(`Selling Price → ${formatCurrency(p)}`);
 
       setStatusMsg({
@@ -205,13 +256,26 @@ export const StockView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={handlePrint}
-          className="flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 transition-colors cursor-pointer"
-        >
-          <Printer className="h-4 w-4" />
-          <span>Print Stock Report</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={handleSyncCounters}
+              disabled={syncingCounters}
+              className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-800 shadow-xs hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-900/50 transition-colors cursor-pointer"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${syncingCounters ? 'animate-spin' : ''}`} />
+              <span>{syncingCounters ? 'Syncing...' : 'Match Counter Stock to Daily Sales'}</span>
+            </button>
+          )}
+          <button
+            onClick={handlePrint}
+            className="flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 transition-colors cursor-pointer"
+          >
+            <Printer className="h-4 w-4" />
+            <span>Print Stock Report</span>
+          </button>
+        </div>
       </div>
 
       {/* Feedback Banner */}
@@ -502,149 +566,206 @@ export const StockView: React.FC = () => {
       </div>
 
       {/* Admin Edit Stock & Price Modal */}
-      {isAdmin && editingItem && (
-        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3 dark:border-slate-800">
-              <div>
-                <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-600 dark:text-amber-400">
-                  Admin Stock &amp; Price Override
-                </span>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  {editingItem.name} ({editingItem.sizeML} ml)
-                </h3>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {editingItem.category} · {editingItem.casePack} btls/case · Current MRP: {formatCurrency(editingItem.price)}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingItem(null)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+      {isAdmin && editingItem && (() => {
+        const effDate = editEffectiveDate.trim() || getDefaultEffectiveDate();
+        const normalPreview = getCounterDatePreview('NORMAL', effDate, editingItem.productId);
+        const acPreview = getCounterDatePreview('AC', effDate, editingItem.productId);
+        const parsedNormal = Math.floor(Number(editNormal));
+        const parsedAc = Math.floor(Number(editAc));
+        const normalDelta = Number.isNaN(parsedNormal) ? 0 : parsedNormal - editingItem.normal;
+        const acDelta = Number.isNaN(parsedAc) ? 0 : parsedAc - editingItem.ac;
+        const projectedNormalOpen = normalPreview.currentOpening + normalDelta;
+        const projectedAcOpen = acPreview.currentOpening + acDelta;
 
-            {statusMsg && (
-              <div
-                className={`mt-3 flex items-center gap-2 rounded-lg border p-2.5 text-xs ${
-                  statusMsg.type === 'err'
-                    ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300'
-                    : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                }`}
-              >
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>{statusMsg.text}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleSaveEdit} className="mt-4 space-y-3.5">
-              <div>
-                <label className="mb-1 flex items-center justify-between text-xs font-bold text-amber-900 dark:text-amber-300">
-                  <span>Selling Price / MRP (₹ per bottle)</span>
-                  <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
-                    Current: {formatCurrency(editingItem.price)}
+        return (
+          <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3 dark:border-slate-800">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-600 dark:text-amber-400">
+                    Admin Stock &amp; Price Override
                   </span>
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={editPrice}
-                  onChange={e => setEditPrice(e.target.value)}
-                  className="w-full rounded-lg border border-amber-300 bg-amber-50/40 px-3 py-2 font-mono text-sm font-bold text-slate-900 focus:border-amber-500 focus:outline-none dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-white"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 flex items-center justify-between text-xs font-bold text-blue-900 dark:text-blue-300">
-                  <span>Godown Central (Total Bottles)</span>
-                  <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
-                    {formatBreakdown(editGodown, editingItem.casePack)}
-                  </span>
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={editGodown}
-                  onChange={e => setEditGodown(e.target.value)}
-                  className="w-full rounded-lg border border-blue-200 bg-blue-50/30 px-3 py-2 font-mono text-sm font-bold text-slate-900 focus:border-blue-500 focus:outline-none dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-white"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 flex items-center justify-between text-xs font-bold text-emerald-900 dark:text-emerald-300">
-                  <span>Normal Counter (Total Bottles)</span>
-                  <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
-                    {formatBreakdown(editNormal, editingItem.casePack)}
-                  </span>
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={editNormal}
-                  onChange={e => setEditNormal(e.target.value)}
-                  className="w-full rounded-lg border border-emerald-200 bg-emerald-50/30 px-3 py-2 font-mono text-sm font-bold text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-white"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 flex items-center justify-between text-xs font-bold text-purple-900 dark:text-purple-300">
-                  <span>AC Counter (Total Bottles)</span>
-                  <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
-                    {formatBreakdown(editAc, editingItem.casePack)}
-                  </span>
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={editAc}
-                  onChange={e => setEditAc(e.target.value)}
-                  className="w-full rounded-lg border border-purple-200 bg-purple-50/30 px-3 py-2 font-mono text-sm font-bold text-slate-900 focus:border-purple-500 focus:outline-none dark:border-purple-900/60 dark:bg-purple-950/20 dark:text-white"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-bold text-slate-700 dark:text-slate-300">
-                  Adjustment Reason (Optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Opening physical count or MRP revision"
-                  value={editReason}
-                  onChange={e => setEditReason(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-amber-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    {editingItem.name} ({editingItem.sizeML} ml)
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {editingItem.category} · {editingItem.casePack} btls/case · Current MRP: {formatCurrency(editingItem.price)}
+                  </p>
+                </div>
                 <button
                   type="button"
                   onClick={() => setEditingItem(null)}
-                  className="rounded-lg border border-slate-200 px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                  className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={savingEdit}
-                  className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 shadow-xs hover:bg-amber-400 disabled:opacity-50 transition-colors cursor-pointer"
-                >
-                  {savingEdit ? 'Saving...' : 'Save Changes'}
+                  <X className="h-4 w-4" />
                 </button>
               </div>
-            </form>
+
+              {statusMsg && (
+                <div
+                  className={`mt-3 flex items-center gap-2 rounded-lg border p-2.5 text-xs ${
+                    statusMsg.type === 'err'
+                      ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300'
+                      : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  }`}
+                >
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{statusMsg.text}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleSaveEdit} className="mt-4 space-y-3.5">
+                <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 dark:border-slate-700 dark:bg-slate-800/50">
+                  <label className="mb-1 flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-200">
+                    <span className="flex items-center gap-1.5">
+                      <Calendar className="h-3.5 w-3.5 text-amber-500" />
+                      <span>Effective Date (Daily Sales Opening)</span>
+                    </span>
+                    <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                      Updates Open directly
+                    </span>
+                  </label>
+                  <input
+                    type="date"
+                    value={effDate}
+                    onChange={e => setEditEffectiveDate(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-mono text-xs font-bold text-slate-900 focus:border-amber-500 focus:outline-none dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                    required
+                  />
+                  <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400">
+                    <span>Normal: {normalPreview.reportStatus === 'Open' ? 'Open Shift' : `${normalPreview.reportStatus} Report`}</span>
+                    <span>AC: {acPreview.reportStatus === 'Open' ? 'Open Shift' : `${acPreview.reportStatus} Report`}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 flex items-center justify-between text-xs font-bold text-amber-900 dark:text-amber-300">
+                    <span>Selling Price / MRP (₹ per bottle)</span>
+                    <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                      Current: {formatCurrency(editingItem.price)}
+                    </span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={editPrice}
+                    onChange={e => setEditPrice(e.target.value)}
+                    className="w-full rounded-lg border border-amber-300 bg-amber-50/40 px-3 py-2 font-mono text-sm font-bold text-slate-900 focus:border-amber-500 focus:outline-none dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-white"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 flex items-center justify-between text-xs font-bold text-blue-900 dark:text-blue-300">
+                    <span>Godown Central (Total Bottles)</span>
+                    <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                      {formatBreakdown(editGodown, editingItem.casePack)}
+                    </span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={editGodown}
+                    onChange={e => setEditGodown(e.target.value)}
+                    className="w-full rounded-lg border border-blue-200 bg-blue-50/30 px-3 py-2 font-mono text-sm font-bold text-slate-900 focus:border-blue-500 focus:outline-none dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-white"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 flex items-center justify-between text-xs font-bold text-emerald-900 dark:text-emerald-300">
+                    <span>Normal Counter (Total Bottles)</span>
+                    <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                      {formatBreakdown(editNormal, editingItem.casePack)}
+                    </span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={editNormal}
+                    onChange={e => setEditNormal(e.target.value)}
+                    className="w-full rounded-lg border border-emerald-200 bg-emerald-50/30 px-3 py-2 font-mono text-sm font-bold text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-white"
+                    required
+                  />
+                  <div
+                    className={`mt-1 text-[11px] font-mono ${
+                      projectedNormalOpen < 0
+                        ? 'text-red-600 dark:text-red-400 font-bold'
+                        : 'text-emerald-700 dark:text-emerald-400'
+                    }`}
+                  >
+                    Opening ({effDate}): {normalPreview.currentOpening}
+                    {normalDelta !== 0 ? ` → ${projectedNormalOpen}` : ''} btls
+                    {projectedNormalOpen < 0 ? ' (below 0 — invalid)' : ''}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 flex items-center justify-between text-xs font-bold text-purple-900 dark:text-purple-300">
+                    <span>AC Counter (Total Bottles)</span>
+                    <span className="font-mono text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                      {formatBreakdown(editAc, editingItem.casePack)}
+                    </span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={editAc}
+                    onChange={e => setEditAc(e.target.value)}
+                    className="w-full rounded-lg border border-purple-200 bg-purple-50/30 px-3 py-2 font-mono text-sm font-bold text-slate-900 focus:border-purple-500 focus:outline-none dark:border-purple-900/60 dark:bg-purple-950/20 dark:text-white"
+                    required
+                  />
+                  <div
+                    className={`mt-1 text-[11px] font-mono ${
+                      projectedAcOpen < 0
+                        ? 'text-red-600 dark:text-red-400 font-bold'
+                        : 'text-purple-700 dark:text-purple-400'
+                    }`}
+                  >
+                    Opening ({effDate}): {acPreview.currentOpening}
+                    {acDelta !== 0 ? ` → ${projectedAcOpen}` : ''} btls
+                    {projectedAcOpen < 0 ? ' (below 0 — invalid)' : ''}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Adjustment Reason (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Opening physical count or MRP revision"
+                    value={editReason}
+                    onChange={e => setEditReason(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-amber-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setEditingItem(null)}
+                    className="rounded-lg border border-slate-200 px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingEdit || projectedNormalOpen < 0 || projectedAcOpen < 0}
+                    className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 shadow-xs hover:bg-amber-400 disabled:opacity-50 transition-colors cursor-pointer"
+                  >
+                    {savingEdit ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };
