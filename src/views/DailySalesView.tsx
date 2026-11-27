@@ -19,7 +19,10 @@ import {
   Users,
   UserCheck,
   Calendar,
-  Search
+  Search,
+  FileSpreadsheet,
+  Lock,
+  EyeOff
 } from 'lucide-react';
 import { DailySalesReport, CounterLocation } from '../types';
 import { CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
@@ -28,6 +31,10 @@ import {
   getNormalCashBreakdownForDate,
   getReportReconciliation
 } from '../utils/reconciliation';
+import {
+  PrintableDailySalesSheet,
+  PrintableConsolidatedShiftSheet
+} from '../components/DailySalesPrintSheet';
 
 interface DailySalesDraft {
   closingInputs: Record<string, string>;
@@ -135,6 +142,7 @@ const hasDraftEntries = (
 export const DailySalesView: React.FC = () => {
   const {
     currentUser,
+    verifyCurrentAdminPassword,
     businessDate,
     dailySales,
     operations,
@@ -249,8 +257,51 @@ export const DailySalesView: React.FC = () => {
   const [savingReportEdit, setSavingReportEdit] = useState(false);
   const [confirmingDeleteReport, setConfirmingDeleteReport] = useState(false);
   const [deleteReportReason, setDeleteReportReason] = useState('');
+  const [deleteReportPassword, setDeleteReportPassword] = useState('');
+  const [showDeleteReportPassword, setShowDeleteReportPassword] = useState(false);
+  const [deleteReportError, setDeleteReportError] = useState<string | null>(null);
   const [deletingReport, setDeletingReport] = useState(false);
   const [inspectShowAllLines, setInspectShowAllLines] = useState(false);
+  const [justSubmittedReportId, setJustSubmittedReportId] = useState<string | null>(null);
+  const [printMode, setPrintMode] = useState<'DEFAULT' | 'DAILY_SALES' | 'CONSOLIDATED_SHIFT'>('DEFAULT');
+  const [printReportTarget, setPrintReportTarget] = useState<DailySalesReport | null>(null);
+  const printTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const resetPrintMode = () => {
+      setPrintMode('DEFAULT');
+      setPrintReportTarget(null);
+      if (printTimerRef.current !== null) {
+        window.clearTimeout(printTimerRef.current);
+        printTimerRef.current = null;
+      }
+    };
+    window.addEventListener('afterprint', resetPrintMode);
+    return () => {
+      window.removeEventListener('afterprint', resetPrintMode);
+      if (printTimerRef.current !== null) {
+        window.clearTimeout(printTimerRef.current);
+      }
+    };
+  }, []);
+
+  const triggerPrintMode = (mode: 'DAILY_SALES' | 'CONSOLIDATED_SHIFT', report?: DailySalesReport | null) => {
+    if (printTimerRef.current !== null) {
+      window.clearTimeout(printTimerRef.current);
+    }
+    setPrintReportTarget(report || null);
+    setPrintMode(mode);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.print();
+      });
+    });
+    printTimerRef.current = window.setTimeout(() => {
+      setPrintMode('DEFAULT');
+      setPrintReportTarget(null);
+      printTimerRef.current = null;
+    }, 60000);
+  };
 
   // Admin historical entry modal
   const [showHistoricalModal, setShowHistoricalModal] = useState(false);
@@ -303,6 +354,7 @@ export const DailySalesView: React.FC = () => {
 
     const nextDraft = !isAdmin ? readSalesDraft(counter, nextDate) : null;
     loadedDraftKeyRef.current = `${counter}::${nextDate}`;
+    setJustSubmittedReportId(null);
     setReportDate(nextDate);
     setClosingInputs(nextDraft?.closingInputs || {});
     setCashierName(nextDraft?.cashierName || '');
@@ -664,7 +716,8 @@ export const DailySalesView: React.FC = () => {
         clearActiveDraftDate(counter);
       }
       setShowSubmitPreview(false);
-      setStatusMessage({ type: 'ok', text: `Shift report ${reportId} auto-approved and recorded! Stock decremented and immediately reflected in Consolidated Report.` });
+      setJustSubmittedReportId(reportId);
+      setStatusMessage({ type: 'ok', text: `Shift report ${reportId} auto-approved and recorded! Stock decremented and immediately reflected in Consolidated Report. Use the Print Daily Sales or Print Consolidated buttons below if needed.` });
       setClosingInputs({});
       setCashierName('');
       setHelperName('');
@@ -740,6 +793,9 @@ export const DailySalesView: React.FC = () => {
     setIsEditingReport(false);
     setConfirmingDeleteReport(false);
     setDeleteReportReason('');
+    setDeleteReportPassword('');
+    setShowDeleteReportPassword(false);
+    setDeleteReportError(null);
     setInspectShowAllLines(false);
     setModalError(null);
   };
@@ -933,24 +989,68 @@ export const DailySalesView: React.FC = () => {
     if (!activeViewingReport) return;
     try {
       setModalError(null);
+      setDeleteReportError(null);
       setDeletingReport(true);
+      if (isAdmin) {
+        verifyCurrentAdminPassword(deleteReportPassword);
+      }
       const deletedInfo = `${activeViewingReport.reportId} (${activeViewingReport.date} · ${activeViewingReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'})`;
       await adminDeleteDailySales(
         activeViewingReport.reportId,
         deleteReportReason.trim() || 'Deleted from Inspect Report for re-entry'
       );
       setConfirmingDeleteReport(false);
+      setDeleteReportReason('');
+      setDeleteReportPassword('');
+      setShowDeleteReportPassword(false);
+      setDeleteReportError(null);
       setViewingReport(null);
       setStatusMessage({
         type: 'ok',
         text: `Deleted report ${deletedInfo}. Sold bottles were restored to counter stock and you can now re-submit daily sales for that date.`
       });
     } catch (err: any) {
-      setModalError(err?.message || 'Failed to delete daily sales report.');
+      const msg = err?.message || 'Failed to delete daily sales report.';
+      if (isAdmin) {
+        setDeleteReportError(msg);
+      } else {
+        setModalError(msg);
+      }
     } finally {
       setDeletingReport(false);
     }
   };
+
+  // Active shift report on the currently selected reportDate for counter post-submit summary & print
+  const activeShiftReport = useMemo(() => {
+    if (isAdmin) return null;
+    if (justSubmittedReportId) {
+      const exact = dailySales.find(
+        r => r.reportId === justSubmittedReportId && r.date === reportDate && r.counter === counter && r.status !== 'Rejected'
+      );
+      if (exact) return exact;
+    }
+    const matches = dailySales.filter(r => r.counter === counter && r.date === reportDate && r.status !== 'Rejected');
+    return matches.find(r => r.status === 'Approved') || matches[0] || null;
+  }, [isAdmin, justSubmittedReportId, dailySales, reportDate, counter]);
+
+  const consolidatedPrintDate =
+    printMode === 'CONSOLIDATED_SHIFT' && printReportTarget
+      ? printReportTarget.date
+      : reportDate;
+
+  const consolidatedPrintScope: CounterLocation | 'ALL' =
+    isAdmin ? 'ALL' : printReportTarget?.counter || counter;
+
+  const consolidatedNormalSale = useMemo(() => {
+    const matches = dailySales.filter(r => r.counter === 'NORMAL' && r.date === consolidatedPrintDate && r.status !== 'Rejected');
+    return matches.find(r => r.status === 'Approved') || matches[0] || null;
+  }, [dailySales, consolidatedPrintDate]);
+
+  const consolidatedAcSale = useMemo(() => {
+    const matches = dailySales.filter(r => r.counter === 'AC' && r.date === consolidatedPrintDate && r.status !== 'Rejected');
+    return matches.find(r => r.status === 'Approved') || matches[0] || null;
+  }, [dailySales, consolidatedPrintDate]);
 
   // Admin filter reports
   const displayedReports = dailySales.filter(r => {
@@ -961,7 +1061,7 @@ export const DailySalesView: React.FC = () => {
 
   return (
     <div className="print-surface space-y-6">
-      <div className={activeViewingReport ? 'no-print space-y-6' : 'space-y-6'}>
+      <div className={printMode !== 'DEFAULT' || activeViewingReport ? 'no-print space-y-6' : 'space-y-6'}>
       {/* Print-only formal header */}
       <div className="print-header text-center">
         <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – DAILY SALES & RECONCILIATION</h1>
@@ -1142,15 +1242,103 @@ export const DailySalesView: React.FC = () => {
           )}
 
           {formState.blockedMessage ? (
-            <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200 space-y-3">
+            <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200 space-y-4">
               <div className="flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-                <div>
+                {activeShiftReport ? (
+                  <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                )}
+                <div className="min-w-0">
                   <strong className="block text-sm font-bold mb-1">Shift Report Status for {reportDate}</strong>
                   <p>{formState.blockedMessage}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2 pt-2 border-t border-amber-200/60 dark:border-amber-900/40">
+
+              {activeShiftReport && (() => {
+                const shiftRec = getReportReconciliation(activeShiftReport, operations);
+                return (
+                  <div className="rounded-xl border border-emerald-200/80 bg-white/95 p-4 text-slate-800 dark:border-emerald-900/50 dark:bg-slate-900/90 dark:text-slate-100 space-y-3 shadow-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5 dark:border-slate-800">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          {activeShiftReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} · {activeShiftReport.reportId}
+                        </span>
+                        <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                          {activeShiftReport.status}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Cashier: <strong>{activeShiftReport.cashierName || '—'}</strong> · Helper: <strong>{activeShiftReport.helperName || '—'}</strong>
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                      <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/70">
+                        <span className="text-[10px] font-semibold uppercase text-slate-500 dark:text-slate-400">Bottles Sold</span>
+                        <div className="font-mono tabular-nums text-sm font-bold text-slate-900 dark:text-white">
+                          {activeShiftReport.totalSoldQty} btls
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/70">
+                        <span className="text-[10px] font-semibold uppercase text-slate-500 dark:text-slate-400">Liquor Sales</span>
+                        <div className="font-mono tabular-nums text-sm font-bold text-emerald-700 dark:text-emerald-400">
+                          {formatCurrency(activeShiftReport.totalSalesValue)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/70">
+                        <span className="text-[10px] font-semibold uppercase text-slate-500 dark:text-slate-400">Total Collected</span>
+                        <div className="font-mono tabular-nums text-sm font-bold text-slate-900 dark:text-white">
+                          {formatCurrency(activeShiftReport.recordedAmount)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/70">
+                        <span className="text-[10px] font-semibold uppercase text-slate-500 dark:text-slate-400">Staff Difference</span>
+                        <div className={`font-mono tabular-nums text-sm font-bold ${
+                          Math.abs(shiftRec.staffDifference) <= 0.009
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : shiftRec.staffDifference > 0
+                            ? 'text-blue-600 dark:text-blue-400'
+                            : 'text-red-600 dark:text-red-400'
+                        }`}>
+                          {Math.abs(shiftRec.staffDifference) <= 0.009
+                            ? '✓ Exact Match'
+                            : `${shiftRec.staffDifference > 0 ? '+' : ''}${formatCurrency(shiftRec.staffDifference)}`}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="no-print flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => triggerPrintMode('DAILY_SALES', activeShiftReport)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-bold text-white hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <Printer className="h-3.5 w-3.5" />
+                        <span>Print Daily Sales</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => triggerPrintMode('CONSOLIDATED_SHIFT', activeShiftReport)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <FileSpreadsheet className="h-3.5 w-3.5" />
+                        <span>Print Consolidated</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openInspectReport(activeShiftReport)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        <span>Inspect / Edit Report</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-amber-200/60 dark:border-amber-900/40">
                 <span className="font-semibold text-slate-700 dark:text-slate-300">Select another date:</span>
                 <input
                   type="date"
@@ -1162,7 +1350,7 @@ export const DailySalesView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleSelectReportDate(todayISO)}
-                  className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-bold text-xs hover:bg-amber-700 cursor-pointer"
+                  className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-bold text-xs hover:bg-amber-700 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   Go to Today
                 </button>
@@ -1789,122 +1977,27 @@ export const DailySalesView: React.FC = () => {
       </div>
       </div>
 
-      {/* DEDICATED A4 PRINT VIEW FOR INSPECTED DAILY SALES REPORT */}
-      {activeViewingReport && (
-        <div className="hidden print:block print-only space-y-4">
-          <div className="print-header text-center">
-            <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – DAILY SALES REPORT</h1>
-            <h2 className="text-sm font-bold uppercase tracking-wider mt-1">
-              {activeViewingReport.counter === 'NORMAL' ? 'NORMAL COUNTER' : 'AC COUNTER'} · {activeViewingReport.date}
-            </h2>
-            <p className="text-xs text-slate-600 mt-1">
-              Report ID: <strong>{activeViewingReport.reportId}</strong> · Status: <strong>{activeViewingReport.status}</strong> · Submitted by {activeViewingReport.submittedBy} ({activeViewingReport.submittedAt})
-            </p>
-          </div>
-
-          <div className="print-card grid grid-cols-2 gap-3 text-xs">
-            <div>
-              <div><strong>Cashier:</strong> {activeViewingReport.cashierName || '—'}</div>
-              <div><strong>Helper:</strong> {activeViewingReport.helperName || '—'}</div>
-              {activeViewingReport.editedBy && (
-                <div><strong>Last Edited:</strong> {activeViewingReport.editedBy} ({activeViewingReport.editedAt})</div>
-              )}
-            </div>
-            <div className="text-right font-mono">
-              {(() => {
-                const viewRec = getReportReconciliation(activeViewingReport, operations);
-                return (
-                  <>
-                    <div><strong>Bottles Sold:</strong> {activeViewingReport.totalSoldQty} btls</div>
-                    <div><strong>Liquor Sales:</strong> {formatCurrency(activeViewingReport.totalSalesValue)}</div>
-                    {viewRec.shopOutflowsCredited > 0 && (
-                      <>
-                        <div><strong>Less Shop Expenses &amp; Wages (Normal Cash):</strong> -{formatCurrency(viewRec.shopOutflowsCredited)}</div>
-                        <div><strong>Expected Drawer Total:</strong> {formatCurrency(viewRec.expectedDrawerTotal)}</div>
-                      </>
-                    )}
-                    {activeViewingReport.counter === 'AC' && (
-                      <div><strong>AC Charges:</strong> {formatCurrency(activeViewingReport.acCharges || 0)}</div>
-                    )}
-                    <div>
-                      <strong>Cash / UPI:</strong> {formatCurrency(activeViewingReport.cashAmount)} / {formatCurrency(activeViewingReport.upiAmount)}
-                    </div>
-                    <div><strong>Total Collected:</strong> {formatCurrency(activeViewingReport.recordedAmount)}</div>
-                    <div>
-                      <strong>Staff Difference:</strong>{' '}
-                      {Math.abs(viewRec.staffDifference) <= 0.009
-                        ? 'Exact Match (0.00)'
-                        : `${viewRec.staffDifference > 0 ? '+' : ''}${formatCurrency(viewRec.staffDifference)}`}
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-
-          {activeViewingReport.remark && (
-            <div className="print-card text-xs">
-              <strong>Notes / Audit:</strong> {activeViewingReport.remark}
-            </div>
-          )}
-
-          <div className="print-card">
-            <table className="print-table w-full text-left text-xs">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Product</th>
-                  <th>Open</th>
-                  <th>In</th>
-                  <th>Out</th>
-                  <th>Closing</th>
-                  <th>Sold</th>
-                  <th className="text-right">Rate</th>
-                  <th className="text-right">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeViewingReport.lines.filter(l => l.sold > 0).length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="text-center py-4">
-                      No bottles sold recorded in this shift.
-                    </td>
-                  </tr>
-                ) : (
-                  activeViewingReport.lines
-                    .filter(l => l.sold > 0)
-                    .map((l, idx) => (
-                      <tr key={l.productId}>
-                        <td className="font-mono">{idx + 1}</td>
-                        <td className="font-bold">{l.name}</td>
-                        <td className="font-mono">{l.opening}</td>
-                        <td className="font-mono">{l.inQty}</td>
-                        <td className="font-mono">{l.outQty}</td>
-                        <td className="font-mono">{l.closing}</td>
-                        <td className="font-mono font-bold">{l.sold}</td>
-                        <td className="font-mono text-right">{formatCurrency(l.price)}</td>
-                        <td className="font-mono font-bold text-right">{formatCurrency(l.value)}</td>
-                      </tr>
-                    ))
-                )}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan={6} className="text-right font-bold uppercase">Total Sold:</td>
-                  <td className="font-mono font-bold">{activeViewingReport.totalSoldQty}</td>
-                  <td></td>
-                  <td className="font-mono font-bold text-right">{formatCurrency(activeViewingReport.totalSalesValue)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-
-          <div className="grid grid-cols-3 gap-8 pt-8 text-center text-xs">
-            <div className="border-t border-slate-400 pt-1.5">Cashier Signature</div>
-            <div className="border-t border-slate-400 pt-1.5">Helper Signature</div>
-            <div className="border-t border-slate-400 pt-1.5">Manager / Admin Signature</div>
-          </div>
-        </div>
+      {/* DEDICATED A4 PRINT VIEW FOR DAILY SALES OR CONSOLIDATED SHIFT */}
+      {printMode === 'DAILY_SALES' && (printReportTarget || activeViewingReport || activeShiftReport) && (
+        <PrintableDailySalesSheet
+          report={(printReportTarget || activeViewingReport || activeShiftReport)!}
+          operations={operations}
+        />
+      )}
+      {printMode === 'CONSOLIDATED_SHIFT' && (
+        <PrintableConsolidatedShiftSheet
+          date={consolidatedPrintDate}
+          counterScope={consolidatedPrintScope}
+          normalSale={consolidatedNormalSale}
+          acSale={consolidatedAcSale}
+          operations={operations}
+        />
+      )}
+      {printMode === 'DEFAULT' && activeViewingReport && (
+        <PrintableDailySalesSheet
+          report={activeViewingReport}
+          operations={operations}
+        />
       )}
 
       {/* REPORT INSPECTION / EDIT / DELETE / PRINT MODAL */}
@@ -1969,6 +2062,11 @@ export const DailySalesView: React.FC = () => {
                     </p>
                   </div>
                 </div>
+                {deleteReportError && (
+                  <div className="rounded-lg border border-red-300 bg-white/90 p-2.5 text-xs font-semibold text-red-700 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300">
+                    {deleteReportError}
+                  </div>
+                )}
                 <div>
                   <label className="block text-[11px] font-semibold mb-1">Reason for deleting (optional)</label>
                   <input
@@ -1979,20 +2077,58 @@ export const DailySalesView: React.FC = () => {
                     className="w-full rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs text-slate-900 outline-none focus:border-red-500 dark:border-red-800 dark:bg-slate-900 dark:text-white"
                   />
                 </div>
+                {isAdmin && (
+                  <div>
+                    <label
+                      htmlFor="inspect-delete-admin-password"
+                      className="flex items-center gap-1.5 text-[11px] font-semibold mb-1 text-red-900 dark:text-red-200"
+                    >
+                      <Lock className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                      <span>Admin Password (Required)</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="inspect-delete-admin-password"
+                        type={showDeleteReportPassword ? 'text' : 'password'}
+                        autoComplete="current-password"
+                        placeholder={`Enter password for ${currentUser?.username || 'admin'}`}
+                        value={deleteReportPassword}
+                        onChange={e => {
+                          setDeleteReportPassword(e.target.value);
+                          if (deleteReportError) setDeleteReportError(null);
+                        }}
+                        className="w-full rounded-lg border border-red-300 bg-white px-3 py-1.5 pr-9 text-xs text-slate-900 outline-none focus:border-red-500 dark:border-red-800 dark:bg-slate-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowDeleteReportPassword(prev => !prev)}
+                        aria-label={showDeleteReportPassword ? 'Hide password' : 'Show password'}
+                        className="absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                      >
+                        {showDeleteReportPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-end gap-2">
                   <button
                     type="button"
                     disabled={deletingReport}
-                    onClick={() => setConfirmingDeleteReport(false)}
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
+                    onClick={() => {
+                      setConfirmingDeleteReport(false);
+                      setDeleteReportPassword('');
+                      setShowDeleteReportPassword(false);
+                      setDeleteReportError(null);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer whitespace-nowrap shrink-0"
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
-                    disabled={deletingReport}
+                    disabled={deletingReport || (isAdmin && !deleteReportPassword)}
                     onClick={handleConfirmDeleteReport}
-                    className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                    className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap shrink-0"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     <span>{deletingReport ? 'Deleting...' : 'Confirm Delete Report'}</span>
@@ -2369,11 +2505,20 @@ export const DailySalesView: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => window.print()}
-                      className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 cursor-pointer"
+                      onClick={() => triggerPrintMode('DAILY_SALES', activeViewingReport)}
+                      className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 cursor-pointer whitespace-nowrap shrink-0"
                     >
                       <Printer className="h-3.5 w-3.5" />
                       <span>Print Daily Sales</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => triggerPrintMode('CONSOLIDATED_SHIFT', activeViewingReport)}
+                      className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <FileSpreadsheet className="h-3.5 w-3.5" />
+                      <span>Print Consolidated</span>
                     </button>
 
                     <button
@@ -2382,7 +2527,7 @@ export const DailySalesView: React.FC = () => {
                         setCopiedShare(false);
                         setShareText(generateReportSummaryText(activeViewingReport));
                       }}
-                      className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 cursor-pointer"
+                      className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 cursor-pointer whitespace-nowrap shrink-0"
                     >
                       <Share2 className="h-3.5 w-3.5" />
                       <span>Share / Copy</span>
@@ -2393,7 +2538,7 @@ export const DailySalesView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => startEditingReport(activeViewingReport)}
-                          className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60 cursor-pointer"
+                          className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60 cursor-pointer whitespace-nowrap shrink-0"
                         >
                           <Edit2 className="h-3.5 w-3.5" />
                           <span>Edit Sales</span>
@@ -2403,9 +2548,12 @@ export const DailySalesView: React.FC = () => {
                           type="button"
                           onClick={() => {
                             setModalError(null);
+                            setDeleteReportError(null);
+                            setDeleteReportPassword('');
+                            setShowDeleteReportPassword(false);
                             setConfirmingDeleteReport(true);
                           }}
-                          className="flex items-center gap-1.5 rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-900/60 cursor-pointer"
+                          className="flex items-center gap-1.5 rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-900/60 cursor-pointer whitespace-nowrap shrink-0"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                           <span>Delete Sales</span>

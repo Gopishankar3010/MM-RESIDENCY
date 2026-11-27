@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Search, Plus, Printer, Trash2, AlertTriangle } from 'lucide-react';
+import { Search, Plus, Printer, Trash2 } from 'lucide-react';
 import { Product } from '../types';
 import { bottlesPerCase_, CATEGORY_ORDER, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
+import { AdminPasswordDeleteModal } from '../components/AdminPasswordDeleteModal';
 
 export const ProductsView: React.FC = () => {
   const { currentUser, products, stockItems, saveProduct, deleteProduct } = useStock();
@@ -16,7 +17,6 @@ export const ProductsView: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
@@ -39,7 +39,6 @@ export const ProductsView: React.FC = () => {
     const isKnown = !cat || modalCategories.includes(cat);
     setIsCustomCategory(!isKnown);
     setConfirmDelete(false);
-    setIsDeleting(false);
     setModalError(null);
     setEditingProduct(product);
   };
@@ -48,7 +47,6 @@ export const ProductsView: React.FC = () => {
     setEditingProduct(null);
     setIsCustomCategory(false);
     setConfirmDelete(false);
-    setIsDeleting(false);
     setModalError(null);
   };
 
@@ -107,19 +105,12 @@ export const ProductsView: React.FC = () => {
 
   const handleConfirmDelete = async () => {
     if (!editingProduct?.productId) return;
-    try {
-      setIsDeleting(true);
-      setModalError(null);
-      setStatusMsg(null);
-      const deletedName = editingProduct.name || editingProduct.productId;
-      await deleteProduct(editingProduct.productId);
-      setStatusMsg({ type: 'ok', text: `Deleted "${deletedName}" and removed its stock from the catalogue.` });
-      closeProductModal();
-    } catch (err: any) {
-      setModalError(err.message || 'Could not delete product.');
-    } finally {
-      setIsDeleting(false);
-    }
+    setModalError(null);
+    setStatusMsg(null);
+    const deletedName = editingProduct.name || editingProduct.productId;
+    await deleteProduct(editingProduct.productId);
+    setStatusMsg({ type: 'ok', text: `Deleted "${deletedName}" and removed its stock from the catalogue.` });
+    closeProductModal();
   };
 
   const editingStockItem = editingProduct?.productId
@@ -453,83 +444,62 @@ export const ProductsView: React.FC = () => {
                 <span className="font-semibold">Active in counter sales and Godown indents</span>
               </label>
 
-              {confirmDelete && editingProduct.productId ? (
-                <div className="mt-4 rounded-xl border border-red-200 bg-red-50/90 p-3.5 space-y-2.5 dark:border-red-900/70 dark:bg-red-950/40">
-                  <div className="flex items-start gap-2 text-red-800 dark:text-red-300">
-                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <p className="font-bold">
-                        Delete "{editingProduct.name} {editingProduct.sizeML}ml"?
-                      </p>
-                      <p className="text-[11px] text-red-700 dark:text-red-300/90">
-                        This permanently removes the product and clears its current stock balance
-                        (Godown: <strong className="font-mono">{editingStockItem?.godown ?? 0}</strong>,
-                        Normal: <strong className="font-mono">{editingStockItem?.normal ?? 0}</strong>,
-                        AC: <strong className="font-mono">{editingStockItem?.ac ?? 0}</strong> btls).
-                        Past sales and purchase history will remain preserved.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-end gap-2 pt-1">
-                    <button
-                      type="button"
-                      disabled={isDeleting}
-                      onClick={() => setConfirmDelete(false)}
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 cursor-pointer"
-                    >
-                      Keep Product
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isDeleting}
-                      onClick={handleConfirmDelete}
-                      className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      <span>{isDeleting ? 'Deleting...' : 'Confirm Delete'}</span>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-2 pt-4 border-t dark:border-slate-800">
-                  {editingProduct.productId ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setModalError(null);
-                        setConfirmDelete(true);
-                      }}
-                      title="Delete product from catalogue"
-                      className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-400 dark:hover:bg-red-950/70 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      <span>Delete</span>
-                    </button>
-                  ) : (
-                    <span />
-                  )}
+              <div className="flex items-center justify-between gap-2 pt-4 border-t dark:border-slate-800">
+                {editingProduct.productId ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalError(null);
+                      setConfirmDelete(true);
+                    }}
+                    title="Delete product from catalogue"
+                    className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-400 dark:hover:bg-red-950/70 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Delete</span>
+                  </button>
+                ) : (
+                  <span />
+                )}
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={closeProductModal}
-                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
-                    >
-                      Save Product
-                    </button>
-                  </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={closeProductModal}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
+                  >
+                    Save Product
+                  </button>
                 </div>
-              )}
+              </div>
             </form>
           </div>
         </div>
       )}
+
+      {/* Admin Password Protection for Deleting Product */}
+      <AdminPasswordDeleteModal
+        isOpen={Boolean(confirmDelete && editingProduct?.productId)}
+        title={`Delete "${editingProduct?.name || ''} ${editingProduct?.sizeML || ''}ml"?`}
+        warningNote={
+          <>
+            This permanently removes the product and clears its current stock balance
+            (Godown: <strong className="font-mono">{editingStockItem?.godown ?? 0}</strong>,
+            Normal: <strong className="font-mono">{editingStockItem?.normal ?? 0}</strong>,
+            AC: <strong className="font-mono">{editingStockItem?.ac ?? 0}</strong> btls).
+            Past sales and purchase history will remain preserved.
+          </>
+        }
+        confirmLabel="Confirm Delete Product"
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   );
 };

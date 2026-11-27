@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { CheckCircle2, ArrowRightLeft, Truck, Check, X, ShieldCheck, Printer, Trash2, AlertTriangle, Receipt, RotateCcw, Lock, Eye, EyeOff, ChevronDown, ChevronRight } from 'lucide-react';
+import { CheckCircle2, ArrowRightLeft, Truck, Check, X, ShieldCheck, Printer, Trash2, AlertTriangle, Receipt, RotateCcw, Lock, Eye, EyeOff, ChevronDown, ChevronRight, User, Users, FileSpreadsheet } from 'lucide-react';
 import { RequestGroup, DailySalesReport, DeletedDailySalesReport, StockRequestItem } from '../types';
+import { AdminPasswordDeleteModal } from '../components/AdminPasswordDeleteModal';
+import { PrintableDailySalesSheet, PrintableConsolidatedShiftSheet } from '../components/DailySalesPrintSheet';
+import { getReportReconciliation } from '../utils/reconciliation';
 
 export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onNavigateToSales }) => {
   const {
@@ -14,6 +17,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
     purchases,
     reviewPurchaseBill,
     dailySales,
+    operations,
     deletedDailySales,
     adminDeleteDailySales,
     adminRestoreDailySales,
@@ -37,8 +41,11 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
   const [deleteSalesError, setDeleteSalesError] = useState<string | null>(null);
   const [deletingSales, setDeletingSales] = useState(false);
   const [restoringSalesId, setRestoringSalesId] = useState<string | null>(null);
-  const [confirmingDismissId, setConfirmingDismissId] = useState<string | null>(null);
-  const [dismissingSalesId, setDismissingSalesId] = useState<string | null>(null);
+  const [dismissBinTarget, setDismissBinTarget] = useState<DeletedDailySalesReport | null>(null);
+  const [inspectingSalesReport, setInspectingSalesReport] = useState<DailySalesReport | null>(null);
+  const [inspectShowAllLines, setInspectShowAllLines] = useState(false);
+  const [inspectPrintMode, setInspectPrintMode] = useState<'NONE' | 'DAILY_SALES' | 'CONSOLIDATED'>('NONE');
+  const inspectPrintTimerRef = useRef<number | null>(null);
   const [reverseRequestModal, setReverseRequestModal] = useState<{
     ids: string[];
     counter: 'NORMAL' | 'AC';
@@ -53,6 +60,40 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
   const [reverseError, setReverseError] = useState<string | null>(null);
   const [reversingRequests, setReversingRequests] = useState(false);
   const [expandedApprovedBatches, setExpandedApprovedBatches] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const resetPrint = () => {
+      setInspectPrintMode('NONE');
+      if (inspectPrintTimerRef.current !== null) {
+        window.clearTimeout(inspectPrintTimerRef.current);
+        inspectPrintTimerRef.current = null;
+      }
+    };
+    window.addEventListener('afterprint', resetPrint);
+    return () => {
+      window.removeEventListener('afterprint', resetPrint);
+      if (inspectPrintTimerRef.current !== null) {
+        window.clearTimeout(inspectPrintTimerRef.current);
+      }
+    };
+  }, []);
+
+  const triggerInspectPrint = (mode: 'DAILY_SALES' | 'CONSOLIDATED') => {
+    if (!inspectingSalesReport) return;
+    if (inspectPrintTimerRef.current !== null) {
+      window.clearTimeout(inspectPrintTimerRef.current);
+    }
+    setInspectPrintMode(mode);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.print();
+      });
+    });
+    inspectPrintTimerRef.current = window.setTimeout(() => {
+      setInspectPrintMode('NONE');
+      inspectPrintTimerRef.current = null;
+    }, 60000);
+  };
 
   const toggleApprovedBatch = (groupKey: string) => {
     setExpandedApprovedBatches(prev => ({ ...prev, [groupKey]: !prev[groupKey] }));
@@ -182,6 +223,9 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
       setDeleteSalesPassword('');
       setShowDeleteSalesPassword(false);
       setDeleteSalesError(null);
+      if (inspectingSalesReport?.reportId === target.reportId) {
+        setInspectingSalesReport(null);
+      }
     } catch (e: any) {
       setDeleteSalesError(e?.message || 'Failed to delete daily sales report.');
     } finally {
@@ -205,21 +249,16 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
     }
   };
 
-  const executeDismissDeletedSales = async (rep: DeletedDailySalesReport) => {
-    try {
-      setDismissingSalesId(rep.reportId);
-      setStatusMsg(null);
-      await adminDismissDeletedSales(rep.reportId);
-      setConfirmingDismissId(null);
-      setStatusMsg({
-        type: 'ok',
-        text: `Removed superseded entry (${rep.reportId}) for ${rep.date} from the deleted reports bin.`
-      });
-    } catch (e: any) {
-      setStatusMsg({ type: 'err', text: e?.message || 'Failed to remove entry from bin.' });
-    } finally {
-      setDismissingSalesId(null);
-    }
+  const executeDismissDeletedSales = async () => {
+    if (!dismissBinTarget) return;
+    const rep = dismissBinTarget;
+    setStatusMsg(null);
+    await adminDismissDeletedSales(rep.reportId);
+    setDismissBinTarget(null);
+    setStatusMsg({
+      type: 'ok',
+      text: `Removed superseded entry (${rep.reportId}) for ${rep.date} from the deleted reports bin.`
+    });
   };
 
   const openReverseModal = (opts: {
@@ -264,6 +303,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
 
   return (
     <div className="print-surface space-y-6">
+      <div className={inspectPrintMode !== 'NONE' && inspectingSalesReport ? 'no-print space-y-6' : 'space-y-6'}>
       <div className="print-header text-center">
         <h1 className="text-xl font-black tracking-tight">MM RESIDENCY – INVENTORY & BAR MANAGEMENT</h1>
         <h2 className="text-sm font-bold uppercase tracking-wider mt-1">ADMIN APPROVALS QUEUE SUMMARY</h2>
@@ -703,10 +743,21 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                     </div>
                   </div>
 
-                  <div className="no-print flex items-center gap-2">
+                  <div className="no-print flex flex-wrap items-center gap-2">
                     <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
                       {rep.status}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInspectShowAllLines(false);
+                        setInspectingSalesReport(rep);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                      <span>Inspect Sales</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -716,7 +767,7 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                         setDeleteSalesError(null);
                         setDeleteSalesTarget(rep);
                       }}
-                      className="inline-flex items-center gap-1 rounded-lg bg-red-100 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-200 dark:bg-red-950 dark:text-red-300 cursor-pointer"
+                      className="inline-flex items-center gap-1 rounded-lg bg-red-100 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-200 dark:bg-red-950 dark:text-red-300 cursor-pointer whitespace-nowrap shrink-0"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                       <span>Delete &amp; Re-open Date</span>
@@ -758,8 +809,6 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                   r => r.date === rep.date && r.counter === rep.counter && r.status !== 'Rejected'
                 );
                 const isRestoring = restoringSalesId === rep.reportId;
-                const isConfirmingDismiss = confirmingDismissId === rep.reportId;
-                const isDismissing = dismissingSalesId === rep.reportId;
 
                 return (
                   <div
@@ -789,34 +838,14 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
                           <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 whitespace-nowrap">
                             Replacement active ({replacement.reportId}) · Kept
                           </span>
-                          {isConfirmingDismiss ? (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => executeDismissDeletedSales(rep)}
-                                disabled={isDismissing}
-                                className="rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
-                              >
-                                {isDismissing ? 'Removing...' : 'Confirm Remove'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setConfirmingDismissId(null)}
-                                disabled={isDismissing}
-                                className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0"
-                              >
-                                Keep
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setConfirmingDismissId(rep.reportId)}
-                              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 cursor-pointer whitespace-nowrap shrink-0"
-                            >
-                              Remove from Bin
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => setDismissBinTarget(rep)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-950/70 cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Remove from Bin</span>
+                          </button>
                         </>
                       ) : (
                         <button
@@ -1110,6 +1139,261 @@ export const ApprovalsView: React.FC<{ onNavigateToSales: () => void }> = ({ onN
             </div>
           </form>
         </div>
+      )}
+
+      {/* Inspect Sales Modal */}
+      {inspectingSalesReport && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="w-full max-w-4xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900 max-h-[92vh] overflow-y-auto space-y-5">
+            <div className="flex items-start justify-between border-b pb-4 dark:border-slate-800 gap-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                    Inspect Sales · {inspectingSalesReport.reportId}
+                  </h3>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                    inspectingSalesReport.status === 'Approved'
+                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                      : inspectingSalesReport.status === 'Pending'
+                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                      : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                  }`}>
+                    {inspectingSalesReport.status}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Counter: {inspectingSalesReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} · Date: <strong>{inspectingSalesReport.date}</strong> · Submitted by {inspectingSalesReport.submittedBy} ({inspectingSalesReport.submittedAt})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectingSalesReport(null)}
+                aria-label="Close modal"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 rounded-xl border border-amber-200/90 bg-amber-50/80 p-3 text-xs dark:border-amber-900/40 dark:bg-amber-950/40">
+              <div className="flex items-center gap-2">
+                <User className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                <span className="text-slate-600 dark:text-slate-400 font-medium">Cashier:</span>
+                <span className="font-bold text-slate-900 dark:text-white font-mono text-sm">{inspectingSalesReport.cashierName || '—'}</span>
+              </div>
+              <span className="text-amber-300 dark:text-amber-800">|</span>
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                <span className="text-slate-600 dark:text-slate-400 font-medium">Helper:</span>
+                <span className="font-bold text-slate-900 dark:text-white font-mono text-sm">{inspectingSalesReport.helperName || '—'}</span>
+              </div>
+            </div>
+
+            {inspectingSalesReport.remark && (
+              <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+                <strong>Notes / Audit:</strong> {inspectingSalesReport.remark}
+              </div>
+            )}
+
+            {(() => {
+              const viewRec = getReportReconciliation(inspectingSalesReport, operations);
+              return (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Sold Quantity</span>
+                    <div className="font-mono tabular-nums text-base font-bold text-slate-900 dark:text-white">
+                      {inspectingSalesReport.totalSoldQty} btls
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Sales Value</span>
+                    <div className="font-mono tabular-nums text-base font-bold text-emerald-600">
+                      {formatCurrency(inspectingSalesReport.totalSalesValue)}
+                    </div>
+                    {viewRec.shopOutflowsCredited > 0 && (
+                      <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                        Less Exp/Wages: -{formatCurrency(viewRec.shopOutflowsCredited)}
+                      </div>
+                    )}
+                    {inspectingSalesReport.counter === 'AC' && (
+                      <div className="text-[10px] text-purple-600 dark:text-purple-400 mt-0.5 font-mono">
+                        AC Charges: {formatCurrency(inspectingSalesReport.acCharges || 0)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Cash / UPI</span>
+                    <div className="font-mono tabular-nums text-base font-bold text-slate-900 dark:text-white">
+                      {formatCurrency(inspectingSalesReport.cashAmount)} / {formatCurrency(inspectingSalesReport.upiAmount + (inspectingSalesReport.cardAmount || 0))}
+                    </div>
+                    {viewRec.shopOutflowsCredited > 0 && (
+                      <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                        Expected Drawer: {formatCurrency(viewRec.expectedDrawerTotal)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60">
+                    <span className="text-slate-500">Staff Difference</span>
+                    <div className={`font-mono tabular-nums text-base font-bold ${
+                      Math.abs(viewRec.staffDifference) <= 0.009
+                        ? 'text-emerald-600'
+                        : viewRec.staffDifference > 0
+                        ? 'text-blue-600'
+                        : 'text-red-600'
+                    }`}>
+                      {Math.abs(viewRec.staffDifference) <= 0.009
+                        ? '✓ Matches'
+                        : `${viewRec.staffDifference > 0 ? '+' : ''}${formatCurrency(viewRec.staffDifference)}`}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-slate-600 dark:text-slate-400">
+                {inspectShowAllLines
+                  ? `Showing all ${inspectingSalesReport.lines.length} product rows`
+                  : `Showing ${inspectingSalesReport.lines.filter(l => l.sold > 0).length} sold item(s)`}
+              </span>
+              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={inspectShowAllLines}
+                  onChange={e => setInspectShowAllLines(e.target.checked)}
+                  className="rounded border-slate-300"
+                />
+                <span>Show all items (including 0 sold)</span>
+              </label>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 overflow-hidden dark:border-slate-800">
+              <div className="overflow-x-auto max-h-[320px]">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-100 font-bold uppercase text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-400 sticky top-0">
+                    <tr>
+                      <th className="p-2.5">Product</th>
+                      <th className="p-2.5">Open</th>
+                      <th className="p-2.5">In</th>
+                      <th className="p-2.5">Out</th>
+                      <th className="p-2.5">Closing</th>
+                      <th className="p-2.5">Sold</th>
+                      <th className="p-2.5 text-right">Rate</th>
+                      <th className="p-2.5 text-right">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {(() => {
+                      const visibleLines = inspectShowAllLines
+                        ? inspectingSalesReport.lines
+                        : inspectingSalesReport.lines.filter(l => l.sold > 0);
+                      if (visibleLines.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan={8} className="p-4 text-center text-slate-400">
+                              No sold items recorded in this report.
+                            </td>
+                          </tr>
+                        );
+                      }
+                      return visibleLines.map(l => (
+                        <tr key={l.productId}>
+                          <td className="p-2.5 font-bold text-slate-900 dark:text-white">{l.name}</td>
+                          <td className="p-2.5 font-mono tabular-nums">{l.opening}</td>
+                          <td className="p-2.5 font-mono tabular-nums text-emerald-600">{l.inQty}</td>
+                          <td className="p-2.5 font-mono tabular-nums text-red-600">{l.outQty}</td>
+                          <td className="p-2.5 font-mono tabular-nums">{l.closing}</td>
+                          <td className="p-2.5 font-mono tabular-nums font-bold text-blue-600">{l.sold}</td>
+                          <td className="p-2.5 font-mono tabular-nums text-right">{formatCurrency(l.price)}</td>
+                          <td className="p-2.5 font-mono tabular-nums font-bold text-right">{formatCurrency(l.value)}</td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t dark:border-slate-800">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => triggerInspectPrint('DAILY_SALES')}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-bold text-white hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                  <span>Print Daily Sales</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => triggerInspectPrint('CONSOLIDATED')}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <FileSpreadsheet className="h-3.5 w-3.5" />
+                  <span>Print Consolidated</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteSalesReason('');
+                    setDeleteSalesPassword('');
+                    setShowDeleteSalesPassword(false);
+                    setDeleteSalesError(null);
+                    setDeleteSalesTarget(inspectingSalesReport);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-red-100 px-3 py-2 text-xs font-bold text-red-800 hover:bg-red-200 dark:bg-red-950 dark:text-red-300 cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Delete &amp; Re-open Date</span>
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectingSalesReport(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Password Protection for Removing Superseded Entry from Bin */}
+      <AdminPasswordDeleteModal
+        isOpen={Boolean(dismissBinTarget)}
+        title="Remove Deleted Report from Recovery Bin?"
+        subtitle={
+          dismissBinTarget
+            ? `${dismissBinTarget.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} · ${dismissBinTarget.date} (${dismissBinTarget.reportId})`
+            : undefined
+        }
+        warningNote="Permanently clears this superseded entry from the deleted reports recovery bin."
+        confirmLabel="Confirm Remove from Bin"
+        onClose={() => setDismissBinTarget(null)}
+        onConfirm={executeDismissDeletedSales}
+      />
+      </div>
+
+      {inspectPrintMode === 'DAILY_SALES' && inspectingSalesReport && (
+        <PrintableDailySalesSheet report={inspectingSalesReport} operations={operations} />
+      )}
+      {inspectPrintMode === 'CONSOLIDATED' && inspectingSalesReport && (
+        <PrintableConsolidatedShiftSheet
+          date={inspectingSalesReport.date}
+          counterScope="ALL"
+          normalSale={
+            dailySales.find(r => r.counter === 'NORMAL' && r.date === inspectingSalesReport.date && r.status === 'Approved') ||
+            dailySales.find(r => r.counter === 'NORMAL' && r.date === inspectingSalesReport.date && r.status !== 'Rejected') ||
+            null
+          }
+          acSale={
+            dailySales.find(r => r.counter === 'AC' && r.date === inspectingSalesReport.date && r.status === 'Approved') ||
+            dailySales.find(r => r.counter === 'AC' && r.date === inspectingSalesReport.date && r.status !== 'Rejected') ||
+            null
+          }
+          operations={operations}
+        />
       )}
     </div>
   );

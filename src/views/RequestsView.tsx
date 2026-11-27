@@ -1,19 +1,183 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useStock } from '../context/StockContext';
-import { Search, ShoppingBag, Plus, Trash2, CheckCircle2, Clock, XCircle, ArrowRight, Printer, Copy, Share2 } from 'lucide-react';
+import {
+  Search,
+  ShoppingBag,
+  Trash2,
+  CheckCircle2,
+  Printer,
+  Copy,
+  Share2,
+  Save,
+  RotateCcw,
+  Check
+} from 'lucide-react';
 import { bottlesPerCase_, matchesSearchQuery, sortProductsCategoryWise, stockQtyLabel } from '../data/initialData';
+import { CounterLocation } from '../types';
+
+interface RequestBasketItem {
+  productId: string;
+  name: string;
+  sizeML: number;
+  casePack: number;
+  qty: number;
+  unit: 'CASE' | 'BOTTLE';
+  bottles: number;
+}
+
+interface RequestDraft {
+  basket: RequestBasketItem[];
+  reason: string;
+  selectedProductId: string;
+  enteredQty: string;
+  unit: 'CASE' | 'BOTTLE';
+  savedAt: string;
+}
+
+const requestDraftStorageKey = (counter: CounterLocation, date: string) =>
+  `mm_godown_request_draft_${counter}_${date}`;
+
+const activeRequestDraftDateKey = (counter: CounterLocation) =>
+  `mm_godown_request_active_date_${counter}`;
+
+const formatDraftTime = (date: Date): string => {
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+};
+
+const readRequestDraft = (counter: CounterLocation, date: string): RequestDraft | null => {
+  try {
+    const raw = window.localStorage.getItem(requestDraftStorageKey(counter, date));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const basket = Array.isArray(parsed.basket)
+      ? parsed.basket.filter(
+          (item: any) =>
+            item &&
+            typeof item.productId === 'string' &&
+            typeof item.name === 'string' &&
+            Number(item.qty) > 0 &&
+            Number(item.bottles) > 0
+        )
+      : [];
+    return {
+      basket,
+      reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+      selectedProductId: typeof parsed.selectedProductId === 'string' ? parsed.selectedProductId : '',
+      enteredQty: typeof parsed.enteredQty === 'string' && parsed.enteredQty !== '' ? parsed.enteredQty : '1',
+      unit: parsed.unit === 'BOTTLE' ? 'BOTTLE' : 'CASE',
+      savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : ''
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeRequestDraft = (counter: CounterLocation, date: string, draft: RequestDraft): boolean => {
+  try {
+    window.localStorage.setItem(requestDraftStorageKey(counter, date), JSON.stringify(draft));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const removeRequestDraft = (counter: CounterLocation, date: string): void => {
+  try {
+    window.localStorage.removeItem(requestDraftStorageKey(counter, date));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const readActiveRequestDraftDate = (counter: CounterLocation): string | null => {
+  try {
+    return window.localStorage.getItem(activeRequestDraftDateKey(counter));
+  } catch {
+    return null;
+  }
+};
+
+const writeActiveRequestDraftDate = (counter: CounterLocation, date: string): void => {
+  try {
+    window.localStorage.setItem(activeRequestDraftDateKey(counter), date);
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const clearActiveRequestDraftDate = (counter: CounterLocation): void => {
+  try {
+    window.localStorage.removeItem(activeRequestDraftDateKey(counter));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+const hasRequestDraftContent = (
+  basket: RequestBasketItem[],
+  reason: string,
+  selectedProductId: string,
+  enteredQty: string
+): boolean => {
+  if (basket.length > 0) return true;
+  if (reason.trim() !== '') return true;
+  if (selectedProductId !== '') return true;
+  if (enteredQty !== '' && enteredQty !== '1') return true;
+  return false;
+};
 
 export const RequestsView: React.FC = () => {
   const { currentUser, businessDate, stockItems, requests, submitRequestBatch } = useStock();
   const isAdmin = currentUser?.role === 'ADMIN';
+  const counter: CounterLocation = currentUser?.counter || 'NORMAL';
 
-  // Request form state (Counter users)
+  const initialDraftRef = useRef<{ date: string; draft: RequestDraft | null } | null>(null);
+  if (initialDraftRef.current === null && !isAdmin) {
+    const directDraft = readRequestDraft(counter, businessDate);
+    if (directDraft) {
+      initialDraftRef.current = { date: businessDate, draft: directDraft };
+    } else {
+      const activeDate = readActiveRequestDraftDate(counter);
+      const fallbackDraft = activeDate ? readRequestDraft(counter, activeDate) : null;
+      initialDraftRef.current = {
+        date: activeDate && fallbackDraft ? activeDate : businessDate,
+        draft: fallbackDraft
+      };
+    }
+  }
+
+  const draftDate = initialDraftRef.current?.date || businessDate;
+  const loadedDraftKeyRef = useRef<string>(`${counter}::${draftDate}`);
+
+  // Request form state (Counter users, hydrated from saved local draft if present)
   const [search, setSearch] = useState('');
-  const [selectedProductId, setSelectedProductId] = useState('');
-  const [enteredQty, setEnteredQty] = useState('1');
-  const [unit, setUnit] = useState<'CASE' | 'BOTTLE'>('CASE');
-  const [reason, setReason] = useState('');
-  const [basket, setBasket] = useState<{ productId: string; name: string; sizeML: number; casePack: number; qty: number; unit: 'CASE' | 'BOTTLE'; bottles: number }[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState<string>(
+    () => initialDraftRef.current?.draft?.selectedProductId || ''
+  );
+  const [enteredQty, setEnteredQty] = useState<string>(
+    () => initialDraftRef.current?.draft?.enteredQty || '1'
+  );
+  const [unit, setUnit] = useState<'CASE' | 'BOTTLE'>(
+    () => initialDraftRef.current?.draft?.unit || 'CASE'
+  );
+  const [reason, setReason] = useState<string>(
+    () => initialDraftRef.current?.draft?.reason || ''
+  );
+  const [basket, setBasket] = useState<RequestBasketItem[]>(
+    () => initialDraftRef.current?.draft?.basket || []
+  );
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(() => {
+    const raw = initialDraftRef.current?.draft?.savedAt;
+    if (!raw) return null;
+    const formatted = formatDraftTime(new Date(raw));
+    return formatted || raw;
+  });
+  const [justSavedDraft, setJustSavedDraft] = useState(false);
+  const [confirmingClearDraft, setConfirmingClearDraft] = useState(false);
+  const justSavedTimerRef = useRef<number | null>(null);
+
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
@@ -79,6 +243,154 @@ export const RequestsView: React.FC = () => {
     setShowPreviewModal(true);
   };
 
+  const hasCurrentDraftContent = hasRequestDraftContent(basket, reason, selectedProductId, enteredQty);
+
+  const latestDraftSnapshotRef = useRef({
+    isAdmin,
+    counter,
+    date: draftDate,
+    basket,
+    reason,
+    selectedProductId,
+    enteredQty,
+    unit
+  });
+  latestDraftSnapshotRef.current = {
+    isAdmin,
+    counter,
+    date: draftDate,
+    basket,
+    reason,
+    selectedProductId,
+    enteredQty,
+    unit
+  };
+
+  // Hydrate draft if counter changes while mounted
+  useEffect(() => {
+    const expectedKey = `${counter}::${draftDate}`;
+    if (loadedDraftKeyRef.current !== expectedKey) {
+      const nextDraft = !isAdmin ? readRequestDraft(counter, draftDate) : null;
+      loadedDraftKeyRef.current = expectedKey;
+      setBasket(nextDraft?.basket || []);
+      setReason(nextDraft?.reason || '');
+      setSelectedProductId(nextDraft?.selectedProductId || '');
+      setEnteredQty(nextDraft?.enteredQty || '1');
+      setUnit(nextDraft?.unit || 'CASE');
+      setDraftSavedAt(
+        nextDraft?.savedAt ? formatDraftTime(new Date(nextDraft.savedAt)) || nextDraft.savedAt : null
+      );
+      setConfirmingClearDraft(false);
+      setJustSavedDraft(false);
+    }
+  }, [counter, draftDate, isAdmin]);
+
+  // Auto-save draft locally whenever basket or form fields change
+  useEffect(() => {
+    if (isAdmin) return;
+    if (loadedDraftKeyRef.current !== `${counter}::${draftDate}`) return;
+
+    if (hasCurrentDraftContent) {
+      const now = new Date();
+      writeRequestDraft(counter, draftDate, {
+        basket,
+        reason,
+        selectedProductId,
+        enteredQty,
+        unit,
+        savedAt: now.toISOString()
+      });
+      writeActiveRequestDraftDate(counter, draftDate);
+      setDraftSavedAt(formatDraftTime(now));
+    } else {
+      removeRequestDraft(counter, draftDate);
+      if (readActiveRequestDraftDate(counter) === draftDate) {
+        clearActiveRequestDraftDate(counter);
+      }
+      setDraftSavedAt(null);
+    }
+  }, [isAdmin, counter, draftDate, hasCurrentDraftContent, basket, reason, selectedProductId, enteredQty, unit]);
+
+  // Synchronous flush on unmount (e.g., switching tabs) and timer cleanup
+  useEffect(() => {
+    return () => {
+      if (justSavedTimerRef.current !== null) {
+        window.clearTimeout(justSavedTimerRef.current);
+      }
+      const snap = latestDraftSnapshotRef.current;
+      if (snap.isAdmin) return;
+      if (hasRequestDraftContent(snap.basket, snap.reason, snap.selectedProductId, snap.enteredQty)) {
+        writeRequestDraft(snap.counter, snap.date, {
+          basket: snap.basket,
+          reason: snap.reason,
+          selectedProductId: snap.selectedProductId,
+          enteredQty: snap.enteredQty,
+          unit: snap.unit,
+          savedAt: new Date().toISOString()
+        });
+        writeActiveRequestDraftDate(snap.counter, snap.date);
+      }
+    };
+  }, []);
+
+  const handleSaveDraft = () => {
+    if (!hasCurrentDraftContent) {
+      setStatusMessage({
+        type: 'err',
+        text: 'Nothing to save yet. Select a product or add items to the request basket first.'
+      });
+      return;
+    }
+
+    const now = new Date();
+    const ok = writeRequestDraft(counter, draftDate, {
+      basket,
+      reason,
+      selectedProductId,
+      enteredQty,
+      unit,
+      savedAt: now.toISOString()
+    });
+
+    if (ok) {
+      writeActiveRequestDraftDate(counter, draftDate);
+      setDraftSavedAt(formatDraftTime(now));
+      setConfirmingClearDraft(false);
+      setJustSavedDraft(true);
+      setStatusMessage(null);
+      if (justSavedTimerRef.current !== null) {
+        window.clearTimeout(justSavedTimerRef.current);
+      }
+      justSavedTimerRef.current = window.setTimeout(() => {
+        setJustSavedDraft(false);
+      }, 2500);
+    } else {
+      setStatusMessage({
+        type: 'err',
+        text: 'Unable to save draft in browser storage. Please check browser storage permissions.'
+      });
+    }
+  };
+
+  const handleConfirmClearDraft = () => {
+    removeRequestDraft(counter, draftDate);
+    removeRequestDraft(counter, businessDate);
+    clearActiveRequestDraftDate(counter);
+    setBasket([]);
+    setReason('');
+    setSelectedProductId('');
+    setEnteredQty('1');
+    setUnit('CASE');
+    setSearch('');
+    setDraftSavedAt(null);
+    setConfirmingClearDraft(false);
+    setJustSavedDraft(false);
+    setStatusMessage({
+      type: 'ok',
+      text: 'Cleared saved Godown request draft.'
+    });
+  };
+
   const handleConfirmSubmitRequest = async () => {
     try {
       setIsSubmitting(true);
@@ -101,12 +413,22 @@ export const RequestsView: React.FC = () => {
       const itemLines = basket.map(b => `• ${b.name} ${b.sizeML}ml × ${b.qty} ${b.unit} (${b.bottles} btls)`).join('\n');
       const alertTxt = `*MM Residency – New Stock Request*\nCounter: ${counterLabel}\nDate: ${businessDate}\nTotal: ${basket.length} item(s), ${totalBottles} bottles\nReason: ${finalReason}\n\n${itemLines}\n\nPlease approve in Admin Approvals Queue.`;
 
+      removeRequestDraft(counter, draftDate);
+      removeRequestDraft(counter, businessDate);
+      clearActiveRequestDraftDate(counter);
+
       setLastSubmittedAlertText(alertTxt);
       setCopiedAlert(false);
       setShowPreviewModal(false);
       setStatusMessage({ type: 'ok', text: `${basket.length} item(s) requested successfully. Admin has been notified live for approval.` });
       setBasket([]);
       setReason('');
+      setSelectedProductId('');
+      setEnteredQty('1');
+      setUnit('CASE');
+      setDraftSavedAt(null);
+      setConfirmingClearDraft(false);
+      setJustSavedDraft(false);
     } catch (e: any) {
       setStatusMessage({ type: 'err', text: e.message || 'Error submitting request.' });
     } finally {
@@ -312,12 +634,19 @@ export const RequestsView: React.FC = () => {
           {/* Basket & Submit */}
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900 flex flex-col justify-between space-y-4">
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <ShoppingBag className="h-4 w-4 text-amber-500" />
-                  <h2 className="text-sm font-bold text-slate-900 dark:text-white">Request Basket</h2>
+              <div className="flex items-center justify-between mb-3 gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <ShoppingBag className="h-4 w-4 text-amber-500" />
+                    <h2 className="text-sm font-bold text-slate-900 dark:text-white">Request Basket</h2>
+                  </div>
+                  {draftSavedAt && (
+                    <div className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400 mt-0.5">
+                      Draft auto-saved at {draftSavedAt}
+                    </div>
+                  )}
                 </div>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <span className="text-xs font-mono tabular-nums font-bold text-slate-600 dark:text-slate-300 whitespace-nowrap shrink-0">
                   {basket.length} {basket.length === 1 ? 'item' : 'items'}
                 </span>
               </div>
@@ -333,8 +662,9 @@ export const RequestsView: React.FC = () => {
                         </span>
                       </div>
                       <button
+                        type="button"
                         onClick={() => setBasket(prev => prev.filter((_, i) => i !== idx))}
-                        className="text-red-500 hover:text-red-700 p-1"
+                        className="text-red-500 hover:text-red-700 p-1 cursor-pointer"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -369,17 +699,63 @@ export const RequestsView: React.FC = () => {
                     key={r}
                     type="button"
                     onClick={() => setReason(r)}
-                    className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                    className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 cursor-pointer"
                   >
                     {r}
                   </button>
                 ))}
               </div>
 
+              {/* Draft Save & Clear Controls */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveDraft}
+                  className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    justSavedDraft
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-300'
+                      : 'border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                  }`}
+                >
+                  {justSavedDraft ? <Check className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+                  <span>{justSavedDraft ? 'Draft Saved' : 'Save Draft'}</span>
+                </button>
+
+                {confirmingClearDraft ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleConfirmClearDraft}
+                      className="flex items-center gap-1 rounded-lg bg-red-600 px-2.5 py-2 text-xs font-bold text-white hover:bg-red-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Confirm Clear</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingClearDraft(false)}
+                      className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      Keep
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!hasCurrentDraftContent && !draftSavedAt}
+                    onClick={() => setConfirmingClearDraft(true)}
+                    className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    <span>Clear Draft</span>
+                  </button>
+                )}
+              </div>
+
               <button
                 disabled={!basket.length}
                 onClick={handleOpenPreview}
-                className="w-full rounded-lg bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-40 transition-colors cursor-pointer"
+                className="w-full rounded-lg bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-40 transition-colors cursor-pointer whitespace-nowrap"
               >
                 Preview & Submit Request ({basket.reduce((s, b) => s + b.bottles, 0)} btls)
               </button>

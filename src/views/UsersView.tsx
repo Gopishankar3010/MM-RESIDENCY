@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { matchesSearchQuery } from '../data/initialData';
 import { isBootstrappedAdminEmail } from '../utils/firestoreSync';
+import { AdminPasswordDeleteModal } from '../components/AdminPasswordDeleteModal';
 
 export const UsersView: React.FC = () => {
   const {
@@ -42,6 +43,11 @@ export const UsersView: React.FC = () => {
   const [cloudLabelInput, setCloudLabelInput] = useState('');
   const [cloudRoleInput, setCloudRoleInput] = useState<'STAFF' | 'ADMIN'>('STAFF');
   const [isSavingCloudMember, setIsSavingCloudMember] = useState(false);
+  const [pendingRevokeMember, setPendingRevokeMember] = useState<{
+    memberId: string;
+    email: string;
+    label?: string;
+  } | null>(null);
 
   if (currentUser?.role !== 'ADMIN') {
     return (
@@ -153,16 +159,17 @@ export const UsersView: React.FC = () => {
     }
   };
 
-  const handleRevokeEmail = async (memberId: string, email: string) => {
+  const handleRevokeEmail = async () => {
+    if (!pendingRevokeMember) return;
+    const { memberId, email } = pendingRevokeMember;
     setError('');
     setSuccess('');
     try {
       setIsSavingCloudMember(true);
       await revokeCloudEmail(memberId, email);
+      setPendingRevokeMember(null);
       setSuccess(`Removed Google cloud access for ${email}.`);
       setTimeout(() => setSuccess(''), 4000);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to remove Google email.');
     } finally {
       setIsSavingCloudMember(false);
     }
@@ -450,7 +457,13 @@ export const UsersView: React.FC = () => {
                           <button
                             type="button"
                             disabled={!isCloudAdmin || isSavingCloudMember}
-                            onClick={() => handleRevokeEmail(m.memberId, m.email)}
+                            onClick={() =>
+                              setPendingRevokeMember({
+                                memberId: m.memberId,
+                                email: m.email,
+                                label: m.label
+                              })
+                            }
                             className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 disabled:opacity-40 cursor-pointer font-semibold"
                             title="Revoke Google access"
                           >
@@ -604,6 +617,21 @@ export const UsersView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Admin Password Protection for Revoking Cloud Access */}
+      <AdminPasswordDeleteModal
+        isOpen={Boolean(pendingRevokeMember)}
+        title="Remove Authorized Google Account?"
+        subtitle={
+          pendingRevokeMember
+            ? `${pendingRevokeMember.email}${pendingRevokeMember.label ? ` (${pendingRevokeMember.label})` : ''}`
+            : undefined
+        }
+        warningNote="Revokes Google cloud login and live sync access for this staff device email."
+        confirmLabel="Remove Access"
+        onClose={() => setPendingRevokeMember(null)}
+        onConfirm={handleRevokeEmail}
+      />
     </div>
   );
 };

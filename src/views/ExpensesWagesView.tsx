@@ -3,6 +3,7 @@ import { useStock } from '../context/StockContext';
 import { DailyOperation } from '../types';
 import { Plus, Trash2, PlusCircle, Check, Printer, AlertTriangle, Settings2, X } from 'lucide-react';
 import { DropdownOption } from '../types';
+import { AdminPasswordDeleteModal } from '../components/AdminPasswordDeleteModal';
 
 interface EntryRow {
   name: string;
@@ -12,6 +13,7 @@ interface EntryRow {
 
 export const ExpensesWagesView: React.FC = () => {
   const {
+    currentUser,
     businessDate,
     operations,
     dropdownOptions,
@@ -20,6 +22,8 @@ export const ExpensesWagesView: React.FC = () => {
     addDropdownOption,
     deleteDropdownOption
   } = useStock();
+
+  const isAdmin = currentUser?.role === 'ADMIN';
 
   // Tabular state for expenses
   const [expenseRows, setExpenseRows] = useState<EntryRow[]>([{ name: '', amount: '', note: '' }]);
@@ -33,6 +37,7 @@ export const ExpensesWagesView: React.FC = () => {
   // Manage / remove unused dropdown options dialog
   const [manageOptionsModal, setManageOptionsModal] = useState<{ type: 'EXPENSE' | 'WAGE' } | null>(null);
   const [deletingOptionId, setDeletingOptionId] = useState<string | null>(null);
+  const [pendingDeleteOption, setPendingDeleteOption] = useState<DropdownOption | null>(null);
 
   // Delete operation confirmation dialog
   const [deleteOpTarget, setDeleteOpTarget] = useState<DailyOperation | null>(null);
@@ -57,10 +62,10 @@ export const ExpensesWagesView: React.FC = () => {
     return getOptionUsageCount(type, match.value) === 0 ? match : undefined;
   };
 
-  const handleDeleteDropdownOption = async (opt: DropdownOption) => {
+  const executeDeleteDropdownOption = async (opt: DropdownOption) => {
+    setStatusMessage(null);
+    setDeletingOptionId(opt.optionId);
     try {
-      setStatusMessage(null);
-      setDeletingOptionId(opt.optionId);
       await deleteDropdownOption(opt.optionId);
       const clean = opt.value.trim().toLowerCase();
       if (opt.type === 'EXPENSE') {
@@ -76,10 +81,20 @@ export const ExpensesWagesView: React.FC = () => {
         type: 'ok',
         text: `Removed unused ${opt.type === 'EXPENSE' ? 'expense category' : 'employee name'} "${opt.value}" from dropdown.`
       });
-    } catch (e: any) {
-      setStatusMessage({ type: 'err', text: e?.message || 'Failed to delete dropdown item.' });
     } finally {
       setDeletingOptionId(null);
+    }
+  };
+
+  const handleDeleteDropdownOption = async (opt: DropdownOption) => {
+    if (isAdmin) {
+      setPendingDeleteOption(opt);
+      return;
+    }
+    try {
+      await executeDeleteDropdownOption(opt);
+    } catch (e: any) {
+      setStatusMessage({ type: 'err', text: e?.message || 'Failed to delete dropdown item.' });
     }
   };
 
@@ -671,59 +686,105 @@ export const ExpensesWagesView: React.FC = () => {
         </div>
       )}
 
-      {/* POPUP MODAL: Confirm Delete Expense / Wage */}
-      {deleteOpTarget && (
-        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="rounded-xl bg-red-100 p-2 text-red-600 dark:bg-red-950/50 dark:text-red-400">
-                <AlertTriangle className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Delete {deleteOpTarget.type === 'WAGE' ? 'Wage Payout' : 'Expense Entry'}?
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  <strong className="text-slate-900 dark:text-white">{deleteOpTarget.name}</strong> ·{' '}
-                  <strong className="font-mono text-red-600 dark:text-red-400">{formatCurrency(deleteOpTarget.amount)}</strong>
-                  {deleteOpTarget.reason ? ` (${deleteOpTarget.reason})` : ''}
-                </p>
-              </div>
-            </div>
+      {/* POPUP MODAL: Confirm Delete Expense / Wage (Admin password required for Admin, direct confirm for Counter) */}
+      {isAdmin ? (
+        <>
+          <AdminPasswordDeleteModal
+            isOpen={Boolean(deleteOpTarget)}
+            title={
+              deleteOpTarget?.type === 'WAGE' ? 'Delete Wage Payout?' : 'Delete Expense Entry?'
+            }
+            subtitle={
+              deleteOpTarget
+                ? `${deleteOpTarget.name} · ${formatCurrency(deleteOpTarget.amount)}${deleteOpTarget.reason ? ` (${deleteOpTarget.reason})` : ''}`
+                : undefined
+            }
+            warningNote="Removes this recorded payout from the daily ledger."
+            confirmLabel="Delete Entry"
+            onClose={() => setDeleteOpTarget(null)}
+            onConfirm={async () => {
+              if (!deleteOpTarget) return;
+              const label = `${deleteOpTarget.type === 'WAGE' ? 'Wage' : 'Expense'} "${deleteOpTarget.name}" (${formatCurrency(deleteOpTarget.amount)})`;
+              await deleteDailyOperation(deleteOpTarget.operationId);
+              setDeleteOpTarget(null);
+              setStatusMessage({ type: 'ok', text: `Deleted ${label} and saved.` });
+            }}
+          />
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                type="button"
-                disabled={isDeletingOp}
-                onClick={() => setDeleteOpTarget(null)}
-                className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isDeletingOp}
-                onClick={async () => {
-                  try {
-                    setIsDeletingOp(true);
-                    const label = `${deleteOpTarget.type === 'WAGE' ? 'Wage' : 'Expense'} "${deleteOpTarget.name}" (${formatCurrency(deleteOpTarget.amount)})`;
-                    await deleteDailyOperation(deleteOpTarget.operationId);
-                    setDeleteOpTarget(null);
-                    setStatusMessage({ type: 'ok', text: `Deleted ${label} and saved.` });
-                  } catch (err: any) {
-                    setStatusMessage({ type: 'err', text: err?.message || 'Failed to delete entry.' });
-                    setDeleteOpTarget(null);
-                  } finally {
-                    setIsDeletingOp(false);
-                  }
-                }}
-                className="rounded-lg bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
-              >
-                {isDeletingOp ? 'Deleting...' : 'Delete Entry'}
-              </button>
+          <AdminPasswordDeleteModal
+            isOpen={Boolean(pendingDeleteOption)}
+            title={`Remove ${pendingDeleteOption?.type === 'EXPENSE' ? 'Expense Category' : 'Employee Name'}?`}
+            description={
+              pendingDeleteOption ? (
+                <>
+                  Remove unused <strong>{pendingDeleteOption.value}</strong> from the dropdown list?
+                </>
+              ) : undefined
+            }
+            confirmLabel="Confirm Remove"
+            onClose={() => setPendingDeleteOption(null)}
+            onConfirm={async () => {
+              if (!pendingDeleteOption) return;
+              const target = pendingDeleteOption;
+              await executeDeleteDropdownOption(target);
+              setPendingDeleteOption(null);
+            }}
+          />
+        </>
+      ) : (
+        deleteOpTarget && (
+          <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="rounded-xl bg-red-100 p-2 text-red-600 dark:bg-red-950/50 dark:text-red-400">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Delete {deleteOpTarget.type === 'WAGE' ? 'Wage Payout' : 'Expense Entry'}?
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    <strong className="text-slate-900 dark:text-white">{deleteOpTarget.name}</strong> ·{' '}
+                    <strong className="font-mono text-red-600 dark:text-red-400">{formatCurrency(deleteOpTarget.amount)}</strong>
+                    {deleteOpTarget.reason ? ` (${deleteOpTarget.reason})` : ''}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  disabled={isDeletingOp}
+                  onClick={() => setDeleteOpTarget(null)}
+                  className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingOp}
+                  onClick={async () => {
+                    try {
+                      setIsDeletingOp(true);
+                      const label = `${deleteOpTarget.type === 'WAGE' ? 'Wage' : 'Expense'} "${deleteOpTarget.name}" (${formatCurrency(deleteOpTarget.amount)})`;
+                      await deleteDailyOperation(deleteOpTarget.operationId);
+                      setDeleteOpTarget(null);
+                      setStatusMessage({ type: 'ok', text: `Deleted ${label} and saved.` });
+                    } catch (err: any) {
+                      setStatusMessage({ type: 'err', text: err?.message || 'Failed to delete entry.' });
+                      setDeleteOpTarget(null);
+                    } finally {
+                      setIsDeletingOp(false);
+                    }
+                  }}
+                  className="rounded-lg bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                >
+                  {isDeletingOp ? 'Deleting...' : 'Delete Entry'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )
       )}
     </div>
   );

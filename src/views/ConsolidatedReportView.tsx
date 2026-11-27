@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useStock } from '../context/StockContext';
 import {
   Printer,
@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { CounterLocation, DailySalesReport } from '../types';
 import { getReportReconciliation, roundCurrency } from '../utils/reconciliation';
+import { AdminPasswordDeleteModal } from '../components/AdminPasswordDeleteModal';
+import { PrintableDailySalesSheet } from '../components/DailySalesPrintSheet';
 
 export const ConsolidatedReportView: React.FC = () => {
   const { currentUser, businessDate, dailySales, operations, purchases, adminDeleteDailySales } = useStock();
@@ -42,31 +44,57 @@ export const ConsolidatedReportView: React.FC = () => {
   // Admin inspect & delete daily sales report states
   const [inspectingReport, setInspectingReport] = useState<DailySalesReport | null>(null);
   const [deleteConfirmReport, setDeleteConfirmReport] = useState<DailySalesReport | null>(null);
-  const [deleteReason, setDeleteReason] = useState('');
-  const [deletingReport, setDeletingReport] = useState(false);
   const [actionStatus, setActionStatus] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [printInspectingOnly, setPrintInspectingOnly] = useState(false);
+  const inspectPrintTimerRef = useRef<number | null>(null);
 
-  const handleConfirmDeleteReport = async () => {
-    if (!deleteConfirmReport) return;
-    try {
-      setDeletingReport(true);
-      setActionStatus(null);
-      const target = deleteConfirmReport;
-      await adminDeleteDailySales(target.reportId, deleteReason);
-      const isHistorical = target.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
-      setActionStatus({
-        type: 'ok',
-        text: `Deleted ${target.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} daily sales report (${target.reportId}) for ${target.date}.${!isHistorical && target.totalSoldQty > 0 ? ` Restored ${target.totalSoldQty} sold bottles back to ${target.counter} stock.` : ''} Counter staff can now re-enter and submit ${target.date} sales.`
-      });
-      setDeleteConfirmReport(null);
-      setDeleteReason('');
-      if (inspectingReport?.reportId === target.reportId) {
-        setInspectingReport(null);
+  useEffect(() => {
+    const resetInspectPrint = () => {
+      setPrintInspectingOnly(false);
+      if (inspectPrintTimerRef.current !== null) {
+        window.clearTimeout(inspectPrintTimerRef.current);
+        inspectPrintTimerRef.current = null;
       }
-    } catch (err: any) {
-      setActionStatus({ type: 'err', text: err?.message || 'Failed to delete daily sales report.' });
-    } finally {
-      setDeletingReport(false);
+    };
+    window.addEventListener('afterprint', resetInspectPrint);
+    return () => {
+      window.removeEventListener('afterprint', resetInspectPrint);
+      if (inspectPrintTimerRef.current !== null) {
+        window.clearTimeout(inspectPrintTimerRef.current);
+      }
+    };
+  }, []);
+
+  const triggerPrintInspectingReport = () => {
+    if (!inspectingReport) return;
+    if (inspectPrintTimerRef.current !== null) {
+      window.clearTimeout(inspectPrintTimerRef.current);
+    }
+    setPrintInspectingOnly(true);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.print();
+      });
+    });
+    inspectPrintTimerRef.current = window.setTimeout(() => {
+      setPrintInspectingOnly(false);
+      inspectPrintTimerRef.current = null;
+    }, 60000);
+  };
+
+  const handleConfirmDeleteReport = async (reason: string) => {
+    if (!deleteConfirmReport) return;
+    setActionStatus(null);
+    const target = deleteConfirmReport;
+    await adminDeleteDailySales(target.reportId, reason);
+    const isHistorical = target.remark?.includes('ADMIN HISTORICAL SALES-ONLY ENTRY');
+    setActionStatus({
+      type: 'ok',
+      text: `Deleted ${target.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} daily sales report (${target.reportId}) for ${target.date}.${!isHistorical && target.totalSoldQty > 0 ? ` Restored ${target.totalSoldQty} sold bottles back to ${target.counter} stock.` : ''} Counter staff can now re-enter and submit ${target.date} sales.`
+    });
+    setDeleteConfirmReport(null);
+    if (inspectingReport?.reportId === target.reportId) {
+      setInspectingReport(null);
     }
   };
 
@@ -491,6 +519,7 @@ export const ConsolidatedReportView: React.FC = () => {
 
   return (
     <div className="print-surface space-y-6">
+      <div className={printInspectingOnly && inspectingReport ? 'no-print space-y-6' : 'space-y-6'}>
       {/* Print-only formal header */}
       <div className="print-header text-center">
         <h1 className="text-2xl font-black tracking-tight">MM RESIDENCY</h1>
@@ -1054,7 +1083,6 @@ export const ConsolidatedReportView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setDeleteReason('');
                                   setDeleteConfirmReport(normalSale);
                                 }}
                                 className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 cursor-pointer"
@@ -1121,7 +1149,6 @@ export const ConsolidatedReportView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setDeleteReason('');
                                   setDeleteConfirmReport(acSale);
                                 }}
                                 className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 cursor-pointer"
@@ -1251,7 +1278,6 @@ export const ConsolidatedReportView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    setDeleteReason('');
                                     setDeleteConfirmReport(rep);
                                   }}
                                   className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 cursor-pointer"
@@ -1932,22 +1958,29 @@ export const ConsolidatedReportView: React.FC = () => {
               </table>
             </div>
 
-            <div className="flex items-center justify-between gap-2 border-t border-slate-200 p-4 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={() => {
-                  setDeleteReason('');
-                  setDeleteConfirmReport(inspectingReport);
-                }}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-red-700 cursor-pointer"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                <span>Delete Report &amp; Allow Re-entry</span>
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 p-4 dark:border-slate-800">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={triggerPrintInspectingReport}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-bold text-white hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400 cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                  <span>Print Daily Sales</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmReport(inspectingReport)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-red-700 cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Delete Report &amp; Allow Re-entry</span>
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => setInspectingReport(null)}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 cursor-pointer"
+                className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 cursor-pointer whitespace-nowrap shrink-0"
               >
                 Close
               </button>
@@ -1956,67 +1989,40 @@ export const ConsolidatedReportView: React.FC = () => {
         </div>
       )}
 
-      {/* Delete Daily Sales Confirmation Modal */}
-      {isAdmin && deleteConfirmReport && (
-        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-6 shadow-2xl dark:border-red-900/60 dark:bg-slate-900 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-400">
-                <AlertTriangle className="h-5 w-5" />
+      {/* Delete Daily Sales Confirmation Modal (Admin Password Protected) */}
+      {isAdmin && (
+        <AdminPasswordDeleteModal
+          isOpen={Boolean(deleteConfirmReport)}
+          title="Delete Daily Sales Report?"
+          subtitle={
+            deleteConfirmReport
+              ? `${deleteConfirmReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'} · Date: ${deleteConfirmReport.date} (${deleteConfirmReport.reportId})`
+              : undefined
+          }
+          warningNote={
+            deleteConfirmReport ? (
+              <div className="space-y-1">
+                <div>
+                  • Sold Stock: <strong>{deleteConfirmReport.totalSoldQty} bottles</strong> ({formatCurrency(deleteConfirmReport.totalSalesValue)})
+                </div>
+                <div>
+                  • Deleting this report will restore the sold bottles back to <strong>{deleteConfirmReport.counter}</strong> stock and unlock <strong>{deleteConfirmReport.date}</strong> so counter staff can submit the corrected report again.
+                </div>
               </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Delete Daily Sales Report?
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  <strong>{deleteConfirmReport.counter === 'NORMAL' ? 'Normal Counter' : 'AC Counter'}</strong> · Date: <strong className="font-mono">{deleteConfirmReport.date}</strong> ({deleteConfirmReport.reportId})
-                </p>
-              </div>
-            </div>
+            ) : undefined
+          }
+          showReasonField
+          reasonLabel="Reason for Deletion (Optional)"
+          reasonPlaceholder="e.g. Wrong closing stock entered by counter staff"
+          confirmLabel="Confirm Delete & Restore Stock"
+          onClose={() => setDeleteConfirmReport(null)}
+          onConfirm={handleConfirmDeleteReport}
+        />
+      )}
+      </div>
 
-            <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200 space-y-1">
-              <div>
-                • Sold Stock: <strong>{deleteConfirmReport.totalSoldQty} bottles</strong> ({formatCurrency(deleteConfirmReport.totalSalesValue)})
-              </div>
-              <div>
-                • Deleting this report will restore the sold bottles back to <strong>{deleteConfirmReport.counter}</strong> stock and unlock <strong>{deleteConfirmReport.date}</strong> so counter staff can submit the corrected report again.
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Reason for Deletion (Optional)
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Wrong closing stock entered by counter staff"
-                value={deleteReason}
-                onChange={e => setDeleteReason(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 p-2 text-xs outline-none focus:border-red-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setDeleteConfirmReport(null)}
-                disabled={deletingReport}
-                className="rounded-lg border border-slate-300 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDeleteReport}
-                disabled={deletingReport}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                <span>{deletingReport ? 'Deleting...' : 'Confirm Delete & Restore Stock'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
+      {printInspectingOnly && inspectingReport && (
+        <PrintableDailySalesSheet report={inspectingReport} operations={operations} />
       )}
     </div>
   );

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useStock } from '../context/StockContext';
 import { ArrowRightLeft, Search, Printer, Trash2 } from 'lucide-react';
-import { CounterLocation, StockLocation } from '../types';
+import { CounterLocation, StockLocation, StockTransfer } from '../types';
 import { bottlesPerCase_, matchesSearchQuery, sortProductsCategoryWise, stockQtyLabel } from '../data/initialData';
+import { AdminPasswordDeleteModal } from '../components/AdminPasswordDeleteModal';
 
 const formatLocationLabel = (loc: StockLocation | string): string => {
   if (loc === 'GODOWN') return 'Godown';
@@ -60,21 +61,15 @@ export const TransfersView: React.FC = () => {
 
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [isSubmittingTransfer, setIsSubmittingTransfer] = useState(false);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [deletingTransferId, setDeletingTransferId] = useState<string | null>(null);
+  const [deleteTransferTarget, setDeleteTransferTarget] = useState<StockTransfer | null>(null);
 
-  const handleDeleteTransfer = async (transferId: string) => {
-    try {
-      setDeletingTransferId(transferId);
-      setStatusMsg(null);
-      await adminDeleteTransfer(transferId);
-      setConfirmDeleteId(null);
-      setStatusMsg({ type: 'ok', text: `Deleted transfer ${transferId} and restored stock balances.` });
-    } catch (e: any) {
-      setStatusMsg({ type: 'err', text: e?.message || 'Failed to delete transfer.' });
-    } finally {
-      setDeletingTransferId(null);
-    }
+  const handleDeleteTransfer = async () => {
+    if (!deleteTransferTarget) return;
+    const transferId = deleteTransferTarget.transferId;
+    setStatusMsg(null);
+    await adminDeleteTransfer(transferId);
+    setDeleteTransferTarget(null);
+    setStatusMsg({ type: 'ok', text: `Deleted transfer ${transferId} and restored stock balances.` });
   };
 
   const handleOpenPreview = () => {
@@ -458,35 +453,14 @@ export const TransfersView: React.FC = () => {
                     <td className="py-3 px-4 text-slate-500 text-[11px]">{t.note || t.remark || '—'}</td>
                     {isAdmin && (
                       <td className="no-print py-3 px-4 text-right">
-                        {confirmDeleteId === t.transferId ? (
-                          <div className="inline-flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              disabled={deletingTransferId === t.transferId}
-                              onClick={() => handleDeleteTransfer(t.transferId)}
-                              className="rounded-lg bg-red-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer whitespace-nowrap"
-                            >
-                              {deletingTransferId === t.transferId ? 'Deleting...' : 'Confirm'}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={deletingTransferId === t.transferId}
-                              onClick={() => setConfirmDeleteId(null)}
-                              className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(t.transferId)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-900/50 cursor-pointer whitespace-nowrap"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            <span>Delete</span>
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTransferTarget(t)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-bold text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-900/50 cursor-pointer whitespace-nowrap"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          <span>Delete</span>
+                        </button>
                       </td>
                     )}
                   </tr>
@@ -496,6 +470,31 @@ export const TransfersView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Admin Password Protection for Deleting Transfer */}
+      {isAdmin && (
+        <AdminPasswordDeleteModal
+          isOpen={Boolean(deleteTransferTarget)}
+          title="Delete Stock Transfer?"
+          subtitle={
+            deleteTransferTarget
+              ? `${deleteTransferTarget.productName} · ${formatLocationLabel(deleteTransferTarget.fromLoc)} → ${formatLocationLabel(deleteTransferTarget.toLoc)}`
+              : undefined
+          }
+          warningNote={
+            deleteTransferTarget ? (
+              <>
+                Reverses <strong>{stockQtyLabel(deleteTransferTarget.qty, deleteTransferTarget.casePack)}</strong> back to{' '}
+                <strong>{formatLocationLabel(deleteTransferTarget.fromLoc)}</strong> and removes transfer entry{' '}
+                <strong className="font-mono">{deleteTransferTarget.transferId}</strong>.
+              </>
+            ) : undefined
+          }
+          confirmLabel="Confirm Delete Transfer"
+          onClose={() => setDeleteTransferTarget(null)}
+          onConfirm={handleDeleteTransfer}
+        />
+      )}
     </div>
   );
 };

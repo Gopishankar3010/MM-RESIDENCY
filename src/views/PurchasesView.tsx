@@ -14,10 +14,10 @@ import {
   FileSpreadsheet,
   Search,
   ChevronDown,
-  X,
-  AlertTriangle
+  X
 } from 'lucide-react';
 import { bottlesPerCase_, matchesSearchQuery, sortProductsCategoryWise } from '../data/initialData';
+import { AdminPasswordDeleteModal } from '../components/AdminPasswordDeleteModal';
 
 interface PurchaseInputRow {
   productId: string;
@@ -267,7 +267,6 @@ export const PurchasesView: React.FC = () => {
   // Delete confirmation modals
   const [deleteSupplierTarget, setDeleteSupplierTarget] = useState<string | null>(null);
   const [deleteBatchTarget, setDeleteBatchTarget] = useState<PurchaseBatch | null>(null);
-  const [isDeletingPurchase, setIsDeletingPurchase] = useState(false);
 
   // Expanded purchase history rows (to inspect products & quantities)
   const [expandedBatchIds, setExpandedBatchIds] = useState<Record<string, boolean>>({});
@@ -1387,115 +1386,56 @@ export const PurchasesView: React.FC = () => {
         </div>
       )}
 
-      {/* POPUP: Confirm Delete Supplier */}
-      {deleteSupplierTarget && (
-        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="rounded-xl bg-red-100 p-2 text-red-600 dark:bg-red-950/50 dark:text-red-400">
-                <AlertTriangle className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Delete Supplier?
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  Remove <strong>{deleteSupplierTarget}</strong> from the supplier dropdown list? Existing historical purchase bills will remain intact.
-                </p>
-              </div>
-            </div>
+      {/* POPUP: Confirm Delete Supplier (Admin Password Protected) */}
+      <AdminPasswordDeleteModal
+        isOpen={Boolean(deleteSupplierTarget)}
+        title="Delete Supplier?"
+        description={
+          deleteSupplierTarget ? (
+            <>
+              Remove <strong>{deleteSupplierTarget}</strong> from the supplier dropdown list? Existing historical purchase bills will remain intact.
+            </>
+          ) : undefined
+        }
+        confirmLabel="Delete Supplier"
+        onClose={() => setDeleteSupplierTarget(null)}
+        onConfirm={async () => {
+          if (!deleteSupplierTarget) return;
+          const target = deleteSupplierTarget;
+          await deleteSupplier(target);
+          if (supplier === target) setSupplier('');
+          setDeleteSupplierTarget(null);
+          setStatusMsg({ type: 'ok', text: `Supplier "${target}" removed from list.` });
+        }}
+      />
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={() => setDeleteSupplierTarget(null)}
-                className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    const target = deleteSupplierTarget;
-                    await deleteSupplier(target);
-                    if (supplier === target) setSupplier('');
-                    setDeleteSupplierTarget(null);
-                    setStatusMsg({ type: 'ok', text: `Supplier "${target}" removed from list.` });
-                  } catch (e: any) {
-                    setStatusMsg({ type: 'err', text: e?.message || 'Failed to remove supplier.' });
-                    setDeleteSupplierTarget(null);
-                  }
-                }}
-                className="rounded-lg bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 cursor-pointer"
-              >
-                Delete Supplier
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* POPUP: Confirm Delete Purchase Batch */}
-      {deleteBatchTarget && (
-        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="rounded-xl bg-red-100 p-2 text-red-600 dark:bg-red-950/50 dark:text-red-400">
-                <AlertTriangle className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Delete Purchase Entry?
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  Supplier: <strong className="text-slate-900 dark:text-white">{deleteBatchTarget.supplier}</strong> · Invoice{' '}
-                  <strong className="font-mono text-slate-900 dark:text-white">#{deleteBatchTarget.invoiceNo}</strong> ·{' '}
-                  <strong className="font-mono text-emerald-700 dark:text-emerald-400">{formatCurrency(deleteBatchTarget.netTotal)}</strong>
-                </p>
-                {deleteBatchTarget.status === 'Approved' && (
-                  <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[11px] font-semibold text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200">
-                    This batch was Approved — deleting it will also deduct its {deleteBatchTarget.totalQty} bottles back from Central Godown stock.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                type="button"
-                disabled={isDeletingPurchase}
-                onClick={() => setDeleteBatchTarget(null)}
-                className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isDeletingPurchase}
-                onClick={async () => {
-                  try {
-                    setIsDeletingPurchase(true);
-                    const batchId = deleteBatchTarget.batchId;
-                    const inv = deleteBatchTarget.invoiceNo;
-                    await deletePurchaseBatch(batchId);
-                    setDeleteBatchTarget(null);
-                    setStatusMsg({ type: 'ok', text: `Purchase batch ${batchId} (Invoice #${inv}) deleted and saved.` });
-                  } catch (e: any) {
-                    setStatusMsg({ type: 'err', text: e?.message || 'Failed to delete purchase batch.' });
-                    setDeleteBatchTarget(null);
-                  } finally {
-                    setIsDeletingPurchase(false);
-                  }
-                }}
-                className="rounded-lg bg-red-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50 cursor-pointer"
-              >
-                {isDeletingPurchase ? 'Deleting...' : 'Delete Purchase'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* POPUP: Confirm Delete Purchase Batch (Admin Password Protected) */}
+      <AdminPasswordDeleteModal
+        isOpen={Boolean(deleteBatchTarget)}
+        title="Delete Purchase Entry?"
+        subtitle={
+          deleteBatchTarget
+            ? `Supplier: ${deleteBatchTarget.supplier} · Invoice #${deleteBatchTarget.invoiceNo} · ${formatCurrency(deleteBatchTarget.netTotal)}`
+            : undefined
+        }
+        warningNote={
+          deleteBatchTarget?.status === 'Approved' ? (
+            <>
+              This batch was Approved — deleting it will also deduct its <strong>{deleteBatchTarget.totalQty} bottles</strong> back from Central Godown stock.
+            </>
+          ) : undefined
+        }
+        confirmLabel="Delete Purchase"
+        onClose={() => setDeleteBatchTarget(null)}
+        onConfirm={async () => {
+          if (!deleteBatchTarget) return;
+          const batchId = deleteBatchTarget.batchId;
+          const inv = deleteBatchTarget.invoiceNo;
+          await deletePurchaseBatch(batchId);
+          setDeleteBatchTarget(null);
+          setStatusMsg({ type: 'ok', text: `Purchase batch ${batchId} (Invoice #${inv}) deleted and saved.` });
+        }}
+      />
 
       {/* PURCHASE INVOICE PREVIEW MODAL */}
       {showPurchasePreview && (
