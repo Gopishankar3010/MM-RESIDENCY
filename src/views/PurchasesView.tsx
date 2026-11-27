@@ -252,7 +252,6 @@ export const PurchasesView: React.FC = () => {
   const [billDate, setBillDate] = useState(businessDate);
   const [invoiceNo, setInvoiceNo] = useState('');
   const [permitNumber, setPermitNumber] = useState('');
-  const [documentNumber, setDocumentNumber] = useState('');
   const [discountTotal, setDiscountTotal] = useState('0');
   const [tcsPct, setTcsPct] = useState('2'); // default 2% TCS
   const [rows, setRows] = useState<PurchaseInputRow[]>([
@@ -471,10 +470,6 @@ export const PurchasesView: React.FC = () => {
       setStatusMsg({ type: 'err', text: 'Please enter the permit number.' });
       return;
     }
-    if (!documentNumber.trim()) {
-      setStatusMsg({ type: 'err', text: 'Please enter the document number.' });
-      return;
-    }
 
     const validLines = rows.filter(r => r.productId && Number(r.enteredQty) > 0 && Number(r.enteredPrice) > 0);
     if (!validLines.length) {
@@ -492,7 +487,6 @@ export const PurchasesView: React.FC = () => {
       if (!supplier) throw new Error('Please select a supplier.');
       if (!invoiceNo.trim()) throw new Error('Please enter the invoice number.');
       if (!permitNumber.trim()) throw new Error('Please enter the permit number.');
-      if (!documentNumber.trim()) throw new Error('Please enter the document number.');
 
       const validLines = rows.filter(r => r.productId && Number(r.enteredQty) > 0 && Number(r.enteredPrice) > 0);
       if (!validLines.length) throw new Error('Add at least one item with valid quantity and price.');
@@ -517,7 +511,6 @@ export const PurchasesView: React.FC = () => {
         billDate,
         invoiceNo: invoiceNo.trim(),
         permitNumber: permitNumber.trim(),
-        documentNumber: documentNumber.trim(),
         lines: linesToSubmit
       });
 
@@ -622,7 +615,7 @@ export const PurchasesView: React.FC = () => {
             </h2>
 
             {/* Bill Metadata Grid */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-6 text-xs">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5 text-xs">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-500 mb-1">Purchase Date *</label>
                 <input
@@ -661,17 +654,6 @@ export const PurchasesView: React.FC = () => {
                   placeholder="e.g. PRM-TN-8821"
                   value={permitNumber}
                   onChange={e => setPermitNumber(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:bg-slate-800 dark:text-white dark:border-slate-700"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-500 mb-1">Document Number *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. DOC-4412"
-                  value={documentNumber}
-                  onChange={e => setDocumentNumber(e.target.value)}
                   className="w-full rounded-lg border border-slate-200 bg-slate-50 p-2 dark:bg-slate-800 dark:text-white dark:border-slate-700"
                 />
               </div>
@@ -1461,7 +1443,7 @@ export const PurchasesView: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <div className="rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
                 <span className="text-slate-500 text-[10px] uppercase font-bold">Supplier</span>
                 <div className="font-bold text-slate-900 dark:text-white truncate mt-0.5">{supplier}</div>
@@ -1473,10 +1455,6 @@ export const PurchasesView: React.FC = () => {
               <div className="rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
                 <span className="text-slate-500 text-[10px] uppercase font-bold">Permit No</span>
                 <div className="font-bold text-slate-900 dark:text-white truncate mt-0.5">{permitNumber}</div>
-              </div>
-              <div className="rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-800">
-                <span className="text-slate-500 text-[10px] uppercase font-bold">Document No</span>
-                <div className="font-bold text-slate-900 dark:text-white truncate mt-0.5">{documentNumber}</div>
               </div>
             </div>
 
